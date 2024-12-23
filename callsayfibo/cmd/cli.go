@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
-	"markkovari/callsayfibo/pgk/fibonacci"
+	"markkovari/callsayfibo/pkg/fibonacci"
 	"os/exec"
 	"time"
 )
