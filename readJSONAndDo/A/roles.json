@@ -1,0 +1,16 @@
+[
+    {
+        "name": "Mark",
+        "roles": [
+            "YOLO",
+            "Yolo2"
+        ]
+    },
+    {
+        "name": "NotMark",
+        "roles": [
+            "YOLO",
+            "Yolo2"
+        ]
+    }
+]

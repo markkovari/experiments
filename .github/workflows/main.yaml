@@ -1,0 +1,21 @@
+name: Example Workflow
+
+on:
+  - push
+  - pull_request
+
+jobs:
+  greeting_job:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Run My JavaScript Action
+        id: greet
+        uses: ./.github/actions/deleteIf
+        with:
+          who-to-greet: "Rupesh Tiwari"
+
+      - name: Get the output time
+        run: echo "The greeting time was ${{ steps.greet.outputs.time }}"
