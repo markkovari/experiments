@@ -1,13 +1,16 @@
-name: "My JavaScript Action"
-description: "An action that outputs a greeting time"
+# action.yml
+name: 'Hello World'
+description: 'Greet someone and record the time'
 inputs:
-  who-to-greet:
-    description: "Who to greet"
+  who-to-greet:  # id of input
+    description: 'Who to greet'
     required: true
-    default: "World"
+    default: 'World'
 outputs:
-  time:
-    description: "The time we greeted you"
+  time: # id of output
+    description: 'The time we greeted you'
 runs:
-  using: "node20"
-  main: "index.js"
+  using: 'docker'
+  image: 'Dockerfile'
+  args:
+    - ${{ inputs.who-to-greet }}
