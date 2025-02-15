@@ -1,7 +1,7 @@
 import "./App.css";
 import { useQuery } from "@tanstack/react-query";
+import { type FormEvent, useState } from "react";
 import { getTodo, getTodos } from "./api/todos";
-import { FormEvent, useState } from "react";
 
 function App() {
   const [id, setId] = useState(0);
