@@ -6,9 +6,12 @@
 	"scripts": {
 		"dev": "vite",
 		"build": "tsc -b && vite build",
-		"lint": "biome .",
+		"lint": "biome lint src",
+		"lint:fix": "biome lint  --write src",
 		"format:fix": "npm run format src --write",
 		"format": "biome format src",
+		"check": "biome check src",
+		"check:fix": "biome check src --write",
 		"preview": "vite preview"
 	},
 	"dependencies": {
