@@ -2,7 +2,7 @@ import { component$ } from "@builder.io/qwik";
 import { Form, Link } from "@builder.io/qwik-city";
 import { useSignIn } from "../routes/plugin@auth";
 
-export default component$(() => {
+const SignIn = component$(() => {
   const signInSig = useSignIn();
 
   return (
@@ -19,3 +19,5 @@ export default component$(() => {
     </>
   );
 });
+
+export { SignIn };
