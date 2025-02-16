@@ -11,7 +11,7 @@ const SignIn = component$(() => {
       <Form action={signInSig}>
         <input type="hidden" name="providerId" value="github" />
         <input type="hidden" name="options.redirectTo" value="/" />
-        <button>Sign In</button>
+        <button type="button">Sign In</button>
       </Form>
 
       {/* submit method */}

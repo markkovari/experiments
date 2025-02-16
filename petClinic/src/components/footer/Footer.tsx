@@ -1,4 +1,4 @@
-import { type Component } from "@builder.io/qwik";
+import type { Component } from "@builder.io/qwik";
 
 const Footer: Component = () => {
   return (
