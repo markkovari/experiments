@@ -4,7 +4,6 @@ import { SignIn } from "~/components/sign-in";
 import { useSession, useSignIn, useSignOut } from "./plugin@auth";
 
 export default component$(() => {
-  const signIn = useSignIn();
   const { value: user } = useSession();
   const signOut = useSignOut();
 
@@ -14,7 +13,7 @@ export default component$(() => {
         <>
           <h1>Welcome, {user.user?.name}!</h1>
           <Form action={signOut}>
-            <button type="button">Sign Out</button>
+            <button type="submit">Sign Out</button>
           </Form>
         </>
       ) : (
