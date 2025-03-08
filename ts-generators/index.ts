@@ -30,7 +30,7 @@ function* generateUntil(until: number): Generator<number> {
 //     // 0, 1, 1, 2, 3, 5, 8, 13, 21, 34
 // }
 
-const generateUntilGenerator = generateUntil(100);
+const generateUntilGenerator = generateUntil(1_000_000);
 
 for (const curr of generateUntilGenerator) {
     console.log({ curr })
