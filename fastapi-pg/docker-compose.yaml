@@ -1,5 +1,5 @@
 services:
-  postgres:
+  db:
     image: postgres:16
     container_name: postgres
     ports:
@@ -7,13 +7,24 @@ services:
     restart: always
     env_file:
       - ./.env
+    networks:
+      - fastapi
   backend:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: backend
+    environment:
+      DATABASE_PORT: 5432
+      POSTGRES_PASSWORD: password123
+      POSTGRES_USER: postgres
+      POSTGRES_DB: notpostgres
+      POSTGRES_HOST: db
     ports:
       - "${APP_PORT}:80"
     restart: always
-    env_file:
-      - ./.env
+    networks:
+      - fastapi
+
+networks:
+  fastapi:
