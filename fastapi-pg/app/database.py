@@ -1,11 +1,16 @@
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from app.config import Settings
 
-SQLITE_DATABASE_URL = "sqlite:///./note.db"
+settings = Settings()
+
+print(settings.model_dump())
+
+CPOSTGRESQL_CONNECTION_STRING = f"postgresql+psycopg2://{settings.POSTGRES_USER}:{settings.POSTGRES_PASSWORD}@{settings.POSTGRES_HOST}:{settings.DATABASE_PORT}/{settings.POSTGRES_DB}"
 
 engine = create_engine(
-    SQLITE_DATABASE_URL, echo=True, connect_args={"check_same_thread": False}
+    CPOSTGRESQL_CONNECTION_STRING, echo=True, connect_args={}
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
