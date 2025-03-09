@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
 RUN ["apt-get", "update"]
-RUN ["apt-get", "install", "-y", "gcc", "python3-dev"]
+RUN ["apt-get", "install", "-y", "gcc", "python3-dev", "python3-psycopg2", "libpq-dev"]
 
 # Install uv.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
