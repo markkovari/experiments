@@ -18,3 +18,8 @@ dependencies = [
     "testcontainers[postgres]>=4.9.2",
     "typing-inspect>=0.9.0",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.9.10",
+]
