@@ -1,4 +1,3 @@
-import os
 
 import psycopg
 from app.config import Settings
