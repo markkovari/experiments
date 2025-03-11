@@ -26,3 +26,10 @@ def test_get_all_customers(postgres):
     customers.create_customer("Bob", "bob@example.com")
     customers_list = customers.get_all_customers()
     assert len(customers_list) == 2
+
+
+def test_get_all_customer_a_lot(postgres):
+    for i in range(0, 1000):
+        customers.create_customer("Bob", f"bob_{i}@example.com")
+    customers_list = customers.get_all_customers()
+    assert len(customers_list) == 1002
