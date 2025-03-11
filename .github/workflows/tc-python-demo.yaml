@@ -1,0 +1,24 @@
+name: "tc-python-demo-ci"
+
+on:
+  pull_request:
+    paths:
+      - "tc-python-demo/**"
+
+jobs:
+  runCI:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tc-python-demo
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: steup uv
+        uses: astral-sh/setup-uv@v5
+      - name: install packages
+        run: uv sync --frozen
+      - name: run linter
+        run: uv run ruff check
+      - name: run tests
+        run: uv run pytest
