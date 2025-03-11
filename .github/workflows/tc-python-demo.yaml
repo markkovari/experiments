@@ -22,3 +22,5 @@ jobs:
         run: uv run ruff check
       - name: run tests
         run: uv run pytest
+      - name: run bdd tests
+        run: uv run behave
