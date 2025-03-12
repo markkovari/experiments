@@ -1,9 +1,9 @@
 import os
 import psycopg2
+from typing import List, Tuple
 
 
 def get_connection():
-    print("Trying to connect to: ", os.getenv("DB_NAME"))
     return psycopg2.connect(
         dbname=os.getenv("DB_NAME"),
         user=os.getenv("DB_USERNAME"),
@@ -35,12 +35,21 @@ def drop_table():
             conn.commit()
 
 
-def create_customer(name, email):
+def create_customer(name: str, email: str):
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO customers (name, email) VALUES (%s, %s)", (name, email)
             )
+            conn.commit()
+
+
+def create_customers(params: List[Tuple[str, str]]):
+    query = "INSERT INTO customers (name, email) VALUES (%s, %s)"
+    print("values_str", params)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.executemany(query, params)
             conn.commit()
 
 
