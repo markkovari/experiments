@@ -16,3 +16,6 @@ dev = [
     "behave>=1.2.6",
     "ruff>=0.9.10",
 ]
+
+[tool.poetry.dependencies]
+python = ">=3.13,<4.0"

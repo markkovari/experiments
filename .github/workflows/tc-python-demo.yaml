@@ -14,13 +14,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: steup uv
-        uses: astral-sh/setup-uv@v5
+      - name: Install poetry
+        uses: abatilo/actions-poetry@v3
+        with:
+          poetry-version: latest
       - name: install packages
-        run: uv sync --frozen
+        run: poetry sync --frozen
       - name: run linter
-        run: uv run ruff check
+        run: poetry run ruff check
       - name: run tests
-        run: uv run pytest
+        run: poetry run pytest
       - name: run bdd tests
-        run: uv run behave
+        run: poetry run behave
