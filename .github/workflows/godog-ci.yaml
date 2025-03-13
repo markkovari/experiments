@@ -1,0 +1,30 @@
+name: "postgres-godog-example-ci"
+
+on:
+  pull_request:
+    paths:
+      - "postgres-godog-example/**"
+
+jobs:
+  runCI:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: postgres-godog-example
+    strategy:
+      matrix:
+        go-version: ['1.23']
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup Go ${{ matrix.go-version }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: postgres-godog-example
+      - name: run tests
+        run: go test -v ./...
