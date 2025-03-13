@@ -19,7 +19,7 @@ jobs:
         with:
           poetry-version: latest
       - name: install packages
-        run: poetry sync --frozen
+        run: poetry sync --no-root
       - name: run linter
         run: poetry run ruff check
       - name: run tests
