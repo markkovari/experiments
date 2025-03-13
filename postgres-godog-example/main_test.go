@@ -115,10 +115,10 @@ func iShouldFindAUserWithName(context *TestContext, name string) error {
 
 func InitializeScenario(s *godog.ScenarioContext, tc *TestContext) {
 	s.Given(`^I have a user with name "([^"]*)" and email "([^"]*)"$`, func(name, email string) {
-		iHaveAUserWithNameAndEmail(tc, name, email)
+		_ = iHaveAUserWithNameAndEmail(tc, name, email)
 	})
 	s.Then(`^I should find a user with name "([^"]*)"$`, func(name string) {
-		iShouldFindAUserWithName(tc, name)
+		_ = iShouldFindAUserWithName(tc, name)
 	})
 }
 
