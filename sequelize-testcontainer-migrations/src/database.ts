@@ -1,4 +1,9 @@
-import { DataTypes, type Dialect, Model, Sequelize } from "sequelize";
+import { type Dialect, Sequelize } from "sequelize";
+import {
+  Payment,
+  definePaymentModel,
+} from "./infrastructure/database/models/Payment";
+import { User, defineUserModel } from "./infrastructure/database/models/User";
 
 type GetSequelizeArgs = {
   database: string;
@@ -25,57 +30,9 @@ export async function getSequelize({
     logging: false,
   });
   // Define a model
-  class User extends Model {}
-  User.init(
-    {
-      id: {
-        type: DataTypes.INTEGER,
-        primaryKey: true,
-        autoIncrement: true,
-      },
-      firstName: {
-        type: DataTypes.STRING,
-        allowNull: false,
-      },
-      lastName: {
-        type: DataTypes.STRING,
-      },
-    },
-    {
-      sequelize: client,
-      tableName: "users",
-    },
-  );
+  defineUserModel(client);
+  definePaymentModel(client);
 
-  class Payment extends Model {}
-  Payment.init(
-    {
-      amount: {
-        type: DataTypes.INTEGER,
-        allowNull: false,
-      },
-      from: {
-        type: DataTypes.INTEGER,
-        allowNull: false,
-        references: {
-          key: "id",
-          model: User,
-        },
-      },
-      to: {
-        type: DataTypes.INTEGER,
-        allowNull: false,
-        references: {
-          key: "id",
-          model: User,
-        },
-      },
-    },
-    {
-      sequelize: client,
-      tableName: "Payment",
-    },
-  );
   // Make sure the table exists
   await User.sync();
   await Payment.sync();
