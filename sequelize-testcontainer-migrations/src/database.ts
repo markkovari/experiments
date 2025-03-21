@@ -13,7 +13,6 @@ type GetSequelizeArgs = {
   port: number;
   dialect: Dialect;
 };
-
 export async function getSequelize({
   database,
   username,
