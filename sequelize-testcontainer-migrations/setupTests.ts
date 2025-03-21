@@ -2,12 +2,12 @@ import {
   PostgreSqlContainer,
   type StartedPostgreSqlContainer,
 } from "@testcontainers/postgresql";
-import type { Sequelize } from "sequelize";
 import { afterAll, beforeAll, beforeEach } from "vitest";
 import { getSequelize } from "./src/database";
 import { definePaymentModel } from "./src/infrastructure/database/models/Payment";
 import { defineUserModel } from "./src/infrastructure/database/models/User";
 
+import type { Sequelize } from "sequelize";
 let container: PostgreSqlContainer;
 let startedContainer: StartedPostgreSqlContainer;
 let sequelize: Sequelize;
