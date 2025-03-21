@@ -9,7 +9,8 @@ type UserAttributes = {
   updatedAt?: Date;
 };
 
-interface UserCreationAttributes extends Optional<UserAttributes, "id"> {}
+export interface UserCreationAttributes
+  extends Optional<UserAttributes, "id"> {}
 
 class User
   extends Model<UserAttributes, UserCreationAttributes>
