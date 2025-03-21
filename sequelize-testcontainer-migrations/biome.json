@@ -8,7 +8,7 @@
   "files": {
     "ignoreUnknown": false,
     "ignore": ["dist/**"],
-    "include": ["./setupTests.ts"]
+    "include": ["./setupTests.ts", "./src/**"]
   },
   "formatter": {
     "enabled": true,
