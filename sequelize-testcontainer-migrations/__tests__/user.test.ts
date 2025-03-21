@@ -33,7 +33,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   // option one
   // await UserModel.destroy({ force: true, cascade: true, truncate: true });
-  await sequelize.truncate({ force: true, truncate: true });
+  await sequelize.truncate({ force: true, truncate: true, cascade: true });
 });
 
 afterAll(async () => {
