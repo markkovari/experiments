@@ -62,6 +62,14 @@ export async function getSequelize({
           model: User,
         },
       },
+      to: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        references: {
+          key: "id",
+          model: User,
+        },
+      },
     },
     {
       sequelize: client,
