@@ -4,7 +4,8 @@ import type { IUserRepo } from "./UserRepo";
 const UserRepo = (): IUserRepo => ({
   create: async (details) => await User.create(details),
   getAll: async () => await User.findAll(),
-  delete: async (id: number) => await User.destroy({ where: { id } }),
+  delete: async (id: number) =>
+    await User.destroy({ where: { id }, force: true, cascade: true }),
   getById: async (id: number) => await User.findByPk(id),
   update: async (id: number, details) =>
     await User.update({ firstName: details.firstName }, { where: { id } }),

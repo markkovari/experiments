@@ -1,8 +1,12 @@
-import { NextFunction, type Request, Response, Router } from "express";
-import { z } from "zod";
+import { Router } from "express";
 
+import { z } from "zod";
+import {
+  type UserUpdateBody,
+  userUpdateBodySchema,
+} from "../infrastructure/repositories/UserRepo";
 import { UserRepo } from "../infrastructure/repositories/UserRepoImpl";
-import { validateParams } from "../middlewares/schemavalidator";
+import { validateBody } from "../middlewares/schemavalidator";
 
 const userRouter = Router();
 
@@ -29,7 +33,44 @@ userRouter.get("/:id", async (req, res) => {
     res.status(404).send();
     return;
   }
-  res.status(201).json(byId);
+  res.status(200).json(byId);
 });
+
+userRouter.delete("/:id", async (req, res) => {
+  const { id } = req.params;
+  const asInt = Number.parseInt(id, 10);
+  if (Number.isNaN(asInt)) {
+    res.status(400).json({ error: "Id is not a number" });
+    return;
+  }
+  const userRepo = UserRepo();
+  const byId = await userRepo.delete(asInt);
+  if (!byId) {
+    res.status(404).send();
+    return;
+  }
+  res.status(200).json(byId);
+});
+
+userRouter.post(
+  "/:id",
+  validateBody(userUpdateBodySchema),
+  async (req, res) => {
+    const { id } = req.params;
+    const details: UserUpdateBody = req.body;
+    const asInt = Number.parseInt(id, 10);
+    if (Number.isNaN(asInt)) {
+      res.status(400).json({ error: "Id is not a number" });
+      return;
+    }
+    const userRepo = UserRepo();
+    const byId = await userRepo.update(asInt, details);
+    if (!byId) {
+      res.status(404).send();
+      return;
+    }
+    res.status(200).json(byId);
+  },
+);
 
 export { userRouter };

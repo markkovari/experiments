@@ -3,7 +3,7 @@ import {
   type StartedPostgreSqlContainer,
 } from "@testcontainers/postgresql";
 import type { Sequelize } from "sequelize";
-import { afterAll, beforeAll, beforeEach } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach } from "vitest";
 import { getSequelize } from "./src/database";
 import { definePaymentModel } from "./src/infrastructure/database/models/Payment";
 import { defineUserModel } from "./src/infrastructure/database/models/User";
@@ -34,6 +34,10 @@ beforeAll(
 );
 
 beforeEach(async () => {
+  await sequelize.truncate({ force: true, truncate: true, cascade: true });
+});
+
+afterEach(async () => {
   await sequelize.truncate({ force: true, truncate: true, cascade: true });
 });
 
