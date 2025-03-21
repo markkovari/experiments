@@ -33,8 +33,8 @@ export async function getSequelize({
   definePaymentModel(client);
 
   // Make sure the table exists
-  await User.sync();
-  await Payment.sync();
+  await User.sync({ alter: false });
+  await Payment.sync({ alter: false });
   // Return the client and model
   return { client, User, Payment };
 }
