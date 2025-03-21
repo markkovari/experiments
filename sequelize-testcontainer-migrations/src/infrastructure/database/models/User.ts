@@ -1,6 +1,26 @@
-import { DataTypes, Model, type Sequelize } from "sequelize";
+import { DataTypes, Model, type Optional, type Sequelize } from "sequelize";
 
-class User extends Model {}
+type UserAttributes = {
+  id: number;
+  firstName: string;
+  lastName: string;
+
+  createdAt?: Date;
+  updatedAt?: Date;
+};
+
+interface UserCreationAttributes extends Optional<UserAttributes, "id"> {}
+
+class User
+  extends Model<UserAttributes, UserCreationAttributes>
+  implements UserAttributes
+{
+  public id!: number;
+  public firstName!: string;
+  public lastName!: string;
+  public createdAt!: Date;
+  public updatedAt!: Date;
+}
 
 const defineUserModel = (sequelize: Sequelize) => {
   User.init(
@@ -20,6 +40,7 @@ const defineUserModel = (sequelize: Sequelize) => {
     },
     {
       sequelize,
+      timestamps: true,
       tableName: "users",
     },
   );

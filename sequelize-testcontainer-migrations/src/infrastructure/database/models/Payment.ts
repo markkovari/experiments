@@ -1,7 +1,41 @@
-import { DataTypes, Model, type Sequelize } from "sequelize";
+import {
+  DataTypes,
+  type HasOneGetAssociationMixin,
+  Model,
+  type Optional,
+  type Sequelize,
+} from "sequelize";
 import { User } from "./User";
 
-class Payment extends Model {}
+type PaymentAttributes = {
+  id: number;
+  amount: number;
+  fromId: number;
+  toId: number;
+};
+
+interface PaymentCreationAttributes extends Optional<PaymentAttributes, "id"> {}
+
+class Payment
+  extends Model<PaymentCreationAttributes, PaymentCreationAttributes>
+  implements PaymentAttributes
+{
+  public id!: number;
+  public amount!: number;
+  public fromId!: number;
+  public toId!: number;
+
+  public getFromUser!: HasOneGetAssociationMixin<User>;
+  public getToUser!: HasOneGetAssociationMixin<User>;
+
+  public readonly createdAt!: Date;
+  public readonly updatedAt!: Date;
+
+  static associate(models: { User: typeof User }) {
+    Payment.hasOne(models.User, { foreignKey: "fromId", as: "from" });
+    Payment.hasOne(models.User, { foreignKey: "toId", as: "from" });
+  }
+}
 
 const definePaymentModel = (sequelize: Sequelize) => {
   Payment.init(
@@ -10,25 +44,24 @@ const definePaymentModel = (sequelize: Sequelize) => {
         type: DataTypes.INTEGER,
         allowNull: false,
       },
-      from: {
+      fromId: {
         type: DataTypes.INTEGER,
-        allowNull: false,
         references: {
-          key: "id",
           model: User,
+          key: "id",
         },
       },
-      to: {
+      toId: {
         type: DataTypes.INTEGER,
-        allowNull: false,
         references: {
-          key: "id",
           model: User,
+          key: "id",
         },
       },
     },
     {
       sequelize,
+      timestamps: true,
       tableName: "Payment",
     },
   );
