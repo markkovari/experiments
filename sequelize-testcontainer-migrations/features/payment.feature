@@ -1,9 +1,24 @@
 Feature: A user pays for another user
 
   Scenario: A user sends a payment to another user successfully
-    Given a user with email: a@gmail.com and 100 as amount
-    And a user with email: b@gmail.com and 50 as amount
-    When the user with email: a@gmail.com pays to the user with: b@gmail.com with 20
-    And the payment is successfully registered
-    Then the user with email: a@gmail.com has 20 less on their account
-    And the user with email: b@gmail.com has 20 more on their account
+    Given there are no users in the system
+    And a user with email: <firstUser> and <firstUserAmount> as amount
+    And a user with email: <secondUser> and <secondUserAmount> as amount
+    When the user with email: <firstUser> pays to the user with: <secondUser> with <paymentAmount>
+    And the payment is successfully registered from <firstUser> to <secondUser>
+    Then the user with email: <firstUser> has <paymentAmount> less on their account
+    And the user with email: <secondUser> has <paymentAmount> more on their account
+
+    Examples:
+      | firstUser     | firstUserAmount | secondUser    | secondUserAmount | paymentAmount |
+      | "a@gmail.com" |            1000 | "b@gmail.com" |              120 |            15 |
+      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
+      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
+      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
+      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
+      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
+      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
+      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
+      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
+      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
+      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |

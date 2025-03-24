@@ -24,3 +24,5 @@ jobs:
         run: npm run check
       - name: run tests
         run: npm run test
+      - name: run behavioural tests
+        run: npm run test:bdd
