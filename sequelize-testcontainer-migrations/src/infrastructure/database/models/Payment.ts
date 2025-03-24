@@ -29,8 +29,8 @@ class Payment
   public readonly updatedAt!: Date;
 
   static associate(models: { User: typeof User }) {
-    Payment.hasOne(models.User, { foreignKey: "fromId", as: "from" });
-    Payment.hasOne(models.User, { foreignKey: "toId", as: "to" });
+    Payment.hasOne(models.User);
+    Payment.hasOne(models.User);
   }
 }
 

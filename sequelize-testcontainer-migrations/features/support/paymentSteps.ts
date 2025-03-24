@@ -5,82 +5,79 @@ import { Payment } from "../../src/infrastructure/database/models/Payment";
 import { User } from "../../src/infrastructure/database/models/User";
 import { paymentServiceImpl } from "../../src/infrastructure/services/PaymentServiceImpl";
 
-let firstUser: User;
-let firtUserInitial: number;
-let secondUser: User;
-let secondUserInitial: number;
+const initials: { [key: string]: number } = {};
 let payment: Payment;
 
-Given(
-  "a user with email: a@gmail.com and {int} as amount",
-  async (int: number) => {
-    firstUser = await User.create({
-      email: "a@gmail.com",
-      firstName: "First",
-      lastName: "Lastname",
-      amount: int,
-    });
-    firtUserInitial = firstUser.amount;
-  },
-);
+Given("there are no users in the system", async () => {
+  await User.truncate({ cascade: true, force: true });
+});
 
 Given(
-  "a user with email: b@gmail.com and {int} as amount",
-  async (int: number) => {
-    secondUser = await User.create({
-      email: "b@gmail.com",
+  "a user with email: {string} and {int} as amount",
+  async (email: string, amount: number) => {
+    await User.create({
+      email,
       firstName: "First",
       lastName: "Lastname",
-      amount: int,
+      amount,
     });
-    secondUserInitial = secondUser.amount;
+    initials[email] = amount;
   },
 );
 
 When(
-  "the user with email: a@gmail.com pays to the user with: b@gmail.com with {int}",
-  async (int: number) => {
+  "the user with email: {string} pays to the user with: {string} with {int}",
+  async (emailFrom: string, emailTo: string, int: number) => {
+    const from = await User.findOne({ where: { email: emailFrom } });
+    if (!from) throw Error();
+    const to = await User.findOne({ where: { email: emailTo } });
+    if (!to) throw Error();
     payment = await Payment.create({
       amount: int,
-      fromId: firstUser.id,
-      toId: secondUser.id,
+      fromId: from.id,
+      toId: to.id,
     });
   },
 );
 
-Then("the payment is successfully registered", async () => {
-  const storedPayment = await Payment.findOne({
-    where: {
-      fromId: firstUser.id,
-      toId: secondUser.id,
-    },
-  });
-  notEqual(storedPayment, null);
-  if (storedPayment) {
-    await paymentServiceImpl.executeTransaction(storedPayment);
-  }
-});
-
 Then(
-  "the user with email: a@gmail.com has {int} less on their account",
-  async (int: number) => {
-    const newFirst = await User.findByPk(firstUser.id);
-    if (!newFirst) {
-      throw Error();
+  "the payment is successfully registered from {string} to {string}",
+  async (from: string, to: string) => {
+    const fromUser = await User.findOne({ where: { email: from } });
+    if (!fromUser) throw Error();
+    const toUser = await User.findOne({ where: { email: to } });
+    if (!toUser) throw Error();
+    const storedPayment = await Payment.findOne({
+      where: {
+        fromId: fromUser.id,
+        toId: toUser.id,
+      },
+    });
+    notEqual(storedPayment, null);
+    if (storedPayment) {
+      await paymentServiceImpl.executeTransaction(storedPayment);
     }
-    firstUser = newFirst;
-    equal(firstUser.amount, firtUserInitial - int);
   },
 );
 
 Then(
-  "the user with email: b@gmail.com has {int} more on their account",
-  async (int: number) => {
-    const newSecondUser = await User.findByPk(secondUser.id);
-    if (!newSecondUser) {
+  "the user with email: {string} has {int} less on their account",
+  async (emailLess: string, int: number) => {
+    const firstUser = await User.findOne({ where: { email: emailLess } });
+    if (!firstUser) {
       throw Error();
     }
-    secondUser = newSecondUser;
-    equal(secondUser.amount, secondUserInitial + int);
+    equal(firstUser.amount, initials[emailLess] - int);
+  },
+);
+
+Then(
+  "the user with email: {string} has {int} more on their account",
+  async (emailMore: string, int: number) => {
+    const secondUser = await User.findOne({ where: { email: emailMore } });
+    if (!secondUser) {
+      throw Error();
+    }
+    equal(secondUser.amount, initials[emailMore] + int);
   },
 );

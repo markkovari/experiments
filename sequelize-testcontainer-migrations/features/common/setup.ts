@@ -1,4 +1,4 @@
-import { AfterAll, BeforeAll } from "@cucumber/cucumber";
+import { AfterAll, AfterStep, BeforeAll, BeforeStep } from "@cucumber/cucumber";
 import {
   PostgreSqlContainer,
   type StartedPostgreSqlContainer,
@@ -25,14 +25,6 @@ BeforeAll(async () => {
   });
   sequelize = client;
 });
-
-// BeforeStep(async () => {
-// 	await sequelize.truncate({ force: true, truncate: true, cascade: true });
-// });
-
-// afterEach(async () => {
-// 	await sequelize.truncate({ force: true, truncate: true, cascade: true });
-// });
 
 AfterAll(async () => {
   await sequelize.close();
