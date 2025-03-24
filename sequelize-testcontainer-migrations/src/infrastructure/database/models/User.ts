@@ -1,9 +1,18 @@
-import { DataTypes, Model, type Optional, type Sequelize } from "sequelize";
+import {
+  type Association,
+  DataTypes,
+  Model,
+  type Optional,
+  type Sequelize,
+} from "sequelize";
+import { Payment } from "./Payment";
 
 type UserAttributes = {
   id: number;
   firstName: string;
   lastName: string;
+  email: string;
+  amount?: number;
 
   createdAt?: Date;
   updatedAt?: Date;
@@ -19,8 +28,19 @@ class User
   public id!: number;
   public firstName!: string;
   public lastName!: string;
+  public email!: string;
+  public amount!: number;
+
   public createdAt!: Date;
   public updatedAt!: Date;
+  declare static associations: {
+    payments: Association<User, Payment>;
+  };
+
+  static associate() {
+    User.hasMany(Payment, { foreignKey: "fromId", as: "payments" });
+    User.hasMany(Payment, { foreignKey: "toId", as: "payments" });
+  }
 }
 
 const defineUserModel = (sequelize: Sequelize) => {
@@ -37,6 +57,14 @@ const defineUserModel = (sequelize: Sequelize) => {
       },
       lastName: {
         type: DataTypes.STRING,
+      },
+      email: {
+        type: DataTypes.STRING,
+        unique: true,
+      },
+      amount: {
+        type: DataTypes.INTEGER,
+        defaultValue: 0,
       },
     },
     {
