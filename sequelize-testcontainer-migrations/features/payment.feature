@@ -13,12 +13,5 @@ Feature: A user pays for another user
       | firstUser     | firstUserAmount | secondUser    | secondUserAmount | paymentAmount |
       | "a@gmail.com" |            1000 | "b@gmail.com" |              120 |            15 |
       | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
-      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
-      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
-      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
-      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
-      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
-      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
-      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
-      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
-      | "b@gmail.com" |             100 | "c@gmail.com" |              120 |            20 |
+      | "c@gmail.com" |      1000000000 | "d@gmail.com" |        120000000 |      20000000 |
+      | "c@gmail.com" |           99999 | "e@gmail.com" |            44444 |           111 |
