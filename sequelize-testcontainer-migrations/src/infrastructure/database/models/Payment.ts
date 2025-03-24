@@ -25,15 +25,12 @@ class Payment
   public fromId!: number;
   public toId!: number;
 
-  public getFromUser!: HasOneGetAssociationMixin<User>;
-  public getToUser!: HasOneGetAssociationMixin<User>;
-
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 
   static associate(models: { User: typeof User }) {
     Payment.hasOne(models.User, { foreignKey: "fromId", as: "from" });
-    Payment.hasOne(models.User, { foreignKey: "toId", as: "from" });
+    Payment.hasOne(models.User, { foreignKey: "toId", as: "to" });
   }
 }
 
