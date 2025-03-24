@@ -36,5 +36,5 @@ export async function getSequelize({
   await User.sync({ alter: false });
   await Payment.sync({ alter: false });
   // Return the client and model
-  return { client, User, Payment };
+  return { client };
 }
