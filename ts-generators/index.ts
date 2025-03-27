@@ -36,25 +36,61 @@ function* generateUntil(until: number): Generator<number> {
 // 	console.log({ curr });
 // }
 
-const someTime = () => (1 + Math.random()) * 1000;
+type Stuff = {
+	name: string;
+	age: number;
+};
+
+const someTime = () => Math.random() * 100;
 
 const mockedAsyncTask = (value: string): Promise<string> => {
 	const time = someTime();
-	console.info(`Waiting for ${time}`);
 	return new Promise((resolve) => setTimeout(() => resolve(value), time));
 };
 
-async function* consume(
+async function* consumeStuff(
 	from: number,
 	to: number,
-): AsyncGenerator<string, void, unknown> {
+): AsyncGenerator<Stuff, void, unknown> {
 	for (let i = from; i < to; i++) {
 		const response = await mockedAsyncTask("thing");
-		yield response;
+		yield {
+			age: i,
+			name: `${response}_${i}`,
+		};
 	}
 }
 
-const asyncGenerator = consume(1, 100);
+async function* consumeStuffsBatched(
+	from: number,
+	to: number,
+	withBatch: number,
+): AsyncGenerator<Stuff[]> {
+	let stuffToYield: Stuff[] = [];
+	for (let i = from; i < to; i++) {
+		const response = await mockedAsyncTask("thing");
+		stuffToYield = [
+			...stuffToYield,
+			{
+				age: i,
+				name: `${response}_${i}`,
+			},
+		];
+		if (i % withBatch === 0) {
+			yield stuffToYield;
+			stuffToYield = [];
+		}
+	}
+	if (stuffToYield.length > 0) {
+		yield stuffToYield;
+	}
+}
+
+const asyncGenerator = consumeStuff(1, 100);
 for await (const element of asyncGenerator) {
+	console.log({ element });
+}
+const asyncGeneratorBatched = consumeStuffsBatched(1, 100, 30);
+for await (const element of asyncGeneratorBatched) {
 	console.log({ element });
 }
