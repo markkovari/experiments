@@ -1,20 +1,24 @@
 {
-  "name": "nodejs-redis-sub",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "devDependencies": {
-    "@types/node": "^22.13.10",
-    "typescript": "^5.8.2"
-  },
-  "dependencies": {
-    "redis": "^4.7.0"
-  }
+	"name": "nodejs-redis-sub",
+	"version": "1.0.0",
+	"description": "",
+	"main": "index.js",
+	"scripts": {
+		"build": "tsc",
+		"start:consumer": "npm run build && node ./build/consumer.js",
+		"start:publisher": "npm run build && node ./build/publisher.js",
+		"test": "echo \"Error: no test specified\" && exit 1"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"type": "commonjs",
+	"devDependencies": {
+		"@types/node": "^22.13.10",
+		"typescript": "^5.8.2"
+	},
+	"dependencies": {
+		"redis": "^4.7.0",
+		"ts-node": "^10.9.2"
+	}
 }
