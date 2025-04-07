@@ -14,11 +14,11 @@ variable "do_region" {
   }
 }
 
-variable "do_spaces_access_id" {
+variable "do_spaces_access_key_id" {
   description = "digital ocean spaces access key"
   sensitive   = true
   validation {
-    condition     = length(var.do_spaces_access_id) > 1
+    condition     = length(var.do_spaces_access_key_id) > 1
     error_message = "bucket access key must be at least one character long"
   }
 }
