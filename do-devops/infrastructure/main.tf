@@ -21,19 +21,37 @@ resource "digitalocean_project" "my_faviourite_project" {
   is_default = true
 }
 
-resource "digitalocean_app" "static-site-example" {
+resource "digitalocean_app" "toto_app_backend" {
+  project_id = digitalocean_project.my_faviourite_project.id
+  spec {
+    name   = "todo-app-backend"
+    region = "ams"
+    service {
+      name            = "todo-app-backend"
+      source_dir      = "todo-api"
+      dockerfile_path = "todo-api/Dockerfile"
+      git {
+        repo_clone_url = "https://github.com/markkovari/ngrx-todo"
+        branch         = "main"
+      }
+    }
+  }
+}
+
+resource "digitalocean_app" "toto_app_frontend" {
   project_id = digitalocean_project.my_faviourite_project.id
   spec {
     name   = "static-site-example"
     region = "ams"
 
     static_site {
-      name          = "sample-jekyll"
-      build_command = "bundle exec jekyll build -d ./public"
-      output_dir    = "/public"
+      name          = "todo-app-frontend"
+      build_command = "npm run build"
+      source_dir    = "todo-app"
+      output_dir    = "/dist/todo-app/browser/"
 
       git {
-        repo_clone_url = "https://github.com/digitalocean/sample-jekyll.git"
+        repo_clone_url = "https://github.com/markkovari/ngrx-todo"
         branch         = "main"
       }
     }
