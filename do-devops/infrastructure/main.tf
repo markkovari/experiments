@@ -18,7 +18,7 @@ provider "digitalocean" {
 resource "digitalocean_project" "my_faviourite_project" {
   name       = "my_faviourite_project_dev"
   purpose    = "development"
-  is_default = true
+  is_default = false
 }
 
 resource "digitalocean_app" "toto_app_backend" {
