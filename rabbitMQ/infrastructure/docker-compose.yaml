@@ -1,5 +1,10 @@
 services:
   rabbitmq:
+    deploy:
+      resources:
+        limits:
+          memory: 100MB
+          cpus: 0.5
     image: rabbitmq:3-management
     container_name: rabbitmq
     ports:
@@ -10,6 +15,7 @@ services:
       RABBITMQ_DEFAULT_PASS: password
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+
 
 volumes:
   rabbitmq_data:
