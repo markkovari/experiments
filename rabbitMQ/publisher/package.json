@@ -1,0 +1,22 @@
+{
+	"name": "publisher",
+	"version": "1.0.0",
+	"description": "",
+	"main": "index.js",
+	"scripts": {
+		"publisher": "node publisher.js",
+		"consumer": "node consumer.js",
+		"test": "echo \"Error: no test specified\" && exit 1"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"type": "commonjs",
+	"devDependencies": {
+		"@types/amqplib": "^0.10.7",
+		"@types/node": "^22.14.1"
+	},
+	"dependencies": {
+		"amqplib": "^0.10.7"
+	}
+}
