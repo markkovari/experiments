@@ -1,0 +1,20 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - 8000:8000
+    environment:
+      APP_PORT: 8000
+      MAIL_HOST: mailhog
+      MAIL_PORT: 1025
+      MAIL_PASSWORD: "asd"
+      MAIL_USER: "asd"
+
+  mailhog:
+    image: mailhog/mailhog
+    container_name: mailhog
+    ports:
+      - "1025:1025"
+      - "8025:8025"
