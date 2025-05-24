@@ -1,0 +1,24 @@
+{
+	"name": "mailer-intercept",
+	"version": "1.0.0",
+	"description": "",
+	"main": "index.js",
+	"scripts": {
+		"start": "node dist/index.js",
+		"build": "tsc"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"packageManager": "pnpm@10.11.0",
+	"dependencies": {
+		"@types/node": "^22.15.21",
+		"express": "^5.1.0",
+		"nodemailer": "^7.0.3"
+	},
+	"devDependencies": {
+		"@types/express": "^5.0.2",
+		"@types/nodemailer": "^6.4.17",
+		"typescript": "^5.8.3"
+	}
+}
