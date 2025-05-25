@@ -1,5 +1,5 @@
 import { createTransport } from 'nodemailer';
-import { readConf } from "./config"
+import { readConf } from "config"
 import type { MailOptions } from 'nodemailer/lib/json-transport';
 
 
@@ -19,6 +19,5 @@ const transport = ({ email: { host, password: pass, port, user } } = readConf())
 const sendWith = (config = readConf()) => async (opts: MailOptions) => await transport(config).sendMail(opts)
 
 export {
-    // transport,
     sendWith
 }
