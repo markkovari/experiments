@@ -1,17 +1,19 @@
 {
-	"name": "mailer-intercept",
+	"name": "backend",
+	"private": true,
 	"version": "1.0.0",
 	"description": "",
 	"main": "index.js",
 	"scripts": {
-		"build": "tsc"
+		"build": "tsc",
+		"start": "node dist/apps/backend/index.js"
 	},
 	"keywords": [],
 	"author": "",
 	"license": "ISC",
 	"packageManager": "pnpm@10.11.0",
 	"dependencies": {
-		"@types/node": "^22.15.21",
+		"config": "workspace:*",
 		"express": "^5.1.0",
 		"nodemailer": "^7.0.3"
 	},
