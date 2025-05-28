@@ -1,0 +1,26 @@
+{
+	"name": "playwright-cucumber-ts-framework",
+	"version": "1.0.0",
+	"description": "E2E testing framework using Playwright, Cucumber, and TypeScript",
+	"main": "index.js",
+	"scripts": {
+		"test": "cucumber-js",
+		"test:headed": "HEADED=true cucumber-js",
+		"postinstall": "npx playwright install --with-deps",
+		"test:all": "ts-node src/runAll.ts"
+	},
+	"keywords": ["playwright", "cucumber", "typescript", "e2e"],
+	"author": "",
+	"license": "ISC",
+	"devDependencies": {
+		"@cucumber/cucumber": "^10.8.0",
+		"@playwright/test": "^1.45.3",
+		"@types/node": "^20.12.12",
+		"playwright": "^1.45.3",
+		"ts-node": "^10.9.2",
+		"typescript": "^5.4.5"
+	},
+	"dependencies": {
+		"@faker-js/faker": "^9.8.0"
+	}
+}
