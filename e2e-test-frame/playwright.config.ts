@@ -75,7 +75,7 @@ export default defineConfig({
             name: 'chromium-debug',
             use: {
                 browserName: 'chromium',
-                headless: false, // Always headed
+                headless: process.env.HEADED !== 'true',
                 viewport: { width: 1600, height: 900 },
                 launchOptions: {
                     slowMo: 50, // Slow down operations by 50ms
