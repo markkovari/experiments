@@ -85,12 +85,9 @@ export default defineConfig({
     ],
 
     /* Optional: Shared settings for all projects */
-    // use: {
-    //   baseURL: 'http://localhost:3000', // Base URL for page.goto()
-    //   trace: 'retain-on-failure',       // Record trace on failure
-    //   screenshot: 'only-on-failure',    // Take screenshot only on failure
-    //   video: 'retain-on-failure',       // Record video on failure
-    // },
+    use: {
+        video: 'on',
+    },
 
     // Folder for test artifacts such as screenshots, videos, traces, etc.
     // This is more for Playwright Test runner, but good to be aware of.
