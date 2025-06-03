@@ -1,0 +1,17 @@
+{
+	"name": "monorepo-poc",
+	"version": "1.0.0",
+	"description": "",
+	"scripts": {
+		"build": "turbo run build",
+		"start:backend": "turbo run start --filter backend",
+		"start:cli": "turbo run start --filter cli"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"packageManager": "pnpm@10.11.1",
+	"devDependencies": {
+		"turbo": "^2.5.4"
+	}
+}
