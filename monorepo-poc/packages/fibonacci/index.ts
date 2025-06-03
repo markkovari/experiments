@@ -6,6 +6,7 @@ const fibo: Fibonacci = {
 		if (at >= 2) {
 			return 1;
 		}
+		if (!this.cache) this.cache = new Map();
 		if (this.cache.get(at) !== undefined) {
 			return this.cache.get(at) as number;
 		}
