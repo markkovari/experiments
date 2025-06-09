@@ -13,21 +13,22 @@ const portAsNum = Number.parseInt(port as string);
 
 const app = express();
 
-app.get("/", (req: Request, res: Response) => {
-	res.send("Hello world!");
-	return;
+app.get("/", (_: Request, res: Response) => {
+	setTimeout(() => {
+		res.send("Hello world!");
+		return;
+	}, 1000);
 });
 
 const { shutdown, getActiveConnectionCount } = withConnectionTracking(
 	app,
 	portAsNum,
-	isGracefulEnabled,
 );
 
 if (isGracefulEnabled) {
 	process.on("SIGTERM", shutdown);
 	process.on("SIGINT", shutdown);
-	setInterval(() => {
+	setInterval(async () => {
 		console.log(`Open connections: ${getActiveConnectionCount()}`);
 	}, 100);
 }
