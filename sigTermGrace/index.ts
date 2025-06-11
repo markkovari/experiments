@@ -14,10 +14,11 @@ const portAsNum = Number.parseInt(port as string);
 const app = express();
 
 app.get("/", (_: Request, res: Response) => {
+	const randomTime = Math.floor(Math.random() * 1000);
 	setTimeout(() => {
 		res.send("Hello world!");
 		return;
-	}, 1000);
+	}, randomTime);
 });
 
 const { shutdown, getActiveConnectionCount } = withConnectionTracking(
