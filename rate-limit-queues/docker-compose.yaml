@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: rabbitmq
+    hostname: rabbitmq-host
+    ports:
+      - "5672:5672" # AMQP protocol port
+      - "15672:15672" # Management UI port
+    environment:
+      RABBITMQ_DEFAULT_USER: user
+      RABBITMQ_DEFAULT_PASS: password
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq/mnesia
+      - rabbitmq_log:/var/log/rabbitmq
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    hostname: redis-host
+    ports:
+      - "6379:6379" # Redis default port
+    volumes:
+      - redis_data:/data # Persist Redis data
+    command: redis-server --appendonly yes # Enable AOF persistence
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    hostname: postgres-host
+    ports:
+      - "5432:5432" # PostgreSQL default port
+    environment:
+      POSTGRES_DB: mydatabase
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data # Persist PostgreSQL data
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d mydatabase"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: on-failure # Ensure postgres restarts if it fails
+
+  go_backend:
+    build:
+      context: ./backend # Path to your Go application directory
+      dockerfile: Dockerfile
+    container_name: backend
+    ports:
+      - "8080:8080" # Port for the Go application
+    environment:
+      # Connection string for PostgreSQL from the perspective of the Go container.
+      # 'host' is 'postgres' because that's the service name in docker-compose.
+      DATABASE_URL: "host=postgres user=user password=password dbname=mydatabase port=5432 sslmode=disable"
+    networks:
+      - app_network
+    depends_on:
+      postgres:
+        condition: service_healthy # Ensure postgres is healthy before starting go_backend
+    restart: on-failure # Ensure the backend restarts if it fails
+
+networks:
+  app_network:
+    driver: bridge
+
+volumes:
+  rabbitmq_data:
+  rabbitmq_log:
+  redis_data:
+  postgres_data:
+
