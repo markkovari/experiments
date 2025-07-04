@@ -24,7 +24,6 @@ func CreateConn() (*amqp.Connection, error) {
 		return nil, err
 	}
 
-	defer conn.Close()
 	return conn, nil
 }
 
@@ -37,7 +36,7 @@ func InitQueue(queueName string) (*amqp.Queue, error) {
 
 	ch, err := conn.Channel()
 	if err != nil {
-		slog.Error("cannot crete channel")
+		slog.Error("cannot create channel")
 		return nil, err
 	}
 
