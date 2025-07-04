@@ -63,7 +63,7 @@ services:
 
   go_backend:
     build:
-      context: ./backend # Path to your Go application directory
+      context: ./app # Path to your Go application directory
       dockerfile: Dockerfile
     container_name: backend
     ports:
