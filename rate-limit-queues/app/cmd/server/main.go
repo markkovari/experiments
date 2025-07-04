@@ -2,13 +2,18 @@ package main
 
 import (
 	"asdasd/database" // Import the database package for connection management
-	"asdasd/router"   // Import the router package for API route setup
+	"asdasd/events"
+	"asdasd/router" // Import the router package for API route setup
 	"log"
 	"net/http"
 	"os" // Used to access environment variables
 )
 
 func main() {
+	_, err := events.InitQueue(events.QueueName)
+	if err != nil {
+		log.Fatal("cannot connect to events")
+	}
 	// Initialize the database connection and perform migrations.
 	database.InitDB()
 	// Ensure the database connection is closed when the main function exits.
