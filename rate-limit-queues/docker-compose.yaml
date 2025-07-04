@@ -1,10 +1,6 @@
-version: '3.8'
-
 services:
   rabbitmq:
     image: rabbitmq:3-management-alpine
-    container_name: rabbitmq
-    hostname: rabbitmq-host
     ports:
       - "5672:5672" # AMQP protocol port
       - "15672:15672" # Management UI port
@@ -25,8 +21,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: redis
-    hostname: redis-host
     ports:
       - "6379:6379" # Redis default port
     volumes:
@@ -42,8 +36,6 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: postgres
-    hostname: postgres-host
     ports:
       - "5432:5432" # PostgreSQL default port
     environment:
@@ -64,21 +56,37 @@ services:
   go_backend:
     build:
       context: ./app # Path to your Go application directory
-      dockerfile: Dockerfile
-    container_name: backend
+      dockerfile: app.Dockerfile
     ports:
       - "8080:8080" # Port for the Go application
     environment:
       # Connection string for PostgreSQL from the perspective of the Go container.
       # 'host' is 'postgres' because that's the service name in docker-compose.
       DATABASE_URL: "host=postgres user=user password=password dbname=mydatabase port=5432 sslmode=disable"
+      RABBITMQ_URL: amqp://user:password@rabbitmq:5672/
     networks:
       - app_network
     depends_on:
       postgres:
         condition: service_healthy # Ensure postgres is healthy before starting go_backend
+      rabbitmq:
+        condition: service_healthy # Ensure postgres is healthy before starting go_backend
     restart: on-failure # Ensure the backend restarts if it fails
 
+  go_worker:
+    build:
+      context: ./app # Path to your Go application directory
+      dockerfile: worker.Dockerfile
+    environment:
+      RABBITMQ_URL: amqp://user:password@rabbitmq:5672/
+    networks:
+      - app_network
+    depends_on:
+      postgres:
+        condition: service_healthy # Ensure postgres is healthy before starting go_backend
+      rabbitmq:
+        condition: service_healthy # Ensure postgres is healthy before starting go_backend
+    restart: on-failure # Ensure the backend restarts if it fails
 networks:
   app_network:
     driver: bridge
