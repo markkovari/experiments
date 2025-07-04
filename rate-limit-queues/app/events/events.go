@@ -12,9 +12,6 @@ import (
 const QueueName = "some_thing_to_publish_to"
 
 func CreateConn() (*amqp.Connection, error) {
-	for i, e := range os.Environ() {
-		fmt.Println("> %d %v", i, e)
-	}
 	rabbitURL := os.Getenv("RABBITMQ_URL")
 	if rabbitURL == "" {
 		rabbitURL = "amqp://user:password@rabbitmq:5672/" // fallback default
