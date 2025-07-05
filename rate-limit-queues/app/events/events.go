@@ -120,3 +120,45 @@ func ConsumeMessages(ch *amqp.Channel, handler MessageHandler) error {
 
 	return err
 }
+
+func ConsumeMessagesFromChannel(handler MessageHandler) error {
+
+	conn, err := CreateConn()
+	if err != nil {
+		slog.Error("cannot open conn")
+		return err
+	}
+
+	ch, err := conn.Channel()
+	if err != nil {
+		slog.Error("cannot create channel")
+		return err
+	}
+
+	defer ch.Close()
+	defer conn.Close()
+	msgs, err := ch.Consume(
+		QueueName, // queue
+		"",        // consumer
+		true,      // auto-ack
+		false,     // exclusive
+		false,     // no-local
+		false,     // no-wait
+		nil,       // args
+	)
+	if err != nil {
+		slog.Error("Cannot create messages from queue")
+	}
+
+	var forever chan struct{}
+
+	go func() {
+		for d := range msgs {
+			handler(d)
+		}
+	}()
+
+	slog.Info(" [*] Waiting for logs. To exit press CTRL+C")
+	<-forever
+	return nil
+}
