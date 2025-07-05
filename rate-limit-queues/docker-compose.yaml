@@ -30,7 +30,7 @@ services:
     networks:
       - app_network
     healthcheck:
-      test: ["CMD-SHELL", "valkey-cli ping | grep PONG"]
+      test: ["CMD", "valkey-cli", "-u", "redis://user:password@localhost:6379", "PING"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -70,7 +70,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy # Ensure postgres is healthy before starting go_backend
-      rabbitmq:
+      cache:
         condition: service_healthy # Ensure postgres is healthy before starting go_backend
     restart: on-failure # Ensure the backend restarts if it fails
 
@@ -79,13 +79,14 @@ services:
       context: ./app # Path to your Go application directory
       dockerfile: worker.Dockerfile
     environment:
+      CACHE_ADDRESS: redis://user:password@cache:6379
       RABBITMQ_URL: amqp://user:password@rabbitmq:5672/
     networks:
       - app_network
     depends_on:
       postgres:
         condition: service_healthy # Ensure postgres is healthy before starting go_backend
-      rabbitmq:
+      cache:
         condition: service_healthy # Ensure postgres is healthy before starting go_backend
     restart: on-failure # Ensure the backend restarts if it fails
 networks:
