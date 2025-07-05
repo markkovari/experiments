@@ -19,17 +19,18 @@ services:
       retries: 5
       start_period: 20s
 
-  redis:
-    image: redis:7-alpine
+  cache:
+    image: valkey/valkey:latest
     ports:
       - "6379:6379" # Redis default port
     volumes:
-      - redis_data:/data # Persist Redis data
-    command: redis-server --appendonly yes # Enable AOF persistence
+      - ./valkey.conf:/etc/valkey/valkey.conf # Mount your custom config
+      - valkey_data:/data # Persist Redis data
+    command: ["valkey-server", "/etc/valkey/valkey.conf"]
     networks:
       - app_network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "valkey-cli ping | grep PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -94,6 +95,6 @@ networks:
 volumes:
   rabbitmq_data:
   rabbitmq_log:
-  redis_data:
+  valkey_data:
   postgres_data:
 
