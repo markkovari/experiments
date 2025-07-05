@@ -19,7 +19,7 @@ func main() {
 	slog.Info("worker starts")
 
 	if err := events.ConsumeMessagesFromChannel(handleMessage); err != nil {
-		slog.Error("Cannot create message consumer")
+		slog.Error("Cannot read message with consumer")
 	}
 
 }
