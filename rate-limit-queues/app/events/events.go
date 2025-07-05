@@ -56,6 +56,26 @@ func InitQueue(queueName string) (*amqp.Queue, error) {
 
 }
 
+func Send(message []byte) error {
+	conn, err := CreateConn()
+	if err != nil {
+		slog.Error("cannot open conn")
+		return err
+	}
+
+	ch, err := conn.Channel()
+	if err != nil {
+		slog.Error("cannot create channel")
+		return err
+	}
+
+	err = SendMessageChannel(ch, message)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func SendMessageChannel(channel *amqp.Channel, message []byte) error {
 	err := channel.Publish(
 		"",

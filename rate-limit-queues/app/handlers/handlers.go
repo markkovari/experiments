@@ -2,10 +2,12 @@ package handlers
 
 import (
 	"asdasd/database" // Import the database package to access DB
-	"asdasd/models"   // Import the models package
+	"asdasd/events"
+	"asdasd/models" // Import the models package
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -48,6 +50,11 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 		// Handle database errors (e.g., unique constraint violation for email).
 		respondWithError(w, http.StatusInternalServerError, result.Error.Error())
 		return
+	}
+
+	err := events.Send([]byte("hello"))
+	if err != nil {
+		slog.Warn("was not able to send message")
 	}
 	respondWithJSON(w, http.StatusCreated, user) // Respond with the created user and 201 status
 }
