@@ -69,6 +69,8 @@ func Send(message []byte) error {
 		return err
 	}
 
+	defer ch.Close()
+	defer conn.Close()
 	err = SendMessageChannel(ch, message)
 	if err != nil {
 		return err
