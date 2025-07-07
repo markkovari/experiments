@@ -7,6 +7,8 @@ import (
 	"os"
 	"time"
 
+	"golang.org/x/time/rate"
+
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/valkey-io/valkey-go"
 	"github.com/valkey-io/valkey-go/valkeylimiter"
@@ -225,35 +227,39 @@ func ConsumeMessagesFromChannelWithRateLimit(ctx context.Context, handler Messag
 
 			done := make(chan struct{})
 			go func() {
+				limiter := rate.NewLimiter(rate.Every(100*time.Millisecond), 1)
+
 				for d := range msgs {
-					msg := Message{
-						UserID:              "user123",
-						ExternalAPIEndpoint: "external-api-x",
-						Payload:             string(d.Body),
+					if err := limiter.Wait(ctx); err == nil {
+						msg := Message{
+							UserID:              "user123",
+							ExternalAPIEndpoint: "external-api-x",
+							Payload:             string(d.Body),
+						}
+
+						go func(delivery amqp.Delivery) {
+							time.Sleep(100 * time.Millisecond)
+
+							ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+							defer cancel()
+
+							result, err := limiterGlobal.Allow(ctx, msg.UserID)
+							if err != nil {
+								slog.Error("Rate limit check error", slog.String("err", err.Error()))
+								delivery.Nack(false, true)
+								return
+							}
+
+							if !result.Allowed {
+								slog.Info(fmt.Sprintf("User %s rate limit exceeded. Retry after %d ms", msg.UserID, result.ResetAtMs))
+								delivery.Nack(false, true)
+								return
+							}
+
+							slog.Info(fmt.Sprintf("Processing message for user %s", msg.UserID))
+							handler(d)
+						}(d)
 					}
-
-					go func(delivery amqp.Delivery) {
-						time.Sleep(100 * time.Millisecond)
-
-						ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-						defer cancel()
-
-						result, err := limiterGlobal.Allow(ctx, msg.UserID)
-						if err != nil {
-							slog.Error("Rate limit check error", slog.String("err", err.Error()))
-							delivery.Nack(false, true)
-							return
-						}
-
-						if !result.Allowed {
-							slog.Info(fmt.Sprintf("User %s rate limit exceeded. Retry after %d ms", msg.UserID, result.ResetAtMs))
-							delivery.Nack(false, true)
-							return
-						}
-
-						slog.Info(fmt.Sprintf("Processing message for user %s", msg.UserID))
-						handler(d)
-					}(d)
 				}
 				close(done)
 			}()
