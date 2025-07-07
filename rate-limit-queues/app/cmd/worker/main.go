@@ -11,13 +11,16 @@ import (
 	"github.com/rabbitmq/amqp091-go"
 )
 
-func handleMessage(msg amqp091.Delivery) {
+func handleMessage(msg amqp091.Delivery) error {
 	slog.Info("event got", slog.Group("message details",
 		slog.String("body_preview", string(msg.Body)),
 	))
-	time.Sleep(2 * time.Second)
+	time.Sleep(12 * time.Second)
 
-	msg.Ack(false)
+	if err := msg.Ack(false); err != nil {
+		return err
+	}
+	return nil
 }
 
 func main() {

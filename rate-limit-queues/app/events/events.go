@@ -103,7 +103,7 @@ func SendMessageChannel(channel *amqp.Channel, message []byte) error {
 	return err
 }
 
-type MessageHandler func(amqp.Delivery)
+type MessageHandler func(amqp.Delivery) error
 
 func ConsumeMessages(ch *amqp.Channel, handler MessageHandler) error {
 
@@ -188,8 +188,8 @@ func ConsumeMessagesFromChannelWithRateLimit(ctx context.Context, handler Messag
 			))
 		},
 		KeyPrefix: "some-prefix",
-		Limit:     15,
-		Window:    10 * time.Second,
+		Limit:     5,
+		Window:    time.Second,
 	})
 	if err != nil {
 		slog.Error("cannot create rate limiter")
@@ -227,7 +227,7 @@ func ConsumeMessagesFromChannelWithRateLimit(ctx context.Context, handler Messag
 
 			done := make(chan struct{})
 			go func() {
-				limiter := rate.NewLimiter(rate.Every(100*time.Millisecond), 1)
+				limiter := rate.NewLimiter(100, 100)
 
 				for d := range msgs {
 					if err := limiter.Wait(ctx); err == nil {
