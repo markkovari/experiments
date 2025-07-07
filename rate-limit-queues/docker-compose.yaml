@@ -19,17 +19,18 @@ services:
       retries: 5
       start_period: 20s
 
-  redis:
-    image: redis:7-alpine
+  cache:
+    image: valkey/valkey:latest
     ports:
       - "6379:6379" # Redis default port
     volumes:
-      - redis_data:/data # Persist Redis data
-    command: redis-server --appendonly yes # Enable AOF persistence
+      - ./valkey.conf:/etc/valkey/valkey.conf # Mount your custom config
+      - valkey_data:/data # Persist Redis data
+    command: ["valkey-server", "/etc/valkey/valkey.conf"]
     networks:
       - app_network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "-u", "redis://user:password@localhost:6379", "PING"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -69,7 +70,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy # Ensure postgres is healthy before starting go_backend
-      rabbitmq:
+      cache:
         condition: service_healthy # Ensure postgres is healthy before starting go_backend
     restart: on-failure # Ensure the backend restarts if it fails
 
@@ -78,13 +79,14 @@ services:
       context: ./app # Path to your Go application directory
       dockerfile: worker.Dockerfile
     environment:
+      CACHE_ADDRESS: redis://user:password@cache:6379/0?protocol=3
       RABBITMQ_URL: amqp://user:password@rabbitmq:5672/
     networks:
       - app_network
     depends_on:
       postgres:
         condition: service_healthy # Ensure postgres is healthy before starting go_backend
-      rabbitmq:
+      cache:
         condition: service_healthy # Ensure postgres is healthy before starting go_backend
     restart: on-failure # Ensure the backend restarts if it fails
 networks:
@@ -94,6 +96,6 @@ networks:
 volumes:
   rabbitmq_data:
   rabbitmq_log:
-  redis_data:
+  valkey_data:
   postgres_data:
 

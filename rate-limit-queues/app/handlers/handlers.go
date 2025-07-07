@@ -52,7 +52,7 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := events.Send([]byte("hello"))
+	err := events.Send(user)
 	if err != nil {
 		slog.Warn("was not able to send message")
 	}
