@@ -79,7 +79,7 @@ services:
       context: ./app # Path to your Go application directory
       dockerfile: worker.Dockerfile
     environment:
-      CACHE_ADDRESS: redis://user:password@cache:6379
+      CACHE_ADDRESS: redis://user:password@cache:6379/0?protocol=3
       RABBITMQ_URL: amqp://user:password@rabbitmq:5672/
     networks:
       - app_network

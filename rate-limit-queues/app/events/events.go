@@ -1,15 +1,14 @@
 package events
 
 import (
-	"asdasd/cache"
 	"context"
 	"fmt"
-	"log"
 	"log/slog"
 	"os"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/valkey-io/valkey-go"
 	"github.com/valkey-io/valkey-go/valkeylimiter"
 )
 
@@ -175,90 +174,96 @@ func ConsumeMessagesFromChannel(handler MessageHandler) error {
 }
 
 func ConsumeMessagesFromChannelWithRateLimit(ctx context.Context, handler MessageHandler) error {
-	conn, err := CreateConn()
-	if err != nil {
-		slog.Error("cannot open conn")
-		return err
+	cacheAddress := os.Getenv("CACHE_ADDRESS")
+	if cacheAddress == "" {
+		cacheAddress = "redis://user:password@localhost:6379/0?protocol=3"
 	}
 
-	ch, err := conn.Channel()
+	limiterGlobal, err := valkeylimiter.NewRateLimiter(valkeylimiter.RateLimiterOption{
+		ClientBuilder: func(option valkey.ClientOption) (valkey.Client, error) {
+			return valkey.NewClient(valkey.MustParseURL(
+				cacheAddress,
+			))
+		},
+		KeyPrefix: "some-prefix",
+		Limit:     15,
+		Window:    10 * time.Second,
+	})
 	if err != nil {
-		slog.Error("cannot create channel")
-		return err
+		slog.Error("cannot create rate limiter")
+		slog.Error(err.Error())
 	}
 
 	for {
-		msgs, err := ch.Consume(
-			QueueName, // queue
-			"",        // consumer
-			true,      // auto-ack
-			false,     // exclusive
-			false,     // no-local
-			false,     // no-wait
-			nil,       // args
-		)
+
+		conn, err := CreateConn()
 		if err != nil {
-			slog.Error("Cannot create messages from queue")
+			slog.Error("cannot open conn")
+			return err
 		}
-		cacheAddress := os.Getenv("CACHE_ADDRESS")
-		if cacheAddress == "" {
-			cacheAddress = "localhost:6379"
-		}
-		appLimiter, err := cache.NewValkeyAppRateLimiter(cacheAddress, valkeylimiter.RateLimiterOption{}, 10, 15)
+
+		ch, err := conn.Channel()
 		if err != nil {
-			slog.Error("cannot create rate limiter")
+			slog.Error("cannot create channel")
+			return err
 		}
 
-		forever := make(chan bool)
-
-		go func() {
-			for d := range msgs {
-				log.Printf("Received a message: %s", d.Body)
-
-				msg := Message{
-					UserID:              "user123",
-					ExternalAPIEndpoint: "external-api-x",
-					Payload:             string(d.Body),
-				}
-
-				go func(delivery amqp.Delivery) {
-					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-					defer cancel()
-
-					allowedUser, userRetryAfter, err := appLimiter.AllowByUser(ctx, msg.UserID)
-					if err != nil {
-						slog.Info("Error checking user rate limit for %s: %v", msg.UserID, err)
-						delivery.Nack(false, true)
-						return
-					}
-					if !allowedUser {
-						slog.Info("User %s rate limit exceeded. Retry after %s. Requeueing message.", msg.UserID, userRetryAfter)
-						delivery.Nack(false, true)
-						return
-					}
-
-					allowedAPI, apiRetryAfter, err := appLimiter.AllowByAPI(ctx, msg.ExternalAPIEndpoint)
-					if err != nil {
-						slog.Info("Error checking API rate limit for %s: %v", msg.ExternalAPIEndpoint, err)
-						delivery.Nack(false, true)
-						return
-					}
-					if !allowedAPI {
-						slog.Info("External API %s rate limit exceeded. Retry after %s. Requeueing message.", msg.ExternalAPIEndpoint, apiRetryAfter)
-						delivery.Nack(false, true)
-						return
-					}
-
-					slog.Info(fmt.Sprintf("Processing message for user %s, API %s: %s", msg.UserID, msg.ExternalAPIEndpoint, msg.Payload))
-					time.Sleep(500 * time.Millisecond)
-
-					slog.Info("Message processed and acknowledged for user %s, API %s", msg.UserID, msg.ExternalAPIEndpoint)
-					delivery.Ack(false)
-
-				}(d)
+		for {
+			msgs, err := ch.Consume(
+				QueueName,
+				"",
+				false,
+				false,
+				false,
+				false,
+				nil,
+			)
+			if err != nil {
+				slog.Error("Cannot create messages from queue")
 			}
-		}()
+			slog.Info(" [*] Waiting for messages. To exit press CTRL+C")
 
-		<-forever
+			done := make(chan struct{})
+			go func() {
+				for d := range msgs {
+					msg := Message{
+						UserID:              "user123",
+						ExternalAPIEndpoint: "external-api-x",
+						Payload:             string(d.Body),
+					}
+
+					go func(delivery amqp.Delivery) {
+						time.Sleep(100 * time.Millisecond)
+
+						ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+						defer cancel()
+
+						result, err := limiterGlobal.Allow(ctx, msg.UserID)
+						if err != nil {
+							slog.Error("Rate limit check error", slog.String("err", err.Error()))
+							delivery.Nack(false, true)
+							return
+						}
+
+						if !result.Allowed {
+							slog.Info(fmt.Sprintf("User %s rate limit exceeded. Retry after %d ms", msg.UserID, result.ResetAtMs))
+							delivery.Nack(false, true)
+							return
+						}
+
+						slog.Info(fmt.Sprintf("Processing message for user %s", msg.UserID))
+						handler(d)
+					}(d)
+				}
+				close(done)
+			}()
+
+			<-done
+			slog.Warn("⚠️ Message consumer closed, reconnecting...")
+
+			ch.Close()
+			conn.Close()
+			time.Sleep(1 * time.Second)
+		}
 	}
 }
