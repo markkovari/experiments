@@ -168,8 +168,6 @@ func ConsumeMessagesFromChannel(handler MessageHandler) error {
 		slog.Error("Cannot create messages from queue")
 	}
 
-	var forever chan struct{}
-
 	go func() {
 		for d := range msgs {
 			handler(d)
@@ -177,7 +175,6 @@ func ConsumeMessagesFromChannel(handler MessageHandler) error {
 	}()
 
 	slog.Info(" [*] Waiting for logs. To exit press CTRL+C")
-	<-forever
 	return nil
 }
 
@@ -250,8 +247,6 @@ func ConsumeMessagesFromChannelWithRateLimit(ctx context.Context, handler Messag
 						}
 
 						go func(delivery amqp.Delivery) {
-							time.Sleep(100 * time.Millisecond)
-
 							ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 							defer cancel()
 
@@ -275,7 +270,7 @@ func ConsumeMessagesFromChannelWithRateLimit(ctx context.Context, handler Messag
 								},
 								KeyPrefix: fmt.Sprintf("some-prefix_%d", msg.User.PassThroughID),
 								Limit:     10,
-								Window:    10 * time.Second,
+								Window:    time.Second,
 							})
 
 							if err != nil {
