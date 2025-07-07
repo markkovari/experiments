@@ -11,6 +11,7 @@ type User struct {
 	Properties []Property `json:"properties" gorm:"many2many:user_properties;"` // Many-to-many relationship with Property.
 	// `gorm:"many2many:user_properties;"` tells GORM to create a join table named `user_properties`
 	// for this relationship.
+	PassThroughID int `json:"passthroughId"`
 }
 
 // Property represents a property detail.

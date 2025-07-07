@@ -2,7 +2,9 @@ package main
 
 import (
 	"asdasd/events"
+	"asdasd/models"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,8 +14,15 @@ import (
 )
 
 func handleMessage(msg amqp091.Delivery) error {
+	var user models.User
+	err := json.Unmarshal(msg.Body, &user)
+	if err != nil {
+		return err
+	}
+
 	slog.Info("event got", slog.Group("message details",
-		slog.String("body_preview", string(msg.Body)),
+		slog.String("user name", string(user.Name)),
+		slog.Int("passthroughId id", user.PassThroughID),
 	))
 	time.Sleep(12 * time.Second)
 

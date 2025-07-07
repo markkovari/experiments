@@ -1,7 +1,9 @@
 package events
 
 import (
+	"asdasd/models"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,9 +17,9 @@ import (
 )
 
 type Message struct {
-	UserID              string `json:"user_id"`
-	ExternalAPIEndpoint string `json:"external_api_endpoint"`
-	Payload             string `json:"payload"`
+	UserID              string      `json:"user_id"`
+	ExternalAPIEndpoint string      `json:"external_api_endpoint"`
+	User                models.User `json:"user"`
 }
 
 const QueueName = "some_thing_to_publish_to"
@@ -67,7 +69,7 @@ func InitQueue(queueName string) (*amqp.Queue, error) {
 
 }
 
-func Send(message []byte) error {
+func Send(message models.User) error {
 	conn, err := CreateConn()
 	if err != nil {
 		slog.Error("cannot open conn")
@@ -89,15 +91,19 @@ func Send(message []byte) error {
 	return nil
 }
 
-func SendMessageChannel(channel *amqp.Channel, message []byte) error {
-	err := channel.Publish(
+func SendMessageChannel(channel *amqp.Channel, message models.User) error {
+	asJson, err := json.Marshal(message)
+	if err != nil {
+		return err
+	}
+	err = channel.Publish(
 		"",
 		QueueName,
 		false,
 		false,
 		amqp.Publishing{
-			ContentType: "text/plain",
-			Body:        message,
+			ContentType: "application/json",
+			Body:        asJson,
 			Timestamp:   time.Now(),
 		})
 	return err
@@ -188,8 +194,8 @@ func ConsumeMessagesFromChannelWithRateLimit(ctx context.Context, handler Messag
 			))
 		},
 		KeyPrefix: "some-prefix",
-		Limit:     5,
-		Window:    time.Second,
+		Limit:     1000,
+		Window:    time.Minute,
 	})
 	if err != nil {
 		slog.Error("cannot create rate limiter")
@@ -231,10 +237,16 @@ func ConsumeMessagesFromChannelWithRateLimit(ctx context.Context, handler Messag
 
 				for d := range msgs {
 					if err := limiter.Wait(ctx); err == nil {
+						var user models.User
+
+						err := json.Unmarshal(d.Body, &user)
+						if err != nil {
+							continue
+						}
 						msg := Message{
 							UserID:              "user123",
 							ExternalAPIEndpoint: "external-api-x",
-							Payload:             string(d.Body),
+							User:                user,
 						}
 
 						go func(delivery amqp.Delivery) {
@@ -242,6 +254,20 @@ func ConsumeMessagesFromChannelWithRateLimit(ctx context.Context, handler Messag
 
 							ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 							defer cancel()
+
+							limiterUser, err := valkeylimiter.NewRateLimiter(valkeylimiter.RateLimiterOption{
+								ClientBuilder: func(option valkey.ClientOption) (valkey.Client, error) {
+									return valkey.NewClient(valkey.MustParseURL(
+										cacheAddress,
+									))
+								},
+								KeyPrefix: fmt.Sprintf("some-prefix_%d", msg.User.PassThroughID),
+								Limit:     10,
+								Window:    10 * time.Second,
+							})
+							if err != nil {
+								slog.Error("cannot create user rate limiter for stg, passthrough")
+							}
 
 							result, err := limiterGlobal.Allow(ctx, msg.UserID)
 							if err != nil {
@@ -251,7 +277,20 @@ func ConsumeMessagesFromChannelWithRateLimit(ctx context.Context, handler Messag
 							}
 
 							if !result.Allowed {
-								slog.Info(fmt.Sprintf("User %s rate limit exceeded. Retry after %d ms", msg.UserID, result.ResetAtMs))
+								slog.Debug(fmt.Sprintf("Global rate limit exceeded. Retry after %d ms", result.ResetAtMs))
+								delivery.Nack(false, true)
+								return
+							}
+
+							result, err = limiterUser.Allow(ctx, msg.UserID)
+							if err != nil {
+								slog.Error("Rate limit check error for user", slog.String("err", err.Error()))
+								delivery.Nack(false, true)
+								return
+							}
+
+							if !result.Allowed {
+								slog.Debug(fmt.Sprintf("User %s rate limit exceeded. Retry after %d ms", msg.UserID, result.ResetAtMs))
 								delivery.Nack(false, true)
 								return
 							}
