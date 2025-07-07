@@ -255,20 +255,6 @@ func ConsumeMessagesFromChannelWithRateLimit(ctx context.Context, handler Messag
 							ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 							defer cancel()
 
-							limiterUser, err := valkeylimiter.NewRateLimiter(valkeylimiter.RateLimiterOption{
-								ClientBuilder: func(option valkey.ClientOption) (valkey.Client, error) {
-									return valkey.NewClient(valkey.MustParseURL(
-										cacheAddress,
-									))
-								},
-								KeyPrefix: fmt.Sprintf("some-prefix_%d", msg.User.PassThroughID),
-								Limit:     10,
-								Window:    10 * time.Second,
-							})
-							if err != nil {
-								slog.Error("cannot create user rate limiter for stg, passthrough")
-							}
-
 							result, err := limiterGlobal.Allow(ctx, msg.UserID)
 							if err != nil {
 								slog.Error("Rate limit check error", slog.String("err", err.Error()))
@@ -280,6 +266,20 @@ func ConsumeMessagesFromChannelWithRateLimit(ctx context.Context, handler Messag
 								slog.Debug(fmt.Sprintf("Global rate limit exceeded. Retry after %d ms", result.ResetAtMs))
 								delivery.Nack(false, true)
 								return
+							}
+							limiterUser, err := valkeylimiter.NewRateLimiter(valkeylimiter.RateLimiterOption{
+								ClientBuilder: func(option valkey.ClientOption) (valkey.Client, error) {
+									return valkey.NewClient(valkey.MustParseURL(
+										cacheAddress,
+									))
+								},
+								KeyPrefix: fmt.Sprintf("some-prefix_%d", msg.User.PassThroughID),
+								Limit:     10,
+								Window:    10 * time.Second,
+							})
+
+							if err != nil {
+								slog.Error("cannot create user rate limiter for stg, passthrough")
 							}
 
 							result, err = limiterUser.Allow(ctx, msg.UserID)
