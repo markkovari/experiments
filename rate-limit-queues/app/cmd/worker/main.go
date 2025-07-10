@@ -7,29 +7,47 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"time"
 
 	"github.com/rabbitmq/amqp091-go"
 )
 
-func handleMessage(msg amqp091.Delivery) error {
+func handleMessage(msg amqp091.Delivery) (*events.Delayable, bool, error) {
 	var user models.User
 	err := json.Unmarshal(msg.Body, &user)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 
 	slog.Info("event got", slog.Group("message details",
 		slog.String("user name", string(user.Name)),
 		slog.Int("passthroughId id", user.PassThroughID),
 	))
+
+	isRateLimited := rand.IntN(100)
+	if isRateLimited < 10 {
+		msg.Nack(false, true)
+		afterTime := rand.IntN(10)
+		slog.Info("delay",
+			slog.Group("activated",
+				slog.Int("with time", afterTime),
+			))
+
+		return &events.Delayable{
+			RetryAfter: afterTime,
+		}, false, nil
+	}
+
+	slog.Info("no delay",
+		slog.Group("activated"))
 	time.Sleep(12 * time.Second)
 
 	if err := msg.Ack(false); err != nil {
-		return err
+		return nil, false, err
 	}
-	return nil
+	return nil, false, nil
 }
 
 func main() {
