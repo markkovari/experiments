@@ -1,0 +1,16 @@
+{
+  "dependencies": {
+    "@nats-io/transport-node": "^3.1.0"
+  },
+  "name": "rate-limit-queues2",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@nats-io/jetstream": "^3.1.0",
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}

@@ -1,0 +1,57 @@
+services:
+  nats:
+    image: nats
+    ports:
+      - "8222:8222"
+      - "4222:4222"
+    command: -js -D -V -m 8222 # Enable JetStream (-js), Debug (-D), Trace (-V), Monitoring on port 8222 (-m)
+    volumes:
+      - nats_data:/data # Volume for JetStream data persistence
+    networks:
+      - nats
+
+  nats-exporter:
+      image: natsio/prometheus-nats-exporter:latest
+      command: -jsz=all -accstatz -connz_detailed -gatewayz -healthz -connz -varz -subz http://nats:8222 # Scrape all relevant NATS and JetStream metrics
+      ports:
+        - "7777:7777" 
+      depends_on:
+        - nats
+      networks:
+        - nats
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml # Prometheus configuration
+      - prometheus_data:/prometheus # Prometheus data persistence
+    ports:
+      - "9090:9090" # Prometheus UI port
+    command: --config.file=/etc/prometheus/prometheus.yml --web.enable-remote-write-receiver
+    depends_on:
+      - nats-exporter
+    networks:
+      - nats
+
+  grafana:
+    image: grafana/grafana:latest
+    volumes:
+      - grafana_data:/var/lib/grafana # Grafana data persistence
+      - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml # Datasource provisioning
+      - ./grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml # Dashboard provisioning
+      - ./dashboards:/var/lib/grafana/dashboards # Directory for dashboard JSON files
+    ports:
+      - "3000:3000" # Grafana UI port
+    depends_on:
+      - prometheus
+    networks:
+      - nats
+
+networks:
+  nats:
+    driver: bridge
+
+volumes:
+  nats_data:
+  prometheus_data:
+  grafana_data:
