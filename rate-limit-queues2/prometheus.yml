@@ -1,0 +1,8 @@
+global:
+  scrape_interval: 15s # How frequently to scrape targets.
+  evaluation_interval: 15s # How frequently to evaluate rules.
+
+scrape_configs:
+  - job_name: 'nats'
+    static_configs:
+      - targets: ['nats-exporter:7777'] # NATS exporter runs on port 7777 within the docker network
