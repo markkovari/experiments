@@ -13,7 +13,6 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/valkey-io/valkey-go"
-	"github.com/valkey-io/valkey-go/valkeylimiter"
 )
 
 type Message struct {
@@ -109,7 +108,10 @@ func SendMessageChannel(channel *amqp.Channel, message models.User) error {
 	return err
 }
 
-type MessageHandler func(amqp.Delivery) error
+type Delayable struct {
+	RetryAfter int
+}
+type MessageHandler func(amqp.Delivery) (*Delayable, bool, error)
 
 func ConsumeMessages(ch *amqp.Channel, handler MessageHandler) error {
 
@@ -183,21 +185,14 @@ func ConsumeMessagesFromChannelWithRateLimit(ctx context.Context, handler Messag
 	if cacheAddress == "" {
 		cacheAddress = "redis://user:password@localhost:6379/0?protocol=3"
 	}
-
-	limiterGlobal, err := valkeylimiter.NewRateLimiter(valkeylimiter.RateLimiterOption{
-		ClientBuilder: func(option valkey.ClientOption) (valkey.Client, error) {
-			return valkey.NewClient(valkey.MustParseURL(
-				cacheAddress,
-			))
-		},
-		KeyPrefix: "some-prefix",
-		Limit:     1000,
-		Window:    time.Minute,
-	})
+	valKeyCLient, err := valkey.NewClient(valkey.MustParseURL(
+		cacheAddress,
+	))
 	if err != nil {
-		slog.Error("cannot create rate limiter")
-		slog.Error(err.Error())
+		return err
 	}
+
+	key := "some-key"
 
 	for {
 
@@ -240,58 +235,29 @@ func ConsumeMessagesFromChannelWithRateLimit(ctx context.Context, handler Messag
 						if err != nil {
 							continue
 						}
-						msg := Message{
-							UserID:              "user123",
-							ExternalAPIEndpoint: "external-api-x",
-							User:                user,
-						}
 
 						go func(delivery amqp.Delivery) {
 							ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 							defer cancel()
 
-							result, err := limiterGlobal.Allow(ctx, msg.UserID)
+							_, err := valKeyCLient.Do(ctx, valKeyCLient.B().Get().Key(key).Build()).AsInt64()
 							if err != nil {
-								slog.Error("Rate limit check error", slog.String("err", err.Error()))
-								delivery.Nack(false, true)
-								return
+								slog.Error("Rate limiter cannot be read passthrough", slog.String("err", err.Error()))
+								if _, canDelay, err := handler(d); err != nil {
+									if canDelay {
+										delivery.Nack(false, true)
+									}
+								}
 							}
 
-							if !result.Allowed {
-								slog.Debug(fmt.Sprintf("Global rate limit exceeded. Retry after %d ms", result.ResetAtMs))
-								delivery.Nack(false, true)
-								return
-							}
-							limiterUser, err := valkeylimiter.NewRateLimiter(valkeylimiter.RateLimiterOption{
-								ClientBuilder: func(option valkey.ClientOption) (valkey.Client, error) {
-									return valkey.NewClient(valkey.MustParseURL(
-										cacheAddress,
-									))
-								},
-								KeyPrefix: fmt.Sprintf("some-prefix_%d", msg.User.PassThroughID),
-								Limit:     10,
-								Window:    time.Second,
-							})
-
+							resp, canDelay, err := handler(d)
 							if err != nil {
-								slog.Error("cannot create user rate limiter for stg, passthrough")
-							}
-
-							result, err = limiterUser.Allow(ctx, msg.UserID)
-							if err != nil {
-								slog.Error("Rate limit check error for user", slog.String("err", err.Error()))
-								delivery.Nack(false, true)
 								return
 							}
-
-							if !result.Allowed {
-								slog.Debug(fmt.Sprintf("User %s rate limit exceeded. Retry after %d ms", msg.UserID, result.ResetAtMs))
-								delivery.Nack(false, true)
-								return
+							if canDelay {
+								remaining := resp.RetryAfter
+								valKeyCLient.Do(ctx, valKeyCLient.B().Expire().Key(key).Seconds(int64(remaining)).Build()).AsInt64()
 							}
-
-							slog.Info(fmt.Sprintf("Processing message for user %s", msg.UserID))
-							handler(d)
 						}(d)
 					}
 				}
