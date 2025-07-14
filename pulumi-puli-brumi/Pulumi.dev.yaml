@@ -1,0 +1,6 @@
+encryptionsalt: v1:JJWfkPQ7SLw=:v1:ns8qX8HRy2sVJ2Dj:NXyesIFNUxOgfuBnPN2tSY8a3aaeAQ==
+config:
+  digitalocean:token:
+    secure: v1:8D1WxEL3Hvow6HRW:SSdAti05t5vMGpT/5NYPXMCc28gPGpA4m4uYRH+vBgiS8nWWvkmRpSd4n2dOcSU/ys5YPrVaB+2N8xQembf7L5Tjdfa0ZlN5UIhyyL9ly3DWS2q7sqyK
+  pulumi-puli-brumi:doToken:
+    secure: v1:WL1u00MSSxb17Opv:zu6v1p4biwfwrHMKfQchQtjaXVXVxVL0UlkQlRU9ev6gKGrBwKW3s1Ur1vm3wMN787qgepSba42pTiL7AMdXLkyoezhKreRd8+M9vYdzLMMTdGI8V/fY

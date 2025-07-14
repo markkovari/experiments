@@ -1,0 +1,12 @@
+name: pulumi-puli-brumi
+description: A minimal TypeScript Pulumi program
+runtime:
+  name: nodejs
+  options:
+    packagemanager: npm
+config:
+  digitalocean:token:
+    value: 'TODO: var.do_token'
+  pulumi:tags:
+    value:
+      pulumi:template: typescript
