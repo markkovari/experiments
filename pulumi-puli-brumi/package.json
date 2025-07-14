@@ -1,0 +1,13 @@
+{
+    "name": "pulumi-puli-brumi",
+    "main": "index.ts",
+    "devDependencies": {
+        "@types/node": "^18.19.118",
+        "typescript": "^5.0.0"
+    },
+    "dependencies": {
+        "@pulumi/aws": "^6.83.0",
+        "@pulumi/digitalocean": "^4.49.0",
+        "@pulumi/pulumi": "^3.113.0"
+    }
+}
