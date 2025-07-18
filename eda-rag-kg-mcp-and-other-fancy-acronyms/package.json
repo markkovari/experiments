@@ -7,7 +7,8 @@
     "build": "turbo run build",
     "check": "turbo run check",
     "check:write": "turbo run check:write",
-    "check:unsafe": "turbo run check:unsafe"
+    "check:unsafe": "turbo run check:unsafe",
+    "dev": "turbo run dev"
   },
   "keywords": [],
   "author": "",
