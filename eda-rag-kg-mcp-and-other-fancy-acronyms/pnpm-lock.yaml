@@ -35,6 +35,9 @@ importers:
       drizzle-orm:
         specifier: ^0.41.0
         version: 0.41.0(gel@2.1.1)(postgres@3.4.7)
+      env:
+        specifier: workspace:*
+        version: link:../../libs/env
       next:
         specifier: ^15.2.3
         version: 15.4.1(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
@@ -87,6 +90,28 @@ importers:
       typescript:
         specifier: ^5.8.2
         version: 5.8.3
+
+  libs/database:
+    dependencies:
+      drizzle-orm:
+        specifier: ^0.41.0
+        version: 0.41.0(gel@2.1.1)(postgres@3.4.7)
+      postgres:
+        specifier: ^3.4.7
+        version: 3.4.7
+
+  libs/env:
+    dependencies:
+      '@t3-oss/env-nextjs':
+        specifier: ^0.12.0
+        version: 0.12.0(typescript@5.8.3)(zod@3.25.76)
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^20.19.8
+        version: 20.19.8
 
 packages:
 
