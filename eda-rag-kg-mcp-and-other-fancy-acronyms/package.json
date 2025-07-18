@@ -4,7 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "turbo run build",
+    "check": "turbo run check",
+    "check:write": "turbo run check:write",
+    "check:unsafe": "turbo run check:unsafe"
   },
   "keywords": [],
   "author": "",

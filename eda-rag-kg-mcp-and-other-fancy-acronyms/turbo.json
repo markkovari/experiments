@@ -1,5 +1,19 @@
 {
   "$schema": "https://turborepo.com/schema.json",
   "tasks": {
+    "build": {
+      "outputs": [
+        ".next/**"
+      ]
+    },
+    "check": {
+      "cache": true
+    },
+    "check:write": {
+      "cache": true
+    },
+    "check:unsafe": {
+      "cache": true
+    }
   }
 }
