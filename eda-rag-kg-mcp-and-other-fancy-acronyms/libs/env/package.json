@@ -1,0 +1,24 @@
+{
+  "name": "@magic/env",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/env.js",
+  "types": "dist/env.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.13.1",
+  "dependencies": {
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@t3-oss/env-nextjs": "^0.12.0",
+    "@types/node": "^24.0.14",
+    "dotenv": "^17.2.0",
+    "typescript": "^5.8.3"
+  },
+  "type": "module"
+}
