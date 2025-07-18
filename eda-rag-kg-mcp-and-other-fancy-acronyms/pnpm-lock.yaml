@@ -99,6 +99,9 @@ importers:
       '@magic/env':
         specifier: workspace:*
         version: link:../env
+      drizzle-kit:
+        specifier: ^0.30.6
+        version: 0.30.6
       drizzle-orm:
         specifier: ^0.41.0
         version: 0.41.0(gel@2.1.1)(postgres@3.4.7)
