@@ -17,6 +17,12 @@ importers:
       '@auth/drizzle-adapter':
         specifier: ^1.7.2
         version: 1.10.0
+      '@magic/database':
+        specifier: workspace:*
+        version: link:../../libs/database
+      '@magic/env':
+        specifier: workspace:*
+        version: link:../../libs/env
       '@t3-oss/env-nextjs':
         specifier: ^0.12.0
         version: 0.12.0(typescript@5.8.3)(zod@3.25.76)
@@ -35,9 +41,6 @@ importers:
       drizzle-orm:
         specifier: ^0.41.0
         version: 0.41.0(gel@2.1.1)(postgres@3.4.7)
-      env:
-        specifier: workspace:*
-        version: link:../../libs/env
       next:
         specifier: ^15.2.3
         version: 15.4.1(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
@@ -93,12 +96,22 @@ importers:
 
   libs/database:
     dependencies:
+      '@magic/env':
+        specifier: workspace:*
+        version: link:../env
       drizzle-orm:
         specifier: ^0.41.0
         version: 0.41.0(gel@2.1.1)(postgres@3.4.7)
+      next-auth:
+        specifier: 5.0.0-beta.25
+        version: 5.0.0-beta.25(next@15.4.1(react-dom@19.1.0(react@19.1.0))(react@19.1.0))(react@19.1.0)
       postgres:
         specifier: ^3.4.7
         version: 3.4.7
+    devDependencies:
+      typescript:
+        specifier: ^5.8.3
+        version: 5.8.3
 
   libs/env:
     dependencies:

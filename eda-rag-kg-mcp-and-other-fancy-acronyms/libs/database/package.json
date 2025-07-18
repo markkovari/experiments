@@ -1,17 +1,23 @@
 {
-  "name": "database",
+  "name": "@magic/database",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "dist/database.js",
+  "types": "dist/database.d.ts",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc -p tsconfig.json"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "packageManager": "pnpm@10.13.1",
   "dependencies": {
+    "@magic/env": "workspace:*",
     "drizzle-orm": "^0.41.0",
+    "next-auth": "5.0.0-beta.25",
     "postgres": "^3.4.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
   }
 }
