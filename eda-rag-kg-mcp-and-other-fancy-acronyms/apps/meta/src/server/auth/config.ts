@@ -1,6 +1,10 @@
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import type { DefaultSession, NextAuthConfig } from "next-auth";
 import DiscordProvider from "next-auth/providers/discord";
+import CredentialsProvider from "next-auth/providers/credentials"
+
+import { AuthError, CredentialsSignin } from "next-auth"
+
 
 import { db } from "@magic/database";
 import {
@@ -9,7 +13,15 @@ import {
 	users,
 	verificationTokens,
 } from "@magic/database/schema";
+import { eq, sql } from 'drizzle-orm';
+import z from "zod";
 
+const credentialsSchema = z.object({
+	password: z.string().min(8),
+	email: z.string().email()
+})
+
+export type CredentialsType = z.infer<typeof credentialsSchema>
 /**
  * Module augmentation for `next-auth` types. Allows us to add custom properties to the `session`
  * object and keep type safety.
@@ -39,15 +51,6 @@ declare module "next-auth" {
 export const authConfig = {
 	providers: [
 		DiscordProvider,
-		/**
-		 * ...add more providers here.
-		 *
-		 * Most other providers require a bit more work than the Discord provider. For example, the
-		 * GitHub provider requires you to add the `refresh_token_expires_in` field to the Account
-		 * model. Refer to the NextAuth.js docs for the provider you want to use. Example:
-		 *
-		 * @see https://next-auth.js.org/providers/github
-		 */
 	],
 	adapter: DrizzleAdapter(db, {
 		usersTable: users,
