@@ -6,6 +6,10 @@
   "scripts": {
     "build": "turbo run build",
     "check": "turbo run check",
+    "db:generate": "pnpm run --dir ./libs/database db:generate",
+    "db:migrate": "pnpm run --dir ./libs/database db:migrate",
+    "db:push": "pnpm run --dir ./libs/database db:push",
+    "db:studio": "pnpm run --dir ./libs/database db:studio",
     "check:write": "turbo run check:write",
     "check:unsafe": "turbo run check:unsafe",
     "dev": "turbo run dev"

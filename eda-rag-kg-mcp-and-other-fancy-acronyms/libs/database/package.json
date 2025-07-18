@@ -5,6 +5,10 @@
   "main": "dist/database.js",
   "types": "dist/database.d.ts",
   "scripts": {
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
     "build": "tsc -p tsconfig.json"
   },
   "keywords": [],
@@ -13,6 +17,7 @@
   "packageManager": "pnpm@10.13.1",
   "dependencies": {
     "@magic/env": "workspace:*",
+    "drizzle-kit": "^0.30.6",
     "drizzle-orm": "^0.41.0",
     "next-auth": "5.0.0-beta.25",
     "postgres": "^3.4.7"

@@ -13,6 +13,7 @@
 	},
 	"include": [
 		"database.ts",
-		"schema.ts"
+		"schema.ts",
+		"drizzle.config.ts"
 	]
 }
