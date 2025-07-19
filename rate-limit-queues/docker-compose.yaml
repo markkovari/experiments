@@ -78,6 +78,14 @@ services:
     build:
       context: ./app # Path to your Go application directory
       dockerfile: worker.Dockerfile
+    deploy:
+      resources:
+        limits:
+          cpus: 1.5
+          memory: 512m
+        reservations:
+          cpus: 1
+          memory: 256m
     environment:
       CACHE_ADDRESS: redis://user:password@cache:6379/0?protocol=3
       RABBITMQ_URL: amqp://user:password@rabbitmq:5672/
