@@ -14,6 +14,7 @@ provider "jetstream" {
   # ca_file_data = "<Root CA PEM data>"
   #}
 }
+
 variable "messageRetentionTime" {
   type        = number
   default     = 60 * 60 * 24
@@ -26,22 +27,29 @@ locals {
   priorityCategories = ["low", "medium", "high"]
 }
 
-resource "jetstream_stream" "LISTINGS" {
-  name     = local.mainSubjectName
-  subjects = [format("%s.*.*", local.mainSubjectName)]
-  storage  = "file"
-  max_age  = var.messageRetentionTime
+
+resource "jetstream_kv_bucket" "user_notifiations" {
+  name           = "user_notifications"
+  description    = "User notifications bucket"
+  placement_tags = ["user", "notification"]
+
 }
+# resource "jetstream_stream" "LISTINGS" {
+#   name     = local.mainSubjectName
+#   subjects = [format("%s.*.*", local.mainSubjectName)]
+#   storage  = "file"
+#   max_age  = var.messageRetentionTime
+# }
 
 
-resource "jetstream_consumer" "LISTINGS_CREATE" {
-  stream_id       = jetstream_stream.LISTINGS.id
-  ack_policy      = "explicit"
-  durable_name    = format("%s_create", local.mainSubjectName)
-  description     = "Consume the newly created listings"
-  deliver_all     = true
-  filter_subject  = format("%s.create", local.mainSubjectName)
-  sample_freq     = 100
-  max_ack_pending = 10
-  max_delivery    = 5
-}
+# resource "jetstream_consumer" "LISTINGS_CREATE" {
+#   stream_id       = jetstream_stream.LISTINGS.id
+#   ack_policy      = "explicit"
+#   durable_name    = format("%s_create", local.mainSubjectName)
+#   description     = "Consume the newly created listings"
+#   deliver_all     = true
+#   filter_subject  = format("%s.create", local.mainSubjectName)
+#   sample_freq     = 100
+#   max_ack_pending = 10
+#   max_delivery    = 5
+# }
