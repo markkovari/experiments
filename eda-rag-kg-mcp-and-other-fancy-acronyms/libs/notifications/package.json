@@ -1,0 +1,22 @@
+{
+  "name": "@magic/notifications",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/notifications.js",
+  "types": "dist/notifications.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.13.1",
+  "dependencies": {
+    "@magic/env": "workspace:*",
+    "@nats-io/kv": "^3.1.0",
+    "@nats-io/nats-core": "^3.1.0",
+    "@nats-io/transport-node": "^3.1.0",
+    "nats": "^2.29.3",
+    "typescript": "^5.8.3"
+  }
+}
