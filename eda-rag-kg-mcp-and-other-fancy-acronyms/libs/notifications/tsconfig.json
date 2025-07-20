@@ -13,5 +13,10 @@
   },
   "include": [
     "**.ts"
+  ],
+  "exclude": [
+    "tests/setup.ts",
+    "tests/testBed.ts",
+    "tests/**"
   ]
 }
