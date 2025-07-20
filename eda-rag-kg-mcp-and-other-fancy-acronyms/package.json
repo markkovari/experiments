@@ -12,7 +12,8 @@
     "db:studio": "pnpm run --dir ./libs/database db:studio",
     "check:write": "turbo run check:write",
     "check:unsafe": "turbo run check:unsafe",
-    "dev": "turbo run dev -- -H 0.0.0.0"
+    "dev": "turbo run dev -- -H 0.0.0.0",
+    "test": "turbo run test:e2e"
   },
   "keywords": [],
   "author": "",
