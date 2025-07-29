@@ -2,20 +2,18 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
     test: {
-        setupFiles: ["setupTests.ts"],
-        fileParallelism: false,
+        pool: 'threads',
         poolOptions: {
             threads: {
-                minThreads: 1,
                 maxThreads: 20,
-                isolate: false,
-                singleThread: false
-            }
+                minThreads: 4,
+                isolate: true
+            },
         },
         sequence: {
-            concurrent: true
+            concurrent: true,
         },
-        isolate: false,
+        testTimeout: 60000,
+        hookTimeout: 120000,
     },
-
 })
