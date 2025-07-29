@@ -1,4 +1,5 @@
-import { test, expect, describe } from '../setupTests'
+import { test, expect, describe } from '../testBed'
+
 
 describe("magic", () => {
     test("should workd", async ({ prisma }) => {
