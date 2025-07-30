@@ -1,4 +1,4 @@
-import { test, expect, describe } from '../testBed'
+import { test, expect, describe } from '../setupTests'
 
 
 describe("magic", () => {
