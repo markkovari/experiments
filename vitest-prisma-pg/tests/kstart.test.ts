@@ -1,5 +1,5 @@
 import { afterAll, beforeAll } from 'vitest'
-import { test, expect, describe } from '../testBed'
+import { test, expect, describe } from '../setupTests'
 
 describe("magic", () => {
     beforeAll(() => {
