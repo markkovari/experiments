@@ -18,7 +18,7 @@
 	"type": "commonjs",
 	"devDependencies": {
 		"@biomejs/biome": "1.9.4",
-		"@cucumber/cucumber": "^11.2.0",
+		"@cucumber/cucumber": "^11.3.0",
 		"@testcontainers/postgresql": "^10.21.0",
 		"@types/express": "^5.0.1",
 		"@types/supertest": "^6.0.2",
