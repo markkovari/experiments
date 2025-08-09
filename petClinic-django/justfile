@@ -1,0 +1,13 @@
+# justfile
+
+# Default recipe (optional)
+default:
+    @just --list
+
+# Run the server and let host/port to be setup
+runserver host="127.0.0.1" port="8000":
+    uv run python manage.py runserver {{ host }}:{{ port }}
+
+# Run with settings module
+runserver-settings settings="myproject.settings.dev":
+    uv run python manage.py runserver --settings {{ settings }}
