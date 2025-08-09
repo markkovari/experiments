@@ -20,8 +20,8 @@ jobs:
         run: uv sync --frozen
       - name: build app
         run: uv build
-      # - name: run linter
-      #   run: uv run ruff check
+      - name: run linter
+        run: uv run ruff check
       # - name: run tests
       #   run: uv run pytest
       # - name: run bdd tests
