@@ -29,7 +29,7 @@
 		"typescript": "~5.7.3",
 		"typescript-eslint": "^8.26.1",
 		"vite": "^6.2.7",
-		"@eslint/plugin-kit": ">=0.3.4"
+		"@eslint/plugin-kit": ">=0.3.5"
 	},
 	"pnpm": {
 		"ignoredBuiltDependencies": [
