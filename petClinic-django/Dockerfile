@@ -36,6 +36,15 @@ RUN useradd -m app
 # Set working directory
 WORKDIR /app
 
+
+# Finetune python envvars
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+
+# Install PostgreSQL client libs
+RUN apt-get update && apt-get install -y libpq5 && rm -rf /var/lib/apt/lists/*
+
 # Copy only the virtual environment from builder (keeps image small)
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 
