@@ -8,10 +8,6 @@ default:
 runserver host="127.0.0.1" port="8000":
     uv run python manage.py runserver {{ host }}:{{ port }}
 
-# Run with settings module
-runserver-settings settings="app.settings.dev":
-    uv run python manage.py runserver --settings {{ settings }}
-
 # Run database docker
 start-docker-db:
     docker compose up -d --force-recreate --build db
@@ -22,12 +18,12 @@ start-docker:
 
 # Run run-migrations
 run-migrations:
-    docker compose run --rm backend python manage.py migrate
+    docker compose run --rm backend python -c "import os" && python manage.py migrate
 
 # Run run-migrations
 run-printenv:
-    docker compose run --rm backend python -c "import os; print(os.environ)"
+    docker compose run --rm backend python -e "os.get"
 
 # Create superuser
 create-superuser:
-    docker compose run --rm backend python manage.py createsuperuser
+    docker compose run --rm backend python -c "import os" && python manage.py createsuperuser
