@@ -54,5 +54,5 @@ EXPOSE 8000
 #  -w 4 → 4 worker processes (tweak for your CPU cores)
 #  -b 0.0.0.0:8000 → bind to all interfaces on port 8000
 #  --access-logfile - → log to stdout
-CMD ["gunicorn", "petclinic-django.wsgi:application", "-w", "4", "-b", "0.0.0.0:8000", "--access-logfile", "-"]
+CMD ["gunicorn", "app.wsgi:application", "-w", "4", "-b", "0.0.0.0:8000", "--access-logfile", "-"]
 
