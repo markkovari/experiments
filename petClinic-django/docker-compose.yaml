@@ -1,0 +1,12 @@
+services:
+
+  db:
+    image: postgres
+    restart: always
+    volumes:
+     - type: tmpfs
+       target: /dev/shm
+       tmpfs:
+         size: 134217728
+    environment:
+      POSTGRES_PASSWORD: example

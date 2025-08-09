@@ -11,3 +11,12 @@ runserver host="127.0.0.1" port="8000":
 # Run with settings module
 runserver-settings settings="myproject.settings.dev":
     uv run python manage.py runserver --settings {{ settings }}
+
+# Run database docker
+start-docker-db:
+    docker compose up -d --force-recreate --build db
+
+# Run the whole app with docker compose
+
+start-docker:
+    docker compose up -d --force-recreate --build
