@@ -1,0 +1,35 @@
+# Ignore Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore virtualenvs
+.venv/
+venv/
+
+# Ignore git & build stuff
+.git/
+.gitignore
+.DS_Store
+*.log
+
+# Ignore test & coverage data
+tests/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Ignore IDE/editor settings
+.vscode/
+.idea/
+
+# Ignore compiled assets (if any)
+node_modules/
+dist/
+build/
+
+# Ignore local env files
+.env
+.env.*
+

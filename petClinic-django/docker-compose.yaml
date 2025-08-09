@@ -1,0 +1,21 @@
+services:
+
+  db:
+    image: postgres
+    restart: always
+    volumes:
+     - type: tmpfs
+       target: /dev/shm
+       tmpfs:
+         size: 134217728
+    environment:
+      POSTGRES_PASSWORD: example
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
