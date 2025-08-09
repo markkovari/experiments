@@ -4,18 +4,24 @@ services:
     image: postgres
     restart: always
     volumes:
-     - type: tmpfs
-       target: /dev/shm
-       tmpfs:
-         size: 134217728
-    environment:
-      POSTGRES_PASSWORD: example
-
+      - pgdata:/var/lib/postgresql/data
+    env_file:
+      - .env
+    ports:
+      - "5432:5432"
   backend:
     build:
       context: .
       dockerfile: Dockerfile
     env_file:
       - .env
+    environment:
+      POSTGRES_ULR: db
     ports:
       - "8000:8000"
+
+
+
+volumes:
+  pgdata:
+    driver: local
