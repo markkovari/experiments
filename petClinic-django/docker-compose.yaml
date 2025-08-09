@@ -10,3 +10,11 @@ services:
          size: 134217728
     environment:
       POSTGRES_PASSWORD: example
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    ports:
+      - "8000:8000"
