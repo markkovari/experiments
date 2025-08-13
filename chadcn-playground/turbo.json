@@ -2,7 +2,7 @@
 	"$schema": "https://turborepo.com/schema.json",
 	"tasks": {
 		"build": {
-			"inputs": ["src/**", "index.html"],
+			"inputs": ["**/src/**", "**/index.html"],
 			"outputs": ["./dist/**"],
 			"cache": true
 		}
