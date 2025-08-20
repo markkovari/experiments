@@ -1,0 +1,21 @@
+up:
+    sudo docker compose up -d
+
+down:
+    sudo docker compose down
+
+build-publisher:
+    cd publisher && npm install && npm run build
+
+publish:
+    cd publisher && npm run start
+
+build-subscribers:
+    cd subscriber1 && go build -o ../bin/subscriber1 .
+    cd subscriber2 && go build -o ../bin/subscriber2 .
+
+run-subscriber1:
+    ./bin/subscriber1
+
+run-subscriber2:
+    ./bin/subscriber2
