@@ -1,0 +1,34 @@
+name: "sqlite-backend"
+
+on:
+  pull_request:
+    paths:
+      - "sqlite-backend/**"
+
+env:
+  GO_VERSION: 1.24
+  GOLANGCI_LINT_VERSION: v2.1
+
+jobs:
+  runCI:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sqlite-backend
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup Go ${{ env.GO_VERSION }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+             sqlite-backend/go.sum
+      # - name: golangci-lint
+      #   uses: golangci/golangci-lint-action@v8
+      #   with:
+      #     version: ${{ env.GOLANGCI_LINT_VERSION }}
+      #     working-directory: sqlite-backend
+      #     args: --timeout=5m
+      - name: run tests
+        run: go test -v ./...
