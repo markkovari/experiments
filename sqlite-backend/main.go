@@ -8,13 +8,11 @@ import (
 	"math/rand/v2"
 	gen "sqlite-backend/db/gen"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/tursodatabase/go-libsql"
 )
 
 func main() {
-	// Connect to the database
-	// For libSQL, you might use a different driver.
-	db, err := sql.Open("sqlite3", "./sqlite.db")
+	db, err := sql.Open("libsql", "file:./local.db")
 	if err != nil {
 		log.Fatal(err)
 	}
