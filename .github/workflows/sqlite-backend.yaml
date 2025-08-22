@@ -1,4 +1,4 @@
-name: "postgres-godog-example-ci"
+name: "sqlite-backend"
 
 on:
   pull_request:
