@@ -1,30 +1,8 @@
-import { connect, nanos, StringCodec, JetStreamManager } from "nats";
+import { sc, setupJetStreamAndKV } from "./common.js";
+import { KV_BUCKET, SUBJECT_PREFIX } from "./constants.js";
+import { nanos } from "nats";
 import { v4 as uuidv4 } from "uuid";
-import { BatchState, BatchStatus } from "./types";
-
-const sc = StringCodec();
-const SUBJECT_PREFIX = "items.batch.";
-const KV_BUCKET = "batch_states";
-
-/**
- * @description Initializes NATS connection and sets up JetStream and KV bucket.
- * @returns A promise that resolves with the JetStream manager instance.
- */
-async function setupJetStreamAndKV(): Promise<JetStreamManager> {
-	const nc = await connect({ servers: "localhost:4222" });
-	const jsm = await nc.jetstreamManager();
-
-	// Add a stream for batch items. The subject uses a wildcard to capture all items.
-	await jsm.streams.add({
-		name: "BATCH_STREAM",
-		subjects: [`${SUBJECT_PREFIX}>`],
-	});
-
-	// Add a key-value bucket to track batch states.
-	await jsm.kv.add({ bucket: KV_BUCKET });
-
-	return jsm;
-}
+import { type BatchState, BatchStatus } from "./types.js";
 
 /**
  * @description Creates a new batch, initializes its state in the KV store, and publishes messages.
@@ -36,7 +14,7 @@ export async function createNewBatch(numberOfItems: number): Promise<void> {
 		const batchId = uuidv4();
 		console.log(`[PRODUCER] Creating new batch with ID: ${batchId}`);
 
-		const kv = await jsm.kv.get(KV_BUCKET);
+		const kv = await jsm.jetstream().views.kv(KV_BUCKET);
 		const batchState: BatchState = {
 			status: BatchStatus.Pending,
 			totalItems: numberOfItems,
