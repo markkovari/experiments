@@ -1,33 +1,37 @@
-import { connect, StringCodec, nanos, KvEntry, AckPolicy } from "nats";
-import type { BatchState } from "./types.js";
-
-const sc = StringCodec();
-const KV_BUCKET = "batch_states";
-const STREAM_NAME = "BATCH_STREAM";
-const CONSUMER_NAME = "BATCH_CONSUMER";
+import { connect, type KvEntry, AckPolicy } from "nats";
+import { BatchStatus, type BatchState } from "./types.js";
+import {
+	CONSUMER_NAME,
+	KV_BUCKET,
+	serverAddress,
+	STREAM_NAME,
+	SUBJECT_PREFIX,
+} from "./constants.js";
+import { sc } from "./common.js";
 
 /**
  * @description Runs the NATS consumer to process batch items and update state.
  */
 export async function runConsumer(): Promise<void> {
 	try {
-		const nc = await connect({ servers: "localhost:4222" });
+		const nc = await connect({ servers: serverAddress });
 		const jsm = await nc.jetstreamManager();
 		const js = nc.jetstream();
+		const consumerName = `${CONSUMER_NAME}_${Math.floor(Math.random() * 100000)}`;
 
 		// Ensure the consumer exists for the stream.
 		await jsm.consumers.add(STREAM_NAME, {
-			durable_name: CONSUMER_NAME,
+			durable_name: consumerName,
 			ack_policy: AckPolicy.Explicit,
-			filter_subject: `items.batch.>`,
+			filter_subject: `${SUBJECT_PREFIX}>`,
 		});
 
-		const kv = await jsm.jetstream(STREAM_NAME).get(KV_BUCKET);
-		const consumer = await js.consumers.get(STREAM_NAME, CONSUMER_NAME);
-
+		const kv = await jsm.jetstream().views.kv(KV_BUCKET);
+		const consumer = await js.consumers.get(STREAM_NAME, consumerName);
+		const sub = await consumer.consume();
 		console.log("[CONSUMER] Consumer is listening for messages...");
 
-		for await (const message of consumer.consume()) {
+		for await (const message of sub) {
 			const payload = JSON.parse(sc.decode(message.data));
 			const { batchId, itemId } = payload;
 
@@ -35,9 +39,9 @@ export async function runConsumer(): Promise<void> {
 
 			try {
 				// Simulate processing logic, with a 10% chance of failure for demonstration.
-				if (Math.random() < 0.1) {
-					throw new Error("Simulated processing failure");
-				}
+				// if (Math.random() < 0.1) {
+				// 	throw new Error("Simulated processing failure");
+				// }
 
 				// Get the latest state from the KV bucket.
 				const kvEntry = (await kv.get(batchId)) as KvEntry | null;
@@ -66,9 +70,21 @@ export async function runConsumer(): Promise<void> {
 						console.log(
 							`[CONSUMER] Batch ${batchId} failed with the following items: ${currentState.failedItems.join(", ")}`,
 						);
+						currentState.status = BatchStatus.PartialSuccess;
+						await kv.update(
+							batchId,
+							sc.encode(JSON.stringify(currentState)),
+							kvEntry.revision,
+						);
 					} else {
 						console.log(
 							`[CONSUMER] Batch ${batchId} was successful! All items processed.`,
+						);
+						currentState.status = BatchStatus.Completed;
+						await kv.update(
+							batchId,
+							sc.encode(JSON.stringify(currentState)),
+							kvEntry.revision,
 						);
 					}
 				}

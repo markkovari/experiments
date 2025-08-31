@@ -6,6 +6,7 @@ export enum BatchStatus {
 	InProgress = "in_progress",
 	Completed = "completed",
 	Failed = "failed",
+	PartialSuccess = "partialSuccess",
 }
 
 /**
