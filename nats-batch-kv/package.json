@@ -1,0 +1,26 @@
+{
+  "name": "nats-batch-kv",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "create": "node dist/cliCreate.js",
+    "listen": "node dist/cliListen.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.15.0",
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "@nats-io/kv": "^3.1.0",
+    "nats": "^2.29.3",
+    "uuid": "^11.1.0"
+  }
+}
