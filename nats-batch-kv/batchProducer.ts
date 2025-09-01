@@ -9,12 +9,12 @@ import { type BatchState, BatchStatus } from "./types.js";
  * @param numberOfItems The number of items to include in the batch.
  */
 export async function createNewBatch(numberOfItems: number): Promise<void> {
-	try {
-		const jsm = await setupJetStreamAndKV();
-		const batchId = uuidv4();
-		console.log(`[PRODUCER] Creating new batch with ID: ${batchId}`);
+	const jsm = await setupJetStreamAndKV();
+	const batchId = uuidv4();
+	console.log(`[PRODUCER] Creating new batch with ID: ${batchId}`);
 
-		const kv = await jsm.jetstream().views.kv(KV_BUCKET);
+	const kv = await jsm.jetstream().views.kv(KV_BUCKET);
+	try {
 		const batchState: BatchState = {
 			status: BatchStatus.Pending,
 			totalItems: numberOfItems,
@@ -50,6 +50,8 @@ export async function createNewBatch(numberOfItems: number): Promise<void> {
 		console.log(`[PRODUCER] Batch creation complete.`);
 	} catch (error) {
 		console.error("[PRODUCER] Failed to create batch:", error);
+	} finally {
+		process.exit(0);
 	}
 }
 
