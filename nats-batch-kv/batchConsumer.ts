@@ -7,15 +7,15 @@ import {
 	STREAM_NAME,
 	SUBJECT_PREFIX,
 } from "./constants.js";
-import { sc } from "./common.js";
+import { sc, setupJetStreamAndKV } from "./common.js";
 
 /**
  * @description Runs the NATS consumer to process batch items and update state.
  */
 export async function runConsumer(): Promise<void> {
 	try {
+		const jsm = await setupJetStreamAndKV();
 		const nc = await connect({ servers: serverAddress });
-		const jsm = await nc.jetstreamManager();
 		const js = nc.jetstream();
 		const consumerName = `${CONSUMER_NAME}_${Math.floor(Math.random() * 100000)}`;
 
@@ -25,7 +25,7 @@ export async function runConsumer(): Promise<void> {
 			filter_subject: `${SUBJECT_PREFIX}>`,
 		});
 
-		const kv = await jsm.jetstream().views.kv(KV_BUCKET);
+		const kv = await js.views.kv(KV_BUCKET);
 		const consumer = await js.consumers.get(STREAM_NAME, consumerName);
 		const sub = await consumer.consume();
 		console.log("[CONSUMER] Consumer is listening for messages...");
@@ -33,7 +33,6 @@ export async function runConsumer(): Promise<void> {
 		for await (const message of sub) {
 			const payload = JSON.parse(sc.decode(message.data));
 			const { batchId, itemId } = payload;
-
 			console.log(`[CONSUMER] Processing item ${itemId} from batch ${batchId}`);
 
 			try {

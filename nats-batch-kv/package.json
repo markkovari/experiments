@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc",
     "create": "node dist/cliCreate.js",
+    "parallel": "node dist/cliParallelCreate.js",
     "listen": "node dist/cliListen.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
