@@ -9,12 +9,15 @@ import { type BatchState, BatchStatus } from "./types.js";
  * @param numberOfItems The number of items to include in the batch.
  */
 export async function createNewBatch(numberOfItems: number): Promise<void> {
-	try {
-		const jsm = await setupJetStreamAndKV();
-		const batchId = uuidv4();
-		console.log(`[PRODUCER] Creating new batch with ID: ${batchId}`);
+	const jsm = await setupJetStreamAndKV();
+	const batchId = `${Date.now()}_${uuidv4()}`;
+	console.log(`[PRODUCER] Creating new batch with ID: ${batchId}`);
 
-		const kv = await jsm.jetstream().views.kv(KV_BUCKET);
+	const kv = await jsm.jetstream().views.kv(KV_BUCKET, {
+		compression: true,
+		ttl: 60 * 1000 * 1000,
+	});
+	try {
 		const batchState: BatchState = {
 			status: BatchStatus.Pending,
 			totalItems: numberOfItems,
@@ -36,7 +39,6 @@ export async function createNewBatch(numberOfItems: number): Promise<void> {
 			const payload = {
 				batchId,
 				itemId,
-				// Add any item-specific data here
 				data: `Item data for item ${itemId}`,
 			};
 			const subject = `${SUBJECT_PREFIX}${batchId}`;
@@ -50,9 +52,7 @@ export async function createNewBatch(numberOfItems: number): Promise<void> {
 		console.log(`[PRODUCER] Batch creation complete.`);
 	} catch (error) {
 		console.error("[PRODUCER] Failed to create batch:", error);
+	} finally {
+		process.exit(0);
 	}
 }
-
-// Example usage:
-// To run this file, call `node producer.js` or `ts-node producer.ts`.
-// createNewBatch(10);

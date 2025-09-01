@@ -1,4 +1,10 @@
-import { connect, StorageType, StringCodec, type JetStreamManager } from "nats";
+import {
+	connect,
+	StorageType,
+	StoreCompression,
+	StringCodec,
+	type JetStreamManager,
+} from "nats";
 import {
 	KV_BUCKET,
 	serverAddress,
@@ -18,10 +24,18 @@ export async function setupJetStreamAndKV(): Promise<JetStreamManager> {
 	// Add a stream for batch items. The subject uses a wildcard to capture all items.
 	await jsm.streams.add({
 		name: STREAM_NAME,
-		storage: StorageType.Memory,
+		storage: StorageType.File,
+		compression: StoreCompression.S2,
+		description: "Batch stream to send things through",
 		subjects: [`${SUBJECT_PREFIX}>`],
+		max_age: 5 * 60 * 1000 * 1000 * 1000, // 5 minutes
 	});
-	await jsm.jetstream().views.kv(KV_BUCKET);
+	await jsm.jetstream().views.kv(KV_BUCKET, {
+		ttl: 2 * 60 * 1000 * 1000 * 1000, // 2 minutes
+		compression: true,
+		backingStore: StorageType.Memory,
+		description: "Batch storage KV",
+	});
 
 	return jsm;
 }

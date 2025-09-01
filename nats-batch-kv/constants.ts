@@ -3,4 +3,4 @@ export const STREAM_NAME = "BATCH_STREAM";
 export const CONSUMER_NAME = "BATCH_CONSUMER";
 export const SUBJECT_PREFIX = "items.batch.";
 
-export const serverAddress = "localhost:4222";
+export const serverAddress = process.env.NATS_SERVER || "localhost:4222";
