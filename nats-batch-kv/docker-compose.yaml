@@ -4,7 +4,7 @@ services:
     ports:
       - "8222:8222"
       - "4222:4222"
-    command: "-js"
+    command: "-js --http_port 8222"
     networks: ["nats"]
 
 networks:
