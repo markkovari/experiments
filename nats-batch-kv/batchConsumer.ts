@@ -19,7 +19,6 @@ export async function runConsumer(): Promise<void> {
 		const js = nc.jetstream();
 		const consumerName = `${CONSUMER_NAME}_${Math.floor(Math.random() * 100000)}`;
 
-		// Ensure the consumer exists for the stream.
 		await jsm.consumers.add(STREAM_NAME, {
 			durable_name: consumerName,
 			ack_policy: AckPolicy.Explicit,
@@ -38,12 +37,6 @@ export async function runConsumer(): Promise<void> {
 			console.log(`[CONSUMER] Processing item ${itemId} from batch ${batchId}`);
 
 			try {
-				// Simulate processing logic, with a 10% chance of failure for demonstration.
-				// if (Math.random() < 0.1) {
-				// 	throw new Error("Simulated processing failure");
-				// }
-
-				// Get the latest state from the KV bucket.
 				const kvEntry = (await kv.get(batchId)) as KvEntry | null;
 				if (!kvEntry) {
 					throw new Error(`State for batch ${batchId} not found.`);
@@ -52,18 +45,10 @@ export async function runConsumer(): Promise<void> {
 				const currentState: BatchState = JSON.parse(sc.decode(kvEntry.value));
 				currentState.completedItems++;
 
-				// Update the batch state in the KV bucket. The `cas` (Compare And Swap) ensures
-				// we only update if the revision number hasn't changed, preventing race conditions.
-				await kv.update(
-					batchId,
-					sc.encode(JSON.stringify(currentState)),
-					kvEntry.revision,
-				);
+				await kv.put(batchId, sc.encode(JSON.stringify(currentState)));
 
-				// Acknowledge the message to signal successful processing.
 				message.ack();
 
-				// Check for batch completion.
 				if (currentState.completedItems === currentState.totalItems) {
 					console.log(`[CONSUMER] Batch ${batchId} is now complete.`);
 					if (currentState.failedItems.length > 0) {
@@ -71,32 +56,20 @@ export async function runConsumer(): Promise<void> {
 							`[CONSUMER] Batch ${batchId} failed with the following items: ${currentState.failedItems.join(", ")}`,
 						);
 						currentState.status = BatchStatus.PartialSuccess;
-						await kv.update(
-							batchId,
-							sc.encode(JSON.stringify(currentState)),
-							kvEntry.revision,
-						);
 					} else {
 						console.log(
 							`[CONSUMER] Batch ${batchId} was successful! All items processed.`,
 						);
 						currentState.status = BatchStatus.Completed;
-						await kv.update(
-							batchId,
-							sc.encode(JSON.stringify(currentState)),
-							kvEntry.revision,
-						);
 					}
 				}
+				await kv.put(batchId, sc.encode(JSON.stringify(currentState)));
 			} catch (error: any) {
 				console.error(
 					`[CONSUMER] Failed to process item ${itemId}:`,
 					error.message,
+					error,
 				);
-
-				// If processing fails, update the KV state to record the failure.
-				// We will attempt to update the state regardless of optimistic locking failure
-				// because the next message update will eventually handle it.
 				try {
 					const kvEntry = (await kv.get(batchId)) as KvEntry | null;
 					if (kvEntry) {
@@ -104,11 +77,7 @@ export async function runConsumer(): Promise<void> {
 							sc.decode(kvEntry.value),
 						);
 						currentState.failedItems.push(itemId);
-						await kv.update(
-							batchId,
-							sc.encode(JSON.stringify(currentState)),
-							kvEntry.revision,
-						);
+						await kv.put(batchId, sc.encode(JSON.stringify(currentState)));
 					}
 				} catch (updateError) {
 					console.error(
@@ -116,10 +85,6 @@ export async function runConsumer(): Promise<void> {
 						updateError,
 					);
 				}
-
-				// NAK the message to re-queue it for another attempt (if consumer allows).
-				// message.nak();
-				// For this example, we will just ack it after a failure to move on.
 				message.ack();
 			}
 		}
@@ -127,7 +92,3 @@ export async function runConsumer(): Promise<void> {
 		console.error("[CONSUMER] Failed to run consumer:", error);
 	}
 }
-
-// Example usage:
-// To run this file, call `node consumer.js` or `ts-node consumer.ts`.
-// runConsumer();
