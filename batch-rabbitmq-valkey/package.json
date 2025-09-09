@@ -1,0 +1,28 @@
+{
+  "name": "batch-rabbitmq-valkey",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "module": "",
+  "scripts": {
+    "start:publisher": "node run dist/publisher.js",
+    "dev:publisher": "tsx publisher.ts",
+    "dev:consumer": "tsx consumer.ts",
+    "build": "tsc",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.15.1",
+  "devDependencies": {
+    "@types/amqplib": "^0.10.7",
+    "@types/node": "^24.3.1",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.9"
+  }
+}
