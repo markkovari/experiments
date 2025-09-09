@@ -7,7 +7,7 @@ const run = async () => {
     await channel.assertExchange(exchangeName, "topic", { durable: true });
 
 
-    for(let i = 0; i < 1000; i++) {
+    for(let i = 0; i < 2; i++) {
         const didSend = channel.publish(exchangeName, topicName, Buffer.from("SomeMessage"), {persistent: true});
     }
 

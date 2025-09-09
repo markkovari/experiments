@@ -7,11 +7,16 @@ const run = async () => {
 	await channel.assertExchange(exchangeName, "topic", { durable: true });
 	await channel.bindQueue(queueName, exchangeName, topicName);
 
-	await channel.consume(queueName, (msg: ConsumeMessage | null) => {
-		if (msg) {
-			console.log({ msg });
-		}
-	});
+	await channel.consume(
+		queueName,
+		(msg: ConsumeMessage | null) => {
+			if (msg) {
+				console.log("content", msg.content.toString());
+				channel.ack(msg);
+			}
+		},
+		{ noAck: true },
+	);
 };
 
 try {
