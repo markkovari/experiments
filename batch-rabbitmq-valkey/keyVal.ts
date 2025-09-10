@@ -43,7 +43,7 @@ class RedisCache<T = unknown> {
 			},
 		});
 		RedisCache.client = client;
-        return client;
+		return client;
 	}
 
 	/**
