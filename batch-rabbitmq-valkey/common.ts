@@ -31,3 +31,7 @@ export const getConf = (): Config => {
 		},
 	};
 };
+
+export type SomeMessage = {
+	someValue: string;
+};
