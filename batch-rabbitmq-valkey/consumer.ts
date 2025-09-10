@@ -30,6 +30,7 @@ const run = async () => {
 						msg.content.toString(),
 					);
 					const outcome: Status = Math.random() > 0.05 ? "success" : "error";
+					console.log("updating element", { id: value.id, status: outcome });
 					await updateBatchWithJobStatus(value.batchID, value.id, outcome);
 					channel.ack(msg);
 				} catch (e) {
@@ -38,7 +39,7 @@ const run = async () => {
 				}
 			}
 		},
-		{ noAck: true },
+		{ noAck: false },
 	);
 };
 
