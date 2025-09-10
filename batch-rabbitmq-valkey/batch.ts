@@ -20,6 +20,9 @@ export type Batch<T> = {
 };
 
 export const createBatch = async <T>(elements: T[]): Promise<Batch<T>> => {
+	if (elements.length === 0) {
+		throw new Error("denifintely should not create empty batches");
+	}
 	const client = await RedisCache.getClient();
 	const id = randomUUID();
 	const batch: Batch<T> = {
@@ -48,12 +51,12 @@ export const updateBatchWithJobStatus = async <T>(
 	}
 	const batchValue = JSON.parse(oldValue.toString()) as Batch<T>;
 	const { elements } = batchValue;
-	const newElements = elements.map((element) => {
-		return {
-			...element,
-			status: element.id === jobId ? status : element.status,
-		};
-	});
+	console.log({ elements });
+	const newElements = elements.map((element) => ({
+		...element,
+		status: element.id === jobId ? status : element.status,
+	}));
+	console.log({ newElements });
 	const jobStatuses = newElements.map(({ status }) => status);
 	// if any of these in progress the batch is in progress too
 	const inProgress = jobStatuses.some((s) => s === "inprogress");
