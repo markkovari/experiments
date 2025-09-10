@@ -23,6 +23,7 @@
     "typescript": "^5.9.2"
   },
   "dependencies": {
+    "@valkey/valkey-glide": "^2.0.1",
     "amqplib": "^0.10.9"
   }
 }
