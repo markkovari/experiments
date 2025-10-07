@@ -15,7 +15,7 @@
 	"dependencies": {
 		"config": "workspace:*",
 		"express": "^5.1.0",
-		"nodemailer": "^7.0.3"
+		"nodemailer": "^7.0.7"
 	},
 	"devDependencies": {
 		"@types/express": "^5.0.2",
