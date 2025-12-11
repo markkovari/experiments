@@ -1,0 +1,20 @@
+spec:
+  name: prisma-67-app
+  region: nyc
+  services:
+    - name: web
+      image:
+        registry_type: DOCR
+        repository: prisma-67-app
+        tag: latest
+      instance_count: 1
+      instance_size_slug: apps-s-1vcpu-0.5gb
+      http_port: 3000
+      envs:
+        - key: DATABASE_URL
+          scope: RUN_TIME
+          value: ${db.DATABASE_URL}
+  databases:
+    - name: db
+      engine: PG
+      production: false
