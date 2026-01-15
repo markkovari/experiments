@@ -1,0 +1,36 @@
+services:
+  # SurrealDB Database
+  surrealdb:
+    image: surrealdb/surrealdb:latest
+    container_name: surreal-backend-db
+    command: start --log info --user root --pass root memory
+    ports:
+      - "8000:8000"
+    networks:
+      - surreal-network
+    restart: unless-stopped
+
+  # Veterinary Clinic API
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: surreal-backend-api
+    depends_on:
+      surrealdb:
+        condition: service_started
+    environment:
+      - DATABASE_URL=http://surrealdb:8000
+      - DATABASE_USERNAME=root
+      - DATABASE_PASSWORD=root
+      - PORT=3000
+      - RUST_LOG=info
+    ports:
+      - "3000:3000"
+    networks:
+      - surreal-network
+    restart: unless-stopped
+
+networks:
+  surreal-network:
+    driver: bridge

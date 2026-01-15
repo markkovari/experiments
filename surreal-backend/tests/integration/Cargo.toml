@@ -1,0 +1,19 @@
+[package]
+name = "integration-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+surreal-core = { path = "../../crates/core" }
+surreal-db = { path = "../../crates/db" }
+surreal-migrations = { path = "../../crates/migrations" }
+
+tokio.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+rstest.workspace = true
+
+[dev-dependencies]
