@@ -70,10 +70,7 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/doctors/available", get(doctor::list_available_doctors))
         // Health check routes
-        .route(
-            "/checks",
-            post(check::create_check).get(check::list_checks),
-        )
+        .route("/checks", post(check::create_check).get(check::list_checks))
         .route(
             "/checks/:id",
             get(check::get_check)
@@ -96,8 +93,7 @@ pub fn create_router(state: AppState) -> Router {
         .with_state(state);
 
     Router::new()
-        .merge(SwaggerUi::new("/swagger-ui")
-            .url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .nest("/", api_router)
         .layer(cors)
 }

@@ -1,13 +1,9 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, Json};
 
 use surreal_core::{
-    AuthResponse, AuthToken, AuthUser, LoginCredentials, RegisterDoctorRequest,
-    RegisterUserRequest, Specialization, UserInfo, UserRole, User, Doctor,
-    hash_password, verify_password, generate_token, token_expiration_seconds,
+    generate_token, hash_password, token_expiration_seconds, verify_password, AuthResponse,
+    AuthToken, AuthUser, Doctor, LoginCredentials, RegisterDoctorRequest, RegisterUserRequest,
+    Specialization, User, UserInfo, UserRole,
 };
 use surreal_db::{AuthRepository, DoctorRepository, Repository, UserRepository};
 
@@ -43,12 +39,7 @@ pub async fn register_user(
     let password_hash = hash_password(&req.password)?;
 
     // Create auth entry
-    let auth_user = AuthUser::new(
-        req.email,
-        password_hash,
-        UserRole::User,
-        user_id.clone(),
-    )?;
+    let auth_user = AuthUser::new(req.email, password_hash, UserRole::User, user_id.clone())?;
 
     let auth_repo = AuthRepository::new(state.db);
     let created_auth = auth_repo.create(&auth_user).await?;
@@ -85,7 +76,8 @@ pub async fn register_doctor(
     Json(req): Json<RegisterDoctorRequest>,
 ) -> ApiResult<(StatusCode, Json<AuthResponse>)> {
     // Parse specialization
-    let specialization: Specialization = serde_json::from_str(&format!("\"{}\"", req.specialization))?;
+    let specialization: Specialization =
+        serde_json::from_str(&format!("\"{}\"", req.specialization))?;
 
     // Create doctor in doctors table
     let doctor = Doctor::new(
@@ -105,12 +97,7 @@ pub async fn register_doctor(
     let password_hash = hash_password(&req.password)?;
 
     // Create auth entry
-    let auth_user = AuthUser::new(
-        req.email,
-        password_hash,
-        UserRole::Doctor,
-        doctor_id,
-    )?;
+    let auth_user = AuthUser::new(req.email, password_hash, UserRole::Doctor, doctor_id)?;
 
     let auth_repo = AuthRepository::new(state.db);
     let created_auth = auth_repo.create(&auth_user).await?;

@@ -3,7 +3,7 @@ use axum::{
     Extension, Json,
 };
 
-use surreal_core::{Claims, PaginatedResponse, PaginationParams, Pet, HealthCheck};
+use surreal_core::{Claims, HealthCheck, PaginatedResponse, PaginationParams, Pet};
 use surreal_db::{CheckRepository, PetRepository, Repository};
 
 use crate::error::{ApiError, ApiResult};
@@ -69,7 +69,9 @@ pub async fn get_my_pet(
 
     // Verify the pet belongs to the current user
     if pet.owner_id != claims.ref_id {
-        return Err(ApiError::Forbidden("This pet does not belong to you".to_string()));
+        return Err(ApiError::Forbidden(
+            "This pet does not belong to you".to_string(),
+        ));
     }
 
     Ok(Json(pet))
@@ -108,14 +110,14 @@ pub async fn get_my_pet_checks(
         .ok_or_else(|| ApiError::NotFound("Pet not found".to_string()))?;
 
     if pet.owner_id != claims.ref_id {
-        return Err(ApiError::Forbidden("This pet does not belong to you".to_string()));
+        return Err(ApiError::Forbidden(
+            "This pet does not belong to you".to_string(),
+        ));
     }
 
     // Get health checks for this pet
     let check_repo = CheckRepository::new(state.db);
-    let paginated_checks = check_repo
-        .find_by_pet_paginated(&pet_id, &params)
-        .await?;
+    let paginated_checks = check_repo.find_by_pet_paginated(&pet_id, &params).await?;
 
     Ok(Json(paginated_checks))
 }
