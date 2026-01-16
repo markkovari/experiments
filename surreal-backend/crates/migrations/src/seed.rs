@@ -1,7 +1,5 @@
 use chrono::{Duration, Utc};
-use surreal_core::{
-    CheckStatus, Doctor, HealthCheck, Pet, PetSpecies, Specialization, User,
-};
+use surreal_core::{CheckStatus, Doctor, HealthCheck, Pet, PetSpecies, Specialization, User};
 use surreal_db::{
     CheckRepository, Database, DoctorRepository, PetRepository, Repository, UserRepository,
 };
@@ -22,12 +20,18 @@ pub async fn seed_database(db: &Database) -> anyhow::Result<()> {
         .with_phone("+1234567890".to_string())?
         .with_address("123 Main St, New York, NY".to_string());
 
-    let user2 = User::new("jane.smith@example.com".to_string(), "Jane Smith".to_string())?
-        .with_phone("+1987654321".to_string())?
-        .with_address("456 Oak Ave, Los Angeles, CA".to_string());
+    let user2 = User::new(
+        "jane.smith@example.com".to_string(),
+        "Jane Smith".to_string(),
+    )?
+    .with_phone("+1987654321".to_string())?
+    .with_address("456 Oak Ave, Los Angeles, CA".to_string());
 
-    let user3 = User::new("bob.wilson@example.com".to_string(), "Bob Wilson".to_string())?
-        .with_phone("+1555555555".to_string())?;
+    let user3 = User::new(
+        "bob.wilson@example.com".to_string(),
+        "Bob Wilson".to_string(),
+    )?
+    .with_phone("+1555555555".to_string())?;
 
     let created_user1 = user_repo.create(&user1).await?;
     let created_user2 = user_repo.create(&user2).await?;

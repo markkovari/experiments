@@ -1,10 +1,12 @@
-pub mod models;
-pub mod error;
-pub mod serde_helpers;
 pub mod auth;
+pub mod error;
+pub mod models;
 pub mod pagination;
+pub mod serde_helpers;
 
-pub use models::*;
+pub use auth::{
+    generate_token, hash_password, token_expiration_seconds, verify_password, verify_token,
+};
 pub use error::CoreError;
-pub use auth::{hash_password, verify_password, generate_token, verify_token, token_expiration_seconds};
+pub use models::*;
 pub use pagination::{PaginatedResponse, PaginationMeta, PaginationParams};

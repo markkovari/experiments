@@ -34,10 +34,7 @@ impl UserRepository {
 #[async_trait]
 impl Repository<User> for UserRepository {
     async fn create(&self, user: &User) -> Result<User> {
-        let created: Option<User> = self.db.client
-            .create(TABLE)
-            .content(user.clone())
-            .await?;
+        let created: Option<User> = self.db.client.create(TABLE).content(user.clone()).await?;
 
         created.ok_or_else(|| DbError::Other("Failed to create user".to_string()))
     }
@@ -51,9 +48,14 @@ impl Repository<User> for UserRepository {
     }
 
     async fn update(&self, user: &User) -> Result<User> {
-        let id = user.id.as_ref().ok_or_else(|| DbError::Other("User ID is required for update".to_string()))?;
+        let id = user
+            .id
+            .as_ref()
+            .ok_or_else(|| DbError::Other("User ID is required for update".to_string()))?;
 
-        let updated: Option<User> = self.db.client
+        let updated: Option<User> = self
+            .db
+            .client
             .update((TABLE, id.as_str()))
             .content(user.clone())
             .await?;

@@ -43,7 +43,10 @@ impl Database {
             url.to_string()
         };
 
-        info!("Connecting to remote SurrealDB at: {} (optimized with WebSocket)", ws_url);
+        info!(
+            "Connecting to remote SurrealDB at: {} (optimized with WebSocket)",
+            ws_url
+        );
 
         let client = surrealdb::engine::any::connect(&ws_url).await?;
         client.signin(Root { username, password }).await?;

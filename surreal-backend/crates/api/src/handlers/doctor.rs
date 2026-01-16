@@ -50,9 +50,7 @@ pub async fn list_doctors(State(state): State<AppState>) -> ApiResult<Json<Vec<D
     Ok(Json(doctors))
 }
 
-pub async fn list_available_doctors(
-    State(state): State<AppState>,
-) -> ApiResult<Json<Vec<Doctor>>> {
+pub async fn list_available_doctors(State(state): State<AppState>) -> ApiResult<Json<Vec<Doctor>>> {
     let repo = DoctorRepository::new(state.db);
     let doctors = repo.find_available().await?;
 

@@ -3,7 +3,7 @@ use axum::{
     Extension, Json,
 };
 
-use surreal_core::{Claims, PaginatedResponse, PaginationParams, Pet, HealthCheck, User, UserRole};
+use surreal_core::{Claims, HealthCheck, PaginatedResponse, PaginationParams, Pet, User, UserRole};
 use surreal_db::{CheckRepository, PetRepository, Repository, UserRepository};
 
 use crate::error::{ApiError, ApiResult};
@@ -31,7 +31,9 @@ pub async fn get_all_checks(
 ) -> ApiResult<Json<PaginatedResponse<HealthCheck>>> {
     // Verify user is a doctor
     if claims.role != UserRole::Doctor.as_str() {
-        return Err(ApiError::Forbidden("Only doctors can access this endpoint".to_string()));
+        return Err(ApiError::Forbidden(
+            "Only doctors can access this endpoint".to_string(),
+        ));
     }
 
     let check_repo = CheckRepository::new(state.db);
@@ -62,7 +64,9 @@ pub async fn get_all_pets(
 ) -> ApiResult<Json<PaginatedResponse<Pet>>> {
     // Verify user is a doctor
     if claims.role != UserRole::Doctor.as_str() {
-        return Err(ApiError::Forbidden("Only doctors can access this endpoint".to_string()));
+        return Err(ApiError::Forbidden(
+            "Only doctors can access this endpoint".to_string(),
+        ));
     }
 
     let pet_repo = PetRepository::new(state.db);
@@ -93,7 +97,9 @@ pub async fn get_all_users(
 ) -> ApiResult<Json<PaginatedResponse<User>>> {
     // Verify user is a doctor
     if claims.role != UserRole::Doctor.as_str() {
-        return Err(ApiError::Forbidden("Only doctors can access this endpoint".to_string()));
+        return Err(ApiError::Forbidden(
+            "Only doctors can access this endpoint".to_string(),
+        ));
     }
 
     let user_repo = UserRepository::new(state.db);
@@ -124,7 +130,9 @@ pub async fn get_my_checks(
 ) -> ApiResult<Json<PaginatedResponse<HealthCheck>>> {
     // Verify user is a doctor
     if claims.role != UserRole::Doctor.as_str() {
-        return Err(ApiError::Forbidden("Only doctors can access this endpoint".to_string()));
+        return Err(ApiError::Forbidden(
+            "Only doctors can access this endpoint".to_string(),
+        ));
     }
 
     let check_repo = CheckRepository::new(state.db);

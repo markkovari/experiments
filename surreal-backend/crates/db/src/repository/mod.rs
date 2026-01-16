@@ -1,16 +1,16 @@
-pub mod user;
-pub mod pet;
-pub mod doctor;
-pub mod check;
 pub mod auth;
+pub mod check;
+pub mod doctor;
+pub mod pet;
+pub mod user;
 
 use async_trait::async_trait;
 
-pub use user::UserRepository;
-pub use pet::PetRepository;
-pub use doctor::DoctorRepository;
-pub use check::CheckRepository;
 pub use auth::AuthRepository;
+pub use check::CheckRepository;
+pub use doctor::DoctorRepository;
+pub use pet::PetRepository;
+pub use user::UserRepository;
 
 use crate::error::Result;
 use surreal_core::{PaginatedResponse, PaginationParams};

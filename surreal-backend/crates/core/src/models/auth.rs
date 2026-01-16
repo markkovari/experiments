@@ -41,7 +41,7 @@ pub struct AuthUser {
     )]
     pub id: Option<String>,
     pub email: String,
-    pub password_hash: String,  // Note: Never send this in API responses!
+    pub password_hash: String, // Note: Never send this in API responses!
     pub role: UserRole,
     pub reference_id: String, // Links to users or doctors table
     #[serde(
@@ -57,11 +57,18 @@ pub struct AuthUser {
 }
 
 impl AuthUser {
-    pub fn new(email: String, password_hash: String, role: UserRole, reference_id: String) -> Result<Self> {
+    pub fn new(
+        email: String,
+        password_hash: String,
+        role: UserRole,
+        reference_id: String,
+    ) -> Result<Self> {
         Self::validate_email(&email)?;
 
         if password_hash.is_empty() {
-            return Err(CoreError::ValidationError("Password hash cannot be empty".to_string()));
+            return Err(CoreError::ValidationError(
+                "Password hash cannot be empty".to_string(),
+            ));
         }
 
         let now = Utc::now();
@@ -145,12 +152,12 @@ impl From<AuthUser> for UserInfo {
 // JWT Claims
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: String,       // User ID
+    pub sub: String, // User ID
     pub email: String,
     pub role: String,
-    pub ref_id: String,    // Reference ID
-    pub exp: usize,        // Expiration time
-    pub iat: usize,        // Issued at
+    pub ref_id: String, // Reference ID
+    pub exp: usize,     // Expiration time
+    pub iat: usize,     // Issued at
 }
 
 impl Claims {
