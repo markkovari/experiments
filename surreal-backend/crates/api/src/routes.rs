@@ -4,8 +4,11 @@ use axum::{
 };
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use crate::handlers::{check, doctor, health, pet, user};
+use crate::openapi::ApiDoc;
 use crate::state::AppState;
 
 pub fn create_router(state: AppState) -> Router {
@@ -16,7 +19,7 @@ pub fn create_router(state: AppState) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    Router::new()
+    let api_router = Router::new()
         // Health check
         .route("/health", get(health::health_check))
         // User routes
@@ -65,8 +68,13 @@ pub fn create_router(state: AppState) -> Router {
             "/doctors/:doctor_id/checks",
             get(check::list_checks_by_doctor),
         )
+        .with_state(state);
+
+    Router::new()
+        .merge(SwaggerUi::new("/swagger-ui")
+            .url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .nest("/", api_router)
         .layer(cors)
-        .with_state(state)
 }
 
 #[cfg(test)]

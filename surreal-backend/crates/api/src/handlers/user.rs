@@ -11,6 +11,17 @@ use crate::dto::{CreateUserRequest, UpdateUserRequest};
 use crate::error::ApiResult;
 use crate::state::AppState;
 
+/// Create a new user
+#[utoipa::path(
+    post,
+    path = "/users",
+    tag = "users",
+    request_body = CreateUserRequest,
+    responses(
+        (status = 201, description = "User created successfully", body = User),
+        (status = 400, description = "Invalid request")
+    )
+)]
 pub async fn create_user(
     State(state): State<AppState>,
     Json(req): Json<CreateUserRequest>,
@@ -31,6 +42,19 @@ pub async fn create_user(
     Ok((StatusCode::CREATED, Json(created)))
 }
 
+/// Get a user by ID
+#[utoipa::path(
+    get,
+    path = "/users/{id}",
+    tag = "users",
+    params(
+        ("id" = String, Path, description = "User ID")
+    ),
+    responses(
+        (status = 200, description = "User found", body = User),
+        (status = 404, description = "User not found")
+    )
+)]
 pub async fn get_user(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -44,6 +68,15 @@ pub async fn get_user(
     Ok(Json(user))
 }
 
+/// List all users
+#[utoipa::path(
+    get,
+    path = "/users",
+    tag = "users",
+    responses(
+        (status = 200, description = "List of all users", body = Vec<User>)
+    )
+)]
 pub async fn list_users(State(state): State<AppState>) -> ApiResult<Json<Vec<User>>> {
     let repo = UserRepository::new(state.db);
     let users = repo.find_all().await?;
@@ -51,6 +84,20 @@ pub async fn list_users(State(state): State<AppState>) -> ApiResult<Json<Vec<Use
     Ok(Json(users))
 }
 
+/// Update a user
+#[utoipa::path(
+    put,
+    path = "/users/{id}",
+    tag = "users",
+    params(
+        ("id" = String, Path, description = "User ID")
+    ),
+    request_body = UpdateUserRequest,
+    responses(
+        (status = 200, description = "User updated successfully", body = User),
+        (status = 404, description = "User not found")
+    )
+)]
 pub async fn update_user(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -80,6 +127,19 @@ pub async fn update_user(
     Ok(Json(updated))
 }
 
+/// Delete a user
+#[utoipa::path(
+    delete,
+    path = "/users/{id}",
+    tag = "users",
+    params(
+        ("id" = String, Path, description = "User ID")
+    ),
+    responses(
+        (status = 204, description = "User deleted successfully"),
+        (status = 404, description = "User not found")
+    )
+)]
 pub async fn delete_user(
     State(state): State<AppState>,
     Path(id): Path<String>,

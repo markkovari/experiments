@@ -19,6 +19,8 @@ uuid.workspace = true
 chrono.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
+utoipa.workspace = true
+utoipa-swagger-ui.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

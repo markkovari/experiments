@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use surreal_core::Specialization;
+use utoipa::ToSchema;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct CreateDoctorRequest {
     pub name: String,
     pub email: String,
@@ -11,7 +12,7 @@ pub struct CreateDoctorRequest {
     pub years_experience: u32,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct UpdateDoctorRequest {
     pub name: Option<String>,
     pub phone: Option<String>,

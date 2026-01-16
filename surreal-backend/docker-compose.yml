@@ -31,6 +31,20 @@ services:
       - surreal-network
     restart: unless-stopped
 
+  # Frontend
+  frontend:
+    build:
+      context: frontend/frontend/frontend
+      dockerfile: Dockerfile
+    container_name: surreal-backend-frontend
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+    networks:
+      - surreal-network
+    restart: unless-stopped
+
 networks:
   surreal-network:
     driver: bridge

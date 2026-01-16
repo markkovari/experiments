@@ -11,6 +11,18 @@ use crate::dto::{CreatePetRequest, UpdatePetRequest};
 use crate::error::ApiResult;
 use crate::state::AppState;
 
+/// Create a new pet
+#[utoipa::path(
+    post,
+    path = "/pets",
+    tag = "pets",
+    request_body = CreatePetRequest,
+    responses(
+        (status = 201, description = "Pet created successfully", body = Pet),
+        (status = 400, description = "Invalid request")
+    )
+)]
+
 pub async fn create_pet(
     State(state): State<AppState>,
     Json(req): Json<CreatePetRequest>,
