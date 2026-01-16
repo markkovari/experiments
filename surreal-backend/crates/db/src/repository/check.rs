@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use surreal_core::{CheckStatus, HealthCheck};
+use surreal_core::{CheckStatus, HealthCheck, PaginatedResponse, PaginationParams};
 
 use crate::connection::Database;
 use crate::error::{DbError, Result};
@@ -51,6 +51,76 @@ impl CheckRepository {
 
         Ok(result.take(0)?)
     }
+
+    pub async fn find_by_pet_paginated(
+        &self,
+        pet_id: &str,
+        params: &PaginationParams,
+    ) -> Result<PaginatedResponse<HealthCheck>> {
+        let pet_id_owned = pet_id.to_string();
+        let offset = params.offset();
+        let limit = params.limit();
+
+        // Get total count
+        let mut count_result = self
+            .db
+            .client
+            .query("SELECT count() FROM health_checks WHERE pet_id = $pet_id GROUP ALL")
+            .bind(("pet_id", pet_id_owned.clone()))
+            .await?;
+
+        let count: Option<u64> = count_result.take("count")?;
+        let total_items = count.unwrap_or(0);
+
+        // Get paginated data
+        let mut result = self
+            .db
+            .client
+            .query("SELECT * FROM health_checks WHERE pet_id = $pet_id ORDER BY scheduled_at DESC LIMIT $limit START $offset")
+            .bind(("pet_id", pet_id_owned))
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?;
+
+        let data: Vec<HealthCheck> = result.take(0)?;
+
+        Ok(PaginatedResponse::new(data, params, total_items))
+    }
+
+    pub async fn find_by_doctor_paginated(
+        &self,
+        doctor_id: &str,
+        params: &PaginationParams,
+    ) -> Result<PaginatedResponse<HealthCheck>> {
+        let doctor_id_owned = doctor_id.to_string();
+        let offset = params.offset();
+        let limit = params.limit();
+
+        // Get total count
+        let mut count_result = self
+            .db
+            .client
+            .query("SELECT count() FROM health_checks WHERE doctor_id = $doctor_id GROUP ALL")
+            .bind(("doctor_id", doctor_id_owned.clone()))
+            .await?;
+
+        let count: Option<u64> = count_result.take("count")?;
+        let total_items = count.unwrap_or(0);
+
+        // Get paginated data
+        let mut result = self
+            .db
+            .client
+            .query("SELECT * FROM health_checks WHERE doctor_id = $doctor_id ORDER BY scheduled_at DESC LIMIT $limit START $offset")
+            .bind(("doctor_id", doctor_id_owned))
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?;
+
+        let data: Vec<HealthCheck> = result.take(0)?;
+
+        Ok(PaginatedResponse::new(data, params, total_items))
+    }
 }
 
 #[async_trait]
@@ -89,6 +159,34 @@ impl Repository<HealthCheck> for CheckRepository {
     async fn delete(&self, id: &str) -> Result<bool> {
         let deleted: Option<HealthCheck> = self.db.client.delete((TABLE, id)).await?;
         Ok(deleted.is_some())
+    }
+
+    async fn find_paginated(&self, params: &PaginationParams) -> Result<PaginatedResponse<HealthCheck>> {
+        let offset = params.offset();
+        let limit = params.limit();
+
+        // Get total count
+        let mut count_result = self
+            .db
+            .client
+            .query("SELECT count() FROM health_checks GROUP ALL")
+            .await?;
+
+        let count: Option<u64> = count_result.take("count")?;
+        let total_items = count.unwrap_or(0);
+
+        // Get paginated data
+        let mut result = self
+            .db
+            .client
+            .query("SELECT * FROM health_checks ORDER BY scheduled_at DESC LIMIT $limit START $offset")
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?;
+
+        let data: Vec<HealthCheck> = result.take(0)?;
+
+        Ok(PaginatedResponse::new(data, params, total_items))
     }
 }
 

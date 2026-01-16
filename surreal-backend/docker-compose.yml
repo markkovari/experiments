@@ -25,6 +25,8 @@ services:
       - DATABASE_PASSWORD=root
       - PORT=3000
       - RUST_LOG=info
+      - JWT_SECRET=dev-secret-key-change-in-production-very-secure-key-min-32-chars-recommended
+      - JWT_EXPIRATION=3600
     ports:
       - "3000:3000"
     networks:
@@ -34,8 +36,10 @@ services:
   # Frontend
   frontend:
     build:
-      context: frontend/frontend/frontend
+      context: frontend
       dockerfile: Dockerfile
+      args:
+        - VITE_API_URL=http://localhost:3000
     container_name: surreal-backend-frontend
     depends_on:
       - api

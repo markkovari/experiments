@@ -13,6 +13,9 @@ pub enum CoreError {
 
     #[error("Invalid date: {0}")]
     InvalidDate(String),
+
+    #[error("Authentication error: {0}")]
+    AuthError(String),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;

@@ -11,6 +11,9 @@ pub enum DbError {
     #[error("Record already exists: {0}")]
     AlreadyExists(String),
 
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 

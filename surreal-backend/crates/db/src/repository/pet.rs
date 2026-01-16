@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use surreal_core::Pet;
+use surreal_core::{PaginatedResponse, PaginationParams, Pet};
 
 use crate::connection::Database;
 use crate::error::{DbError, Result};
@@ -26,6 +26,41 @@ impl PetRepository {
             .await?;
 
         Ok(result.take(0)?)
+    }
+
+    pub async fn find_by_owner_paginated(
+        &self,
+        owner_id: &str,
+        params: &PaginationParams,
+    ) -> Result<PaginatedResponse<Pet>> {
+        let owner_id_owned = owner_id.to_string();
+        let offset = params.offset();
+        let limit = params.limit();
+
+        // Get total count
+        let mut count_result = self
+            .db
+            .client
+            .query("SELECT count() FROM pets WHERE owner_id = $owner_id GROUP ALL")
+            .bind(("owner_id", owner_id_owned.clone()))
+            .await?;
+
+        let count: Option<u64> = count_result.take("count")?;
+        let total_items = count.unwrap_or(0);
+
+        // Get paginated data
+        let mut result = self
+            .db
+            .client
+            .query("SELECT * FROM pets WHERE owner_id = $owner_id ORDER BY created_at DESC LIMIT $limit START $offset")
+            .bind(("owner_id", owner_id_owned))
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?;
+
+        let data: Vec<Pet> = result.take(0)?;
+
+        Ok(PaginatedResponse::new(data, params, total_items))
     }
 }
 
@@ -62,6 +97,34 @@ impl Repository<Pet> for PetRepository {
     async fn delete(&self, id: &str) -> Result<bool> {
         let deleted: Option<Pet> = self.db.client.delete((TABLE, id)).await?;
         Ok(deleted.is_some())
+    }
+
+    async fn find_paginated(&self, params: &PaginationParams) -> Result<PaginatedResponse<Pet>> {
+        let offset = params.offset();
+        let limit = params.limit();
+
+        // Get total count
+        let mut count_result = self
+            .db
+            .client
+            .query("SELECT count() FROM pets GROUP ALL")
+            .await?;
+
+        let count: Option<u64> = count_result.take("count")?;
+        let total_items = count.unwrap_or(0);
+
+        // Get paginated data
+        let mut result = self
+            .db
+            .client
+            .query("SELECT * FROM pets ORDER BY created_at DESC LIMIT $limit START $offset")
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?;
+
+        let data: Vec<Pet> = result.take(0)?;
+
+        Ok(PaginatedResponse::new(data, params, total_items))
     }
 }
 

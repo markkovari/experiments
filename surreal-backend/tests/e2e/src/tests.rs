@@ -12,6 +12,9 @@ use surreal_db::Database;
 use surreal_migrations::MigrationRunner;
 
 async fn setup_test_app() -> axum::Router {
+    std::env::set_var("JWT_SECRET", "test-secret-key-for-testing-only");
+    std::env::set_var("JWT_EXPIRATION", "3600");
+
     let db = Database::new_in_memory().await.unwrap();
 
     let runner = MigrationRunner::new(db.clone());
@@ -19,6 +22,105 @@ async fn setup_test_app() -> axum::Router {
 
     let state = AppState::new(db);
     create_router(state)
+}
+
+async fn register_and_login_user(app: &axum::Router) -> String {
+    // Register user
+    let register_body = json!({
+        "email": "testuser@example.com",
+        "password": "password123",
+        "name": "Test User",
+        "phone": "+1234567890"
+    });
+
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/register/user")
+                .header("content-type", "application/json")
+                .body(Body::from(register_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Login to get token
+    let login_body = json!({
+        "email": "testuser@example.com",
+        "password": "password123"
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(login_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let auth_response: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    auth_response["token"]["access_token"].as_str().unwrap().to_string()
+}
+
+async fn register_and_login_doctor(app: &axum::Router) -> String {
+    // Register doctor
+    let register_body = json!({
+        "email": "doctor@example.com",
+        "password": "password123",
+        "name": "Dr. Smith",
+        "phone": "+1234567890",
+        "specialization": "general",
+        "license_number": "LIC123456",
+        "years_experience": 10
+    });
+
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/register/doctor")
+                .header("content-type", "application/json")
+                .body(Body::from(register_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Login to get token
+    let login_body = json!({
+        "email": "doctor@example.com",
+        "password": "password123"
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(login_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let auth_response: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    auth_response["token"]["access_token"].as_str().unwrap().to_string()
 }
 
 #[tokio::test]
@@ -40,12 +142,12 @@ async fn test_health_check() {
 
 #[tokio::test]
 async fn test_user_crud() {
-    
     let app = setup_test_app().await;
+    let token = register_and_login_doctor(&app).await;  // Use doctor token for CRUD operations
 
     // Create user
     let create_body = json!({
-        "email": "test@example.com",
+        "email": "newuser@example.com",
         "name": "Test User",
         "phone": "+1234567890"
     });
@@ -57,6 +159,7 @@ async fn test_user_crud() {
                 .method("POST")
                 .uri("/users")
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(create_body.to_string()))
                 .unwrap(),
         )
@@ -77,6 +180,7 @@ async fn test_user_crud() {
         .oneshot(
             Request::builder()
                 .uri(format!("/users/{}", user_id))
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -91,6 +195,7 @@ async fn test_user_crud() {
         .oneshot(
             Request::builder()
                 .uri("/users")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -111,6 +216,7 @@ async fn test_user_crud() {
                 .method("PUT")
                 .uri(format!("/users/{}", user_id))
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(update_body.to_string()))
                 .unwrap(),
         )
@@ -125,6 +231,7 @@ async fn test_user_crud() {
             Request::builder()
                 .method("DELETE")
                 .uri(format!("/users/{}", user_id))
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::empty())
                 .unwrap(),
         )
