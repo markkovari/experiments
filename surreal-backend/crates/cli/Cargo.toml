@@ -1,0 +1,23 @@
+[package]
+name = "surreal-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "surreal-backend"
+path = "src/main.rs"
+
+[dependencies]
+surreal-core = { path = "../core" }
+surreal-db = { path = "../db" }
+surreal-migrations = { path = "../migrations" }
+surreal-api = { path = "../api" }
+
+tokio.workspace = true
+axum.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+clap = { version = "4.5", features = ["derive"] }
