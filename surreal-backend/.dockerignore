@@ -1,0 +1,40 @@
+# Target directory
+target/
+**/target/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data
+data/
+*.db
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# CI/CD
+.github/
+
+# Env files
+.env
+.env.local
+
+# Test artifacts
+*.profraw
+*.profdata
+
+# macOS
+.DS_Store
+
+# Scripts
+scripts/

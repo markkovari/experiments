@@ -1,0 +1,20 @@
+[package]
+name = "surreal-migrations"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+surreal-core = { path = "../core" }
+surreal-db = { path = "../db" }
+
+surrealdb.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
