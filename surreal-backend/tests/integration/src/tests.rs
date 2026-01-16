@@ -250,3 +250,92 @@ async fn test_cascade_operations() {
     let owner_pets = pet_repo.find_by_owner(&owner_id).await.unwrap();
     assert_eq!(owner_pets.len(), 3);
 }
+
+#[tokio::test]
+async fn test_update_health_check_details() {
+    let db = setup_test_db().await;
+    let user_repo = UserRepository::new(db.clone());
+    let pet_repo = PetRepository::new(db.clone());
+    let doctor_repo = DoctorRepository::new(db.clone());
+    let check_repo = CheckRepository::new(db);
+
+    // Create owner
+    let owner = User::new("owner@test.com".to_string(), "Owner".to_string()).unwrap();
+    let created_owner = user_repo.create(&owner).await.unwrap();
+    let owner_id = created_owner.id.clone().unwrap();
+
+    // Create pet
+    let pet = Pet::new(owner_id, "Fluffy".to_string(), PetSpecies::Cat).unwrap();
+    let created_pet = pet_repo.create(&pet).await.unwrap();
+    let pet_id = created_pet.id.clone().unwrap();
+
+    // Create doctor
+    let doctor = Doctor::new(
+        "Dr. Update Test".to_string(),
+        "update@clinic.com".to_string(),
+        "+2222222222".to_string(),
+        Specialization::Surgery,
+        "LIC-UPDATE-001".to_string(),
+        8,
+    )
+    .unwrap();
+    let created_doctor = doctor_repo.create(&doctor).await.unwrap();
+    let doctor_id = created_doctor.id.clone().unwrap();
+
+    // Create health check scheduled for tomorrow
+    let scheduled = Utc::now() + Duration::days(1);
+    let check = HealthCheck::new(pet_id.clone(), doctor_id.clone(), scheduled).unwrap();
+    let created_check = check_repo.create(&check).await.unwrap();
+    let check_id = created_check.id.clone().unwrap();
+
+    // Test 1: Update scheduled_at while status is Scheduled
+    let new_scheduled = Utc::now() + Duration::days(2);
+    let mut updated_check = created_check.clone();
+    updated_check.scheduled_at = new_scheduled;
+    let rescheduled = check_repo.update(&updated_check).await.unwrap();
+    assert_eq!(rescheduled.scheduled_at, new_scheduled);
+    assert_eq!(rescheduled.status, CheckStatus::Scheduled);
+
+    // Test 2: Start the check and add notes
+    let mut started_check = rescheduled.clone();
+    started_check.start().unwrap();
+    started_check.add_notes("Patient arrived on time".to_string());
+    let with_notes = check_repo.update(&started_check).await.unwrap();
+    assert_eq!(with_notes.status, CheckStatus::InProgress);
+    assert_eq!(with_notes.notes, Some("Patient arrived on time".to_string()));
+
+    // Test 3: Complete the check
+    let mut completed_check = with_notes.clone();
+    completed_check
+        .complete(
+            "Minor infection".to_string(),
+            Some("Antibiotics prescribed".to_string()),
+            Some(150.0),
+        )
+        .unwrap();
+    let final_check = check_repo.update(&completed_check).await.unwrap();
+    assert_eq!(final_check.status, CheckStatus::Completed);
+    assert_eq!(final_check.diagnosis, Some("Minor infection".to_string()));
+    assert_eq!(
+        final_check.treatment,
+        Some("Antibiotics prescribed".to_string())
+    );
+    assert_eq!(final_check.cost, Some(150.0));
+
+    // Test 4: Update diagnosis and cost after completion
+    let mut updated_final = final_check.clone();
+    updated_final.diagnosis = Some("Minor bacterial infection".to_string());
+    updated_final.cost = Some(175.0);
+    let corrected_check = check_repo.update(&updated_final).await.unwrap();
+    assert_eq!(
+        corrected_check.diagnosis,
+        Some("Minor bacterial infection".to_string())
+    );
+    assert_eq!(corrected_check.cost, Some(175.0));
+    assert_eq!(corrected_check.status, CheckStatus::Completed); // Status unchanged
+
+    // Verify the check can be found
+    let found_check = check_repo.find_by_id(&check_id).await.unwrap();
+    assert!(found_check.is_some());
+    assert_eq!(found_check.unwrap().cost, Some(175.0));
+}

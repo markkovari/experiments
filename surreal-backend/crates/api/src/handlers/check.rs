@@ -7,7 +7,7 @@ use axum::{
 use surreal_core::HealthCheck;
 use surreal_db::{CheckRepository, Repository};
 
-use crate::dto::{CreateCheckRequest, UpdateCheckRequest};
+use crate::dto::{CreateCheckRequest, UpdateCheckDetailsRequest, UpdateCheckRequest};
 use crate::error::ApiResult;
 use crate::state::AppState;
 
@@ -61,6 +61,63 @@ pub async fn list_checks_by_doctor(
     let checks = repo.find_by_doctor(&doctor_id).await?;
 
     Ok(Json(checks))
+}
+
+pub async fn update_check(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateCheckDetailsRequest>,
+) -> ApiResult<Json<HealthCheck>> {
+    let repo = CheckRepository::new(state.db);
+    let mut check = repo
+        .find_by_id(&id)
+        .await?
+        .ok_or_else(|| surreal_db::DbError::NotFound(format!("Health check {} not found", id)))?;
+
+    // Update scheduled_at only if status is Scheduled
+    if let Some(scheduled_at) = req.scheduled_at {
+        if check.status != surreal_core::CheckStatus::Scheduled {
+            return Err(surreal_core::CoreError::ValidationError(
+                "Can only reschedule a scheduled check".to_string(),
+            )
+            .into());
+        }
+        if scheduled_at < chrono::Utc::now() {
+            return Err(surreal_core::CoreError::InvalidDate(
+                "Cannot schedule check in the past".to_string(),
+            )
+            .into());
+        }
+        check.scheduled_at = scheduled_at;
+    }
+
+    // Update diagnosis, treatment, notes, cost for any status
+    if let Some(diagnosis) = req.diagnosis {
+        check.diagnosis = Some(diagnosis);
+    }
+
+    if let Some(treatment) = req.treatment {
+        check.treatment = Some(treatment);
+    }
+
+    if let Some(notes) = req.notes {
+        check.notes = Some(notes);
+    }
+
+    if let Some(cost) = req.cost {
+        if cost < 0.0 {
+            return Err(surreal_core::CoreError::ValidationError(
+                "Cost cannot be negative".to_string(),
+            )
+            .into());
+        }
+        check.cost = Some(cost);
+    }
+
+    check.updated_at = chrono::Utc::now();
+    let updated = repo.update(&check).await?;
+
+    Ok(Json(updated))
 }
 
 pub async fn start_check(

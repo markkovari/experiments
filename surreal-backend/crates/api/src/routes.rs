@@ -58,7 +58,9 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route(
             "/checks/:id",
-            get(check::get_check).delete(check::delete_check),
+            get(check::get_check)
+                .put(check::update_check)
+                .delete(check::delete_check),
         )
         .route("/checks/:id/start", patch(check::start_check))
         .route("/checks/:id/complete", patch(check::complete_check))

@@ -1,7 +1,7 @@
 use utoipa::OpenApi;
 
 use crate::dto::{
-    check::{CreateCheckRequest, UpdateCheckRequest},
+    check::{CreateCheckRequest, UpdateCheckDetailsRequest, UpdateCheckRequest},
     doctor::{CreateDoctorRequest, UpdateDoctorRequest},
     pet::{CreatePetRequest, UpdatePetRequest},
     user::{CreateUserRequest, UpdateUserRequest},
@@ -49,6 +49,7 @@ use surreal_core::{
             CreateDoctorRequest,
             UpdateDoctorRequest,
             CreateCheckRequest,
+            UpdateCheckDetailsRequest,
             UpdateCheckRequest,
         )
     ),

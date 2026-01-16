@@ -480,3 +480,246 @@ async fn test_not_found() {
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn test_update_health_check_details() {
+    let app = setup_test_app().await;
+
+    // Create user
+    let user_body = json!({
+        "email": "updateowner@test.com",
+        "name": "Update Owner"
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/users")
+                .header("content-type", "application/json")
+                .body(Body::from(user_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let user: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let owner_id = user["id"].as_str().unwrap();
+
+    // Create pet
+    let pet_body = json!({
+        "owner_id": owner_id,
+        "name": "UpdatePet",
+        "species": PetSpecies::Cat
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/pets")
+                .header("content-type", "application/json")
+                .body(Body::from(pet_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let pet: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let pet_id = pet["id"].as_str().unwrap();
+
+    // Create doctor
+    let doctor_body = json!({
+        "name": "Dr. Update",
+        "email": "update@clinic.com",
+        "phone": "+3333333333",
+        "specialization": Specialization::Surgery,
+        "license_number": "LIC-UPDATE",
+        "years_experience": 7
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/doctors")
+                .header("content-type", "application/json")
+                .body(Body::from(doctor_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let doctor: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let doctor_id = doctor["id"].as_str().unwrap();
+
+    // Create health check
+    let scheduled = Utc::now() + Duration::days(1);
+    let check_body = json!({
+        "pet_id": pet_id,
+        "doctor_id": doctor_id,
+        "scheduled_at": scheduled.to_rfc3339()
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/checks")
+                .header("content-type", "application/json")
+                .body(Body::from(check_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let check: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let check_id = check["id"].as_str().unwrap();
+
+    // Test 1: Update scheduled_at while status is Scheduled
+    let new_scheduled = Utc::now() + Duration::days(2);
+    let update_body = json!({
+        "scheduled_at": new_scheduled.to_rfc3339()
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/checks/{}", check_id))
+                .header("content-type", "application/json")
+                .body(Body::from(update_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Test 2: Start the check
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/checks/{}/start", check_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Test 3: Update notes while in progress
+    let update_notes_body = json!({
+        "notes": "Patient seems anxious"
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/checks/{}", check_id))
+                .header("content-type", "application/json")
+                .body(Body::from(update_notes_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Test 4: Complete the check
+    let complete_body = json!({
+        "diagnosis": "Tooth decay",
+        "treatment": "Dental cleaning",
+        "cost": 200.0
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/checks/{}/complete", check_id))
+                .header("content-type", "application/json")
+                .body(Body::from(complete_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Test 5: Update diagnosis and cost after completion
+    let update_completed_body = json!({
+        "diagnosis": "Severe tooth decay",
+        "cost": 250.0
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/checks/{}", check_id))
+                .header("content-type", "application/json")
+                .body(Body::from(update_completed_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let updated_check: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        updated_check["diagnosis"].as_str().unwrap(),
+        "Severe tooth decay"
+    );
+    assert_eq!(updated_check["cost"].as_f64().unwrap(), 250.0);
+
+    // Test 6: Try to reschedule a completed check (should fail)
+    let reschedule_body = json!({
+        "scheduled_at": (Utc::now() + Duration::days(3)).to_rfc3339()
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/checks/{}", check_id))
+                .header("content-type", "application/json")
+                .body(Body::from(reschedule_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Should return an error because we can't reschedule a completed check
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

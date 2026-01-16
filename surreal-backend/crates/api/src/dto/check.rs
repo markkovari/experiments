@@ -16,3 +16,12 @@ pub struct UpdateCheckRequest {
     pub notes: Option<String>,
     pub cost: Option<f32>,
 }
+
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+pub struct UpdateCheckDetailsRequest {
+    pub scheduled_at: Option<DateTime<Utc>>,
+    pub diagnosis: Option<String>,
+    pub treatment: Option<String>,
+    pub notes: Option<String>,
+    pub cost: Option<f32>,
+}

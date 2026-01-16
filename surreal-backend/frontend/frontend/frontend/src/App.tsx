@@ -47,6 +47,9 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showUserForm, setShowUserForm] = useState(false)
+  const [showPetForm, setShowPetForm] = useState<Record<string, boolean>>({})
+  const [showCheckForm, setShowCheckForm] = useState<Record<string, boolean>>({})
+  const [showEditCheckForm, setShowEditCheckForm] = useState<Record<string, boolean>>({})
 
   const fetchData = async () => {
     setLoading(true)
@@ -110,6 +113,22 @@ function App() {
     }
   }
 
+  const deleteUser = async (userId: string) => {
+    if (!confirm('Are you sure you want to delete this user? All their pets and health checks will remain but be orphaned.')) {
+      return
+    }
+
+    try {
+      const res = await fetch(`${API_URL}/users/${userId}`, {
+        method: 'DELETE'
+      })
+      if (!res.ok) throw new Error('Failed to delete user')
+      fetchData()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete user')
+    }
+  }
+
   const createPet = async (e: React.FormEvent<HTMLFormElement>, ownerId: string) => {
     e.preventDefault()
     const formData = new FormData(e.currentTarget)
@@ -132,6 +151,22 @@ function App() {
       fetchData()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to create pet')
+    }
+  }
+
+  const deletePet = async (petId: string, petName: string) => {
+    if (!confirm(`Are you sure you want to delete ${petName}? All their health checks will also be deleted.`)) {
+      return
+    }
+
+    try {
+      const res = await fetch(`${API_URL}/pets/${petId}`, {
+        method: 'DELETE'
+      })
+      if (!res.ok) throw new Error('Failed to delete pet')
+      fetchData()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete pet')
     }
   }
 
@@ -158,6 +193,59 @@ function App() {
     }
   }
 
+  const deleteCheck = async (checkId: string) => {
+    if (!confirm('Are you sure you want to delete this health check?')) {
+      return
+    }
+
+    try {
+      const res = await fetch(`${API_URL}/checks/${checkId}`, {
+        method: 'DELETE'
+      })
+      if (!res.ok) throw new Error('Failed to delete health check')
+      fetchData()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete health check')
+    }
+  }
+
+  const updateCheck = async (e: React.FormEvent<HTMLFormElement>, checkId: string) => {
+    e.preventDefault()
+    const formData = new FormData(e.currentTarget)
+
+    const updateData: Record<string, unknown> = {}
+
+    const scheduledAt = formData.get('scheduledAt') as string
+    if (scheduledAt) {
+      updateData.scheduled_at = new Date(scheduledAt).toISOString()
+    }
+
+    const diagnosis = formData.get('diagnosis') as string
+    if (diagnosis) updateData.diagnosis = diagnosis
+
+    const treatment = formData.get('treatment') as string
+    if (treatment) updateData.treatment = treatment
+
+    const notes = formData.get('notes') as string
+    if (notes) updateData.notes = notes
+
+    const cost = formData.get('cost') as string
+    if (cost) updateData.cost = parseFloat(cost)
+
+    try {
+      const res = await fetch(`${API_URL}/checks/${checkId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updateData)
+      })
+      if (!res.ok) throw new Error('Failed to update health check')
+      setShowEditCheckForm({ ...showEditCheckForm, [checkId]: false })
+      fetchData()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update health check')
+    }
+  }
+
   const getPetsByOwner = (ownerId: string) => pets.filter(pet => pet.owner_id === ownerId)
   const getChecksByPet = (petId: string) => checks.filter(check => check.pet_id === petId)
 
@@ -170,9 +258,6 @@ function App() {
       default: return 'text-gray-600'
     }
   }
-
-  const [showPetForm, setShowPetForm] = useState<Record<string, boolean>>({})
-  const [showCheckForm, setShowCheckForm] = useState<Record<string, boolean>>({})
 
   return (
     <div className="min-h-screen bg-background p-8">
@@ -256,9 +341,18 @@ function App() {
                           </div>
                         </CardDescription>
                       </div>
-                      <div className="text-right">
-                        <p className="text-xs text-muted-foreground">User ID</p>
-                        <p className="text-xs font-mono">{user.id}</p>
+                      <div className="text-right space-y-2">
+                        <div>
+                          <p className="text-xs text-muted-foreground">User ID</p>
+                          <p className="text-xs font-mono">{user.id}</p>
+                        </div>
+                        <Button 
+                          variant="destructive" 
+                          size="sm"
+                          onClick={() => deleteUser(user.id)}
+                        >
+                          Delete User
+                        </Button>
                       </div>
                     </div>
                   </CardHeader>
@@ -320,13 +414,22 @@ function App() {
                                   </p>
                                   <p className="text-xs text-muted-foreground font-mono mt-1">{pet.id}</p>
                                 </div>
-                                <Button 
-                                  size="sm" 
-                                  variant="outline"
-                                  onClick={() => setShowCheckForm({...showCheckForm, [pet.id]: !showCheckForm[pet.id]})}
-                                >
-                                  {showCheckForm[pet.id] ? 'Cancel' : '+ Schedule Check'}
-                                </Button>
+                                <div className="flex gap-2">
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline"
+                                    onClick={() => setShowCheckForm({...showCheckForm, [pet.id]: !showCheckForm[pet.id]})}
+                                  >
+                                    {showCheckForm[pet.id] ? 'Cancel' : '+ Schedule Check'}
+                                  </Button>
+                                  <Button 
+                                    size="sm" 
+                                    variant="destructive"
+                                    onClick={() => deletePet(pet.id, pet.name)}
+                                  >
+                                    Delete
+                                  </Button>
+                                </div>
                               </div>
 
                               {showCheckForm[pet.id] && (
@@ -371,26 +474,118 @@ function App() {
                                         key={check.id}
                                         className="bg-background rounded border p-3 text-sm"
                                       >
-                                        <div className="flex justify-between items-start mb-1">
-                                          <span className={`font-semibold ${getStatusColor(check.status)}`}>
-                                            {check.status.replace('_', ' ').toUpperCase()}
-                                          </span>
-                                          <span className="text-xs text-muted-foreground">
-                                            {new Date(check.scheduled_at).toLocaleString()}
-                                          </span>
-                                        </div>
-                                        {check.notes && (
-                                          <p className="text-muted-foreground text-xs mt-1">📝 {check.notes}</p>
+                                        {showEditCheckForm[check.id] ? (
+                                          <form onSubmit={(e) => updateCheck(e, check.id)} className="space-y-3">
+                                            <div className="flex justify-between items-center mb-2">
+                                              <h4 className="font-medium">Edit Health Check</h4>
+                                              <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="ghost"
+                                                onClick={() => setShowEditCheckForm({ ...showEditCheckForm, [check.id]: false })}
+                                              >
+                                                Cancel
+                                              </Button>
+                                            </div>
+                                            <div>
+                                              <Label htmlFor={`scheduledAt-${check.id}`} className="text-xs">Scheduled At</Label>
+                                              <Input
+                                                id={`scheduledAt-${check.id}`}
+                                                name="scheduledAt"
+                                                type="datetime-local"
+                                                defaultValue={new Date(check.scheduled_at).toISOString().slice(0, 16)}
+                                                className="text-xs h-8"
+                                              />
+                                            </div>
+                                            <div>
+                                              <Label htmlFor={`diagnosis-${check.id}`} className="text-xs">Diagnosis</Label>
+                                              <Input
+                                                id={`diagnosis-${check.id}`}
+                                                name="diagnosis"
+                                                defaultValue={check.diagnosis || ''}
+                                                placeholder="Enter diagnosis"
+                                                className="text-xs h-8"
+                                              />
+                                            </div>
+                                            <div>
+                                              <Label htmlFor={`treatment-${check.id}`} className="text-xs">Treatment</Label>
+                                              <Input
+                                                id={`treatment-${check.id}`}
+                                                name="treatment"
+                                                defaultValue={check.treatment || ''}
+                                                placeholder="Enter treatment"
+                                                className="text-xs h-8"
+                                              />
+                                            </div>
+                                            <div>
+                                              <Label htmlFor={`notes-${check.id}`} className="text-xs">Notes</Label>
+                                              <Input
+                                                id={`notes-${check.id}`}
+                                                name="notes"
+                                                defaultValue={check.notes || ''}
+                                                placeholder="Enter notes"
+                                                className="text-xs h-8"
+                                              />
+                                            </div>
+                                            <div>
+                                              <Label htmlFor={`cost-${check.id}`} className="text-xs">Cost</Label>
+                                              <Input
+                                                id={`cost-${check.id}`}
+                                                name="cost"
+                                                type="number"
+                                                step="0.01"
+                                                placeholder="Enter cost"
+                                                className="text-xs h-8"
+                                              />
+                                            </div>
+                                            <Button type="submit" size="sm" className="w-full">
+                                              Update Check
+                                            </Button>
+                                          </form>
+                                        ) : (
+                                          <div className="flex justify-between items-start mb-1">
+                                            <div className="flex-1">
+                                              <div className="flex justify-between items-center mb-1">
+                                                <span className={`font-semibold ${getStatusColor(check.status)}`}>
+                                                  {check.status.replace('_', ' ').toUpperCase()}
+                                                </span>
+                                                <div className="flex gap-2 items-center">
+                                                  <span className="text-xs text-muted-foreground">
+                                                    {new Date(check.scheduled_at).toLocaleString()}
+                                                  </span>
+                                                  <Button
+                                                    size="sm"
+                                                    variant="ghost"
+                                                    className="h-6 px-2 text-xs"
+                                                    onClick={() => setShowEditCheckForm({ ...showEditCheckForm, [check.id]: true })}
+                                                  >
+                                                    Edit
+                                                  </Button>
+                                                  <Button
+                                                    size="sm"
+                                                    variant="ghost"
+                                                    className="h-6 px-2 text-xs text-destructive hover:text-destructive"
+                                                    onClick={() => deleteCheck(check.id)}
+                                                  >
+                                                    Delete
+                                                  </Button>
+                                                </div>
+                                              </div>
+                                              {check.notes && (
+                                                <p className="text-muted-foreground text-xs mt-1">📝 {check.notes}</p>
+                                              )}
+                                              {check.diagnosis && (
+                                                <p className="text-xs mt-1">🩺 Diagnosis: {check.diagnosis}</p>
+                                              )}
+                                              {check.treatment && (
+                                                <p className="text-xs mt-1">💊 Treatment: {check.treatment}</p>
+                                              )}
+                                              <p className="text-xs text-muted-foreground font-mono mt-1">
+                                                Check ID: {check.id}
+                                              </p>
+                                            </div>
+                                          </div>
                                         )}
-                                        {check.diagnosis && (
-                                          <p className="text-xs mt-1">🩺 Diagnosis: {check.diagnosis}</p>
-                                        )}
-                                        {check.treatment && (
-                                          <p className="text-xs mt-1">💊 Treatment: {check.treatment}</p>
-                                        )}
-                                        <p className="text-xs text-muted-foreground font-mono mt-1">
-                                          Check ID: {check.id}
-                                        </p>
                                       </div>
                                     ))}
                                   </div>
