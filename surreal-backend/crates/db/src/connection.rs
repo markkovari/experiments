@@ -34,13 +34,22 @@ impl Database {
     }
 
     pub async fn connect_remote(url: &str, username: &str, password: &str) -> Result<Self> {
-        info!("Connecting to remote SurrealDB at: {}", url);
+        // Convert HTTP URL to WebSocket for better performance
+        let ws_url = if url.starts_with("http://") {
+            url.replace("http://", "ws://")
+        } else if url.starts_with("https://") {
+            url.replace("https://", "wss://")
+        } else {
+            url.to_string()
+        };
 
-        let client = surrealdb::engine::any::connect(url).await?;
+        info!("Connecting to remote SurrealDB at: {} (optimized with WebSocket)", ws_url);
+
+        let client = surrealdb::engine::any::connect(&ws_url).await?;
         client.signin(Root { username, password }).await?;
         client.use_ns("veterinary").use_db("clinic").await?;
 
-        info!("Connected to remote database successfully");
+        info!("Connected to remote database successfully via WebSocket (persistent connection)");
 
         Ok(Self { client })
     }
