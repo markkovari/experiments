@@ -1,4 +1,7 @@
-import { useEffect, useState } from "react";
+import { Calendar, FileText, LogOut, PawPrint, Stethoscope, Users } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { Pagination } from "../components/Pagination";
 import { useAuth } from "../contexts/AuthContext";
 
@@ -63,85 +66,94 @@ export function DoctorDashboard() {
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState("");
 
-	const fetchAppointments = async (page: number) => {
-		try {
-			setLoading(true);
-			const response = await fetch(
-				`${API_BASE_URL}/doctor/checks?page=${page}&page_size=10`,
-				{
-					headers: {
-						Authorization: `Bearer ${token}`,
+	const fetchAppointments = useCallback(
+		async (page: number) => {
+			try {
+				setLoading(true);
+				const response = await fetch(
+					`${API_BASE_URL}/doctor/checks?page=${page}&page_size=10`,
+					{
+						headers: {
+							Authorization: `Bearer ${token}`,
+						},
 					},
-				},
-			);
+				);
 
-			if (!response.ok) {
-				throw new Error("Failed to fetch appointments");
+				if (!response.ok) {
+					throw new Error("Failed to fetch appointments");
+				}
+
+				const data: PaginatedResponse<HealthCheck> = await response.json();
+				setChecks(data.data);
+				setPagination(data.pagination);
+			} catch (err) {
+				setError(
+					err instanceof Error ? err.message : "Failed to fetch appointments",
+				);
+			} finally {
+				setLoading(false);
 			}
+		},
+		[token],
+	);
 
-			const data: PaginatedResponse<HealthCheck> = await response.json();
-			setChecks(data.data);
-			setPagination(data.pagination);
-		} catch (err) {
-			setError(
-				err instanceof Error ? err.message : "Failed to fetch appointments",
-			);
-		} finally {
-			setLoading(false);
-		}
-	};
-
-	const fetchPets = async (page: number) => {
-		try {
-			setLoading(true);
-			const response = await fetch(
-				`${API_BASE_URL}/doctor/pets?page=${page}&page_size=10`,
-				{
-					headers: {
-						Authorization: `Bearer ${token}`,
+	const fetchPets = useCallback(
+		async (page: number) => {
+			try {
+				setLoading(true);
+				const response = await fetch(
+					`${API_BASE_URL}/doctor/pets?page=${page}&page_size=10`,
+					{
+						headers: {
+							Authorization: `Bearer ${token}`,
+						},
 					},
-				},
-			);
+				);
 
-			if (!response.ok) {
-				throw new Error("Failed to fetch pets");
+				if (!response.ok) {
+					throw new Error("Failed to fetch pets");
+				}
+
+				const data: PaginatedResponse<Pet> = await response.json();
+				setPets(data.data);
+				setPagination(data.pagination);
+			} catch (err) {
+				setError(err instanceof Error ? err.message : "Failed to fetch pets");
+			} finally {
+				setLoading(false);
 			}
+		},
+		[token],
+	);
 
-			const data: PaginatedResponse<Pet> = await response.json();
-			setPets(data.data);
-			setPagination(data.pagination);
-		} catch (err) {
-			setError(err instanceof Error ? err.message : "Failed to fetch pets");
-		} finally {
-			setLoading(false);
-		}
-	};
-
-	const fetchUsers = async (page: number) => {
-		try {
-			setLoading(true);
-			const response = await fetch(
-				`${API_BASE_URL}/doctor/users?page=${page}&page_size=10`,
-				{
-					headers: {
-						Authorization: `Bearer ${token}`,
+	const fetchUsers = useCallback(
+		async (page: number) => {
+			try {
+				setLoading(true);
+				const response = await fetch(
+					`${API_BASE_URL}/doctor/users?page=${page}&page_size=10`,
+					{
+						headers: {
+							Authorization: `Bearer ${token}`,
+						},
 					},
-				},
-			);
+				);
 
-			if (!response.ok) {
-				throw new Error("Failed to fetch users");
+				if (!response.ok) {
+					throw new Error("Failed to fetch users");
+				}
+
+				const data: PaginatedResponse<User> = await response.json();
+				setUsers(data.data);
+				setPagination(data.pagination);
+			} catch (err) {
+				setError(err instanceof Error ? err.message : "Failed to fetch users");
+			} finally {
+				setLoading(false);
 			}
-
-			const data: PaginatedResponse<User> = await response.json();
-			setUsers(data.data);
-			setPagination(data.pagination);
-		} catch (err) {
-			setError(err instanceof Error ? err.message : "Failed to fetch users");
-		} finally {
-			setLoading(false);
-		}
-	};
+		},
+		[token],
+	);
 
 	useEffect(() => {
 		if (activeTab === "appointments") {
@@ -170,232 +182,309 @@ export function DoctorDashboard() {
 	const getStatusColor = (status: string) => {
 		switch (status) {
 			case "scheduled":
-				return "bg-blue-100 text-blue-800";
+				return "bg-blue-50 text-blue-700 border-blue-200";
 			case "in_progress":
-				return "bg-yellow-100 text-yellow-800";
+				return "bg-yellow-50 text-yellow-700 border-yellow-200";
 			case "completed":
-				return "bg-green-100 text-green-800";
+				return "bg-green-50 text-green-700 border-green-200";
 			case "cancelled":
-				return "bg-red-100 text-red-800";
+				return "bg-red-50 text-red-700 border-red-200";
 			default:
-				return "bg-gray-100 text-gray-800";
+				return "bg-gray-50 text-gray-700 border-gray-200";
 		}
 	};
 
 	return (
-		<div className="min-h-screen bg-gray-50">
-			<nav className="bg-white shadow">
-				<div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-					<div className="flex justify-between h-16">
-						<div className="flex items-center">
-							<h1 className="text-xl font-bold">Doctor Dashboard</h1>
+		<div className="flex h-screen overflow-hidden bg-gray-50/50">
+			{/* Sidebar */}
+			<aside className="hidden w-64 flex-col border-r bg-white lg:flex">
+				<div className="flex h-16 items-center border-b px-6">
+					<div className="flex items-center gap-2">
+						<div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
+							<Stethoscope className="h-4 w-4 text-primary-foreground" />
 						</div>
-						<div className="flex items-center space-x-4">
-							<span className="text-sm text-gray-700">{user?.email}</span>
-							<button
-								onClick={logout}
-								className="text-sm text-red-600 hover:text-red-800"
-							>
-								Logout
-							</button>
+						<span className="text-lg font-semibold">PetCare</span>
+					</div>
+				</div>
+				<nav className="flex-1 space-y-1 p-4">
+					<button
+						onClick={() => setActiveTab("appointments")}
+						className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium ${
+							activeTab === "appointments"
+								? "bg-gray-100 text-gray-900"
+								: "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+						}`}
+					>
+						<Calendar className="h-4 w-4" />
+						Appointments
+					</button>
+					<button
+						onClick={() => setActiveTab("pets")}
+						className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium ${
+							activeTab === "pets"
+								? "bg-gray-100 text-gray-900"
+								: "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+						}`}
+					>
+						<PawPrint className="h-4 w-4" />
+						Pets
+					</button>
+					<button
+						onClick={() => setActiveTab("users")}
+						className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium ${
+							activeTab === "users"
+								? "bg-gray-100 text-gray-900"
+								: "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+						}`}
+					>
+						<Users className="h-4 w-4" />
+						Pet Owners
+					</button>
+				</nav>
+				<Separator />
+				<div className="p-4">
+					<button
+						onClick={logout}
+						className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+					>
+						<LogOut className="h-4 w-4" />
+						Logout
+					</button>
+				</div>
+				<div className="border-t p-4">
+					<div className="flex items-center gap-3">
+						<div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100">
+							<Stethoscope className="h-4 w-4 text-gray-600" />
+						</div>
+						<div className="flex-1 overflow-hidden">
+							<p className="truncate text-sm font-medium text-gray-900">{user?.email}</p>
+							<p className="text-xs text-gray-500">Veterinarian</p>
 						</div>
 					</div>
 				</div>
-			</nav>
+			</aside>
 
-			<main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-				{error && (
-					<div className="mb-4 rounded-md bg-red-50 p-4">
-						<p className="text-sm text-red-800">{error}</p>
+			{/* Main Content */}
+			<div className="flex flex-1 flex-col overflow-hidden">
+				{/* Top Header */}
+				<header className="flex h-16 items-center justify-between border-b bg-white px-6">
+					<div>
+						<h1 className="text-2xl font-bold text-gray-900">
+							{activeTab === "appointments" && "Appointments"}
+							{activeTab === "pets" && "Pets"}
+							{activeTab === "users" && "Pet Owners"}
+						</h1>
 					</div>
-				)}
+					<div className="flex items-center gap-2">
+						<Button
+							variant="ghost"
+							size="icon"
+							className="lg:hidden"
+							onClick={logout}
+						>
+							<LogOut className="h-4 w-4" />
+						</Button>
+					</div>
+				</header>
 
-				<div className="mb-6">
-					<div className="border-b border-gray-200">
-						<nav className="-mb-px flex space-x-8">
-							<button
-								onClick={() => setActiveTab("appointments")}
-								className={`${
-									activeTab === "appointments"
-										? "border-indigo-500 text-indigo-600"
-										: "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
-								} whitespace-nowrap border-b-2 py-4 px-1 text-sm font-medium`}
-							>
-								Appointments
-							</button>
-							<button
-								onClick={() => setActiveTab("pets")}
-								className={`${
-									activeTab === "pets"
-										? "border-indigo-500 text-indigo-600"
-										: "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
-								} whitespace-nowrap border-b-2 py-4 px-1 text-sm font-medium`}
-							>
-								Pets
-							</button>
-							<button
-								onClick={() => setActiveTab("users")}
-								className={`${
-									activeTab === "users"
-										? "border-indigo-500 text-indigo-600"
-										: "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
-								} whitespace-nowrap border-b-2 py-4 px-1 text-sm font-medium`}
-							>
-								Users
-							</button>
-						</nav>
-					</div>
-				</div>
-
-				{loading ? (
-					<div className="text-center py-12">
-						<p className="text-gray-500">Loading...</p>
-					</div>
-				) : (
-					<>
-						{activeTab === "appointments" && (
-							<div className="bg-white shadow overflow-hidden sm:rounded-md">
-								{checks.length === 0 ? (
-									<div className="text-center py-12">
-										<p className="text-gray-500">No appointments found.</p>
-									</div>
-								) : (
-									<ul className="divide-y divide-gray-200">
-										{checks.map((check) => (
-											<li key={check.id} className="px-4 py-4 sm:px-6">
-												<div className="flex items-start justify-between">
-													<div className="flex-1">
-														<div className="flex items-center space-x-2">
-															<h4 className="text-lg font-medium text-gray-900">
-																{check.reason}
-															</h4>
-															<span
-																className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(check.status)}`}
-															>
-																{check.status}
-															</span>
-														</div>
-														<p className="mt-1 text-sm text-gray-500">
-															Scheduled: {formatDate(check.scheduled_at)}
-														</p>
-														<p className="mt-1 text-sm text-gray-500">
-															Pet ID: {check.pet_id}
-														</p>
-														{check.diagnosis && (
-															<p className="mt-2 text-sm text-gray-700">
-																<span className="font-medium">Diagnosis:</span>{" "}
-																{check.diagnosis}
-															</p>
-														)}
-														{check.treatment && (
-															<p className="mt-1 text-sm text-gray-700">
-																<span className="font-medium">Treatment:</span>{" "}
-																{check.treatment}
-															</p>
-														)}
-													</div>
-												</div>
-											</li>
-										))}
-									</ul>
-								)}
+				{/* Scrollable Content */}
+				<main className="flex-1 overflow-y-auto p-6 md:p-8">
+					<div className="mx-auto max-w-6xl">
+						{error && (
+							<div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4">
+								<p className="text-sm text-red-600">{error}</p>
 							</div>
 						)}
 
-						{activeTab === "pets" && (
-							<div className="bg-white shadow overflow-hidden sm:rounded-md">
-								{pets.length === 0 ? (
-									<div className="text-center py-12">
-										<p className="text-gray-500">No pets found.</p>
-									</div>
-								) : (
-									<ul className="divide-y divide-gray-200">
-										{pets.map((pet) => (
-											<li key={pet.id} className="px-4 py-4 sm:px-6">
-												<div className="flex items-start justify-between">
-													<div className="flex-1">
-														<h4 className="text-lg font-medium text-indigo-600">
-															{pet.name}
-														</h4>
-														<div className="mt-2 flex flex-col sm:flex-row sm:space-x-4">
+						{loading ? (
+							<div className="flex flex-col items-center justify-center py-24">
+								<div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" />
+								<p className="mt-4 text-sm text-gray-500">Loading...</p>
+							</div>
+						) : (
+							<>
+								{activeTab === "appointments" && (
+									<div className="space-y-4">
+										{checks.length === 0 ? (
+											<div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-300 bg-white p-16">
+												<div className="flex h-20 w-20 items-center justify-center rounded-full bg-gray-100">
+													<Calendar className="h-10 w-10 text-gray-400" />
+												</div>
+												<h3 className="mt-4 text-lg font-semibold text-gray-900">No appointments found</h3>
+												<p className="mt-2 text-sm text-gray-500">
+													Appointments will appear here when scheduled
+												</p>
+											</div>
+										) : (
+											checks.map((check) => (
+												<div
+													key={check.id}
+													className="rounded-xl border bg-white p-6 shadow-sm hover:shadow-md transition-shadow"
+												>
+													<div className="flex items-start justify-between">
+														<div className="flex-1">
+															<div className="flex items-center gap-2 mb-2">
+																<FileText className="h-5 w-5 text-gray-400" />
+																<h4 className="text-lg font-semibold text-gray-900">
+																	{check.reason}
+																</h4>
+																<span
+																	className={`px-2.5 py-0.5 text-xs font-medium rounded-full border ${getStatusColor(check.status)}`}
+																>
+																	{check.status}
+																</span>
+															</div>
+															<p className="text-sm text-gray-600 mb-3">
+																<Calendar className="inline h-4 w-4 mr-1" />
+																{formatDate(check.scheduled_at)}
+															</p>
 															<p className="text-sm text-gray-500">
-																Species: {pet.species}
+																Pet ID: <span className="font-mono text-gray-700">{check.pet_id}</span>
 															</p>
-															{pet.breed && (
-																<p className="text-sm text-gray-500">
-																	Breed: {pet.breed}
-																</p>
+															{check.diagnosis && (
+																<div className="mt-4 rounded-lg bg-gray-50 p-3">
+																	<p className="text-xs font-medium text-gray-600 mb-1">
+																		Diagnosis
+																	</p>
+																	<p className="text-sm text-gray-900">{check.diagnosis}</p>
+																</div>
 															)}
-															{pet.age !== undefined && (
-																<p className="text-sm text-gray-500">
-																	Age: {pet.age} years
-																</p>
-															)}
-															{pet.weight_kg !== undefined && (
-																<p className="text-sm text-gray-500">
-																	Weight: {pet.weight_kg} kg
-																</p>
+															{check.treatment && (
+																<div className="mt-3 rounded-lg bg-gray-50 p-3">
+																	<p className="text-xs font-medium text-gray-600 mb-1">
+																		Treatment
+																	</p>
+																	<p className="text-sm text-gray-900">{check.treatment}</p>
+																</div>
 															)}
 														</div>
-														<p className="mt-1 text-sm text-gray-500">
-															Owner ID: {pet.owner_id}
-														</p>
 													</div>
 												</div>
-											</li>
-										))}
-									</ul>
-								)}
-							</div>
-						)}
-
-						{activeTab === "users" && (
-							<div className="bg-white shadow overflow-hidden sm:rounded-md">
-								{users.length === 0 ? (
-									<div className="text-center py-12">
-										<p className="text-gray-500">No users found.</p>
+											))
+										)}
 									</div>
-								) : (
-									<ul className="divide-y divide-gray-200">
-										{users.map((user) => (
-											<li key={user.id} className="px-4 py-4 sm:px-6">
-												<div className="flex items-start justify-between">
-													<div className="flex-1">
-														<h4 className="text-lg font-medium text-gray-900">
-															{user.name}
-														</h4>
-														<p className="mt-1 text-sm text-gray-500">
-															Email: {user.email}
-														</p>
-														{user.phone && (
-															<p className="mt-1 text-sm text-gray-500">
-																Phone: {user.phone}
+								)}
+
+								{activeTab === "pets" && (
+									<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+										{pets.length === 0 ? (
+											<div className="col-span-full flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-300 bg-white p-16">
+												<div className="flex h-20 w-20 items-center justify-center rounded-full bg-gray-100">
+													<PawPrint className="h-10 w-10 text-gray-400" />
+												</div>
+												<h3 className="mt-4 text-lg font-semibold text-gray-900">No pets found</h3>
+												<p className="mt-2 text-sm text-gray-500">
+													Pet records will appear here
+												</p>
+											</div>
+										) : (
+											pets.map((pet) => (
+												<div
+													key={pet.id}
+													className="rounded-xl border bg-white p-6 shadow-sm hover:shadow-md transition-shadow"
+												>
+													<div className="flex items-start justify-between mb-4">
+														<div className="flex-1">
+															<h4 className="font-semibold text-lg text-gray-900">
+																{pet.name}
+															</h4>
+															<p className="text-sm text-gray-500 mt-1">
+																{pet.species}
+																{pet.breed && ` • ${pet.breed}`}
 															</p>
+														</div>
+														<div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-50">
+															<PawPrint className="h-5 w-5 text-gray-400" />
+														</div>
+													</div>
+													<div className="space-y-2">
+														{pet.age !== undefined && (
+															<div className="flex items-center justify-between text-sm">
+																<span className="text-gray-600">Age</span>
+																<span className="font-medium text-gray-900">{pet.age} years</span>
+															</div>
 														)}
-														{user.address && (
-															<p className="mt-1 text-sm text-gray-500">
-																Address: {user.address}
+														{pet.weight_kg !== undefined && (
+															<div className="flex items-center justify-between text-sm">
+																<span className="text-gray-600">Weight</span>
+																<span className="font-medium text-gray-900">{pet.weight_kg} kg</span>
+															</div>
+														)}
+														<div className="pt-2 border-t">
+															<p className="text-xs text-gray-500">
+																Owner ID: <span className="font-mono">{pet.owner_id}</span>
 															</p>
-														)}
+														</div>
 													</div>
 												</div>
-											</li>
-										))}
-									</ul>
+											))
+										)}
+									</div>
 								)}
-							</div>
-						)}
 
-						{pagination.total_pages > 1 && (
-							<Pagination
-								currentPage={pagination.page}
-								totalPages={pagination.total_pages}
-								onPageChange={handlePageChange}
-							/>
+								{activeTab === "users" && (
+									<div className="space-y-4">
+										{users.length === 0 ? (
+											<div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-300 bg-white p-16">
+												<div className="flex h-20 w-20 items-center justify-center rounded-full bg-gray-100">
+													<Users className="h-10 w-10 text-gray-400" />
+												</div>
+												<h3 className="mt-4 text-lg font-semibold text-gray-900">No pet owners found</h3>
+												<p className="mt-2 text-sm text-gray-500">
+													Pet owner records will appear here
+												</p>
+											</div>
+										) : (
+											users.map((user) => (
+												<div
+													key={user.id}
+													className="rounded-xl border bg-white p-6 shadow-sm hover:shadow-md transition-shadow"
+												>
+													<div className="flex items-start gap-4">
+														<div className="flex h-12 w-12 items-center justify-center rounded-full bg-gray-100">
+															<Users className="h-6 w-6 text-gray-400" />
+														</div>
+														<div className="flex-1">
+															<h4 className="text-lg font-semibold text-gray-900">
+																{user.name}
+															</h4>
+															<p className="text-sm text-gray-600 mt-1">
+																{user.email}
+															</p>
+															<div className="mt-3 space-y-1">
+																{user.phone && (
+																	<p className="text-sm text-gray-500">
+																		Phone: <span className="text-gray-700">{user.phone}</span>
+																	</p>
+																)}
+																{user.address && (
+																	<p className="text-sm text-gray-500">
+																		Address: <span className="text-gray-700">{user.address}</span>
+																	</p>
+																)}
+															</div>
+														</div>
+													</div>
+												</div>
+											))
+										)}
+									</div>
+								)}
+
+								{pagination.total_pages > 1 && (
+									<div className="mt-8">
+										<Pagination
+											currentPage={pagination.page}
+											totalPages={pagination.total_pages}
+											onPageChange={handlePageChange}
+										/>
+									</div>
+								)}
+							</>
 						)}
-					</>
-				)}
-			</main>
+					</div>
+				</main>
+			</div>
 		</div>
 	);
 }

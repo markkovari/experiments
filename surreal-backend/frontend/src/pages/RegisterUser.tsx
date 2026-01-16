@@ -1,6 +1,10 @@
+import { ArrowLeft, ArrowRight, User } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
-import { useAuth } from "../contexts/AuthContext";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useAuth } from "@/contexts/AuthContext";
 
 export function RegisterUser() {
 	const [email, setEmail] = useState("");
@@ -34,125 +38,133 @@ export function RegisterUser() {
 	};
 
 	return (
-		<div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-			<div className="max-w-md w-full space-y-8">
-				<div>
-					<h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-						Register as Pet Owner
-					</h2>
+		<div className="flex min-h-screen items-center justify-center bg-gray-50 p-6">
+			<div className="w-full max-w-lg space-y-8">
+				{/* Header */}
+				<div className="text-center">
+					<div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary mb-4">
+						<User className="h-6 w-6 text-primary-foreground" />
+					</div>
+					<h1 className="text-3xl font-bold text-gray-900">Create account</h1>
+					<p className="mt-2 text-sm text-gray-600">
+						Register as a pet owner to manage your pets' health
+					</p>
 				</div>
-				<form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-					{error && (
-						<div className="rounded-md bg-red-50 p-4">
-							<p className="text-sm text-red-800">{error}</p>
+
+				{/* Form Card */}
+				<div className="rounded-xl border bg-white p-8 shadow-sm">
+					<form onSubmit={handleSubmit} className="space-y-6">
+						{error && (
+							<div className="rounded-lg bg-red-50 border border-red-200 p-3">
+								<p className="text-sm text-red-600">{error}</p>
+							</div>
+						)}
+
+						<div className="grid md:grid-cols-2 gap-6">
+							<div className="space-y-2">
+								<Label htmlFor="name" className="text-sm font-medium text-gray-900">
+									Full Name
+								</Label>
+								<Input
+									id="name"
+									name="name"
+									type="text"
+									required
+									className="h-11"
+									placeholder="John Doe"
+									value={name}
+									onChange={(e) => setName(e.target.value)}
+								/>
+							</div>
+
+							<div className="space-y-2">
+								<Label htmlFor="email" className="text-sm font-medium text-gray-900">
+									Email
+								</Label>
+								<Input
+									id="email"
+									name="email"
+									type="email"
+									required
+									className="h-11"
+									placeholder="you@example.com"
+									value={email}
+									onChange={(e) => setEmail(e.target.value)}
+								/>
+							</div>
 						</div>
-					)}
-					<div className="space-y-4">
-						<div>
-							<label
-								htmlFor="name"
-								className="block text-sm font-medium text-gray-700"
-							>
-								Full Name *
-							</label>
-							<input
-								id="name"
-								name="name"
-								type="text"
-								required
-								className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-								value={name}
-								onChange={(e) => setName(e.target.value)}
-							/>
+
+						<div className="grid md:grid-cols-2 gap-6">
+							<div className="space-y-2">
+								<Label htmlFor="password" className="text-sm font-medium text-gray-900">
+									Password
+								</Label>
+								<Input
+									id="password"
+									name="password"
+									type="password"
+									required
+									className="h-11"
+									placeholder="••••••••"
+									value={password}
+									onChange={(e) => setPassword(e.target.value)}
+								/>
+							</div>
+
+							<div className="space-y-2">
+								<Label htmlFor="phone" className="text-sm font-medium text-gray-900">
+									Phone
+								</Label>
+								<Input
+									id="phone"
+									name="phone"
+									type="tel"
+									required
+									className="h-11"
+									placeholder="+1 234 567 890"
+									value={phone}
+									onChange={(e) => setPhone(e.target.value)}
+								/>
+							</div>
 						</div>
-						<div>
-							<label
-								htmlFor="email"
-								className="block text-sm font-medium text-gray-700"
-							>
-								Email *
-							</label>
-							<input
-								id="email"
-								name="email"
-								type="email"
-								required
-								className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-								value={email}
-								onChange={(e) => setEmail(e.target.value)}
-							/>
-						</div>
-						<div>
-							<label
-								htmlFor="password"
-								className="block text-sm font-medium text-gray-700"
-							>
-								Password *
-							</label>
-							<input
-								id="password"
-								name="password"
-								type="password"
-								required
-								className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-								value={password}
-								onChange={(e) => setPassword(e.target.value)}
-							/>
-						</div>
-						<div>
-							<label
-								htmlFor="phone"
-								className="block text-sm font-medium text-gray-700"
-							>
-								Phone
-							</label>
-							<input
-								id="phone"
-								name="phone"
-								type="tel"
-								className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-								value={phone}
-								onChange={(e) => setPhone(e.target.value)}
-							/>
-						</div>
-						<div>
-							<label
-								htmlFor="address"
-								className="block text-sm font-medium text-gray-700"
-							>
+
+						<div className="space-y-2">
+							<Label htmlFor="address" className="text-sm font-medium text-gray-900">
 								Address
-							</label>
-							<textarea
+							</Label>
+							<Input
 								id="address"
 								name="address"
-								rows={3}
-								className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+								type="text"
+								required
+								className="h-11"
+								placeholder="123 Main St, City, State"
 								value={address}
 								onChange={(e) => setAddress(e.target.value)}
 							/>
 						</div>
-					</div>
 
-					<div>
-						<button
+						<Button
 							type="submit"
 							disabled={loading}
-							className="w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+							className="w-full h-11 gap-2"
 						>
-							{loading ? "Registering..." : "Register"}
-						</button>
-					</div>
+							{loading ? "Creating account..." : "Create account"}
+							<ArrowRight className="h-4 w-4" />
+						</Button>
+					</form>
+				</div>
 
-					<div className="text-center text-sm">
-						Already have an account?{" "}
-						<Link
-							to="/login"
-							className="font-medium text-indigo-600 hover:text-indigo-500"
-						>
-							Sign in
-						</Link>
-					</div>
-				</form>
+				{/* Footer */}
+				<div className="text-center">
+					<Link
+						to="/login"
+						className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+					>
+						<ArrowLeft className="w-4 h-4" />
+						Back to login
+					</Link>
+				</div>
 			</div>
 		</div>
 	);

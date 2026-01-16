@@ -1,6 +1,10 @@
+import { ArrowRight, Heart } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
-import { useAuth } from "../contexts/AuthContext";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useAuth } from "@/contexts/AuthContext";
 
 export function Login() {
 	const [email, setEmail] = useState("");
@@ -31,81 +35,94 @@ export function Login() {
 	};
 
 	return (
-		<div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-			<div className="max-w-md w-full space-y-8">
-				<div>
-					<h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-						Sign in to your account
-					</h2>
+		<div className="flex min-h-screen items-center justify-center bg-gray-50 p-6">
+			<div className="w-full max-w-md space-y-8">
+				{/* Logo and Header */}
+				<div className="text-center">
+					<div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary mb-4">
+						<Heart className="h-6 w-6 text-primary-foreground" />
+					</div>
+					<h1 className="text-3xl font-bold text-gray-900">Welcome back</h1>
+					<p className="mt-2 text-sm text-gray-600">
+						Sign in to your PetCare account
+					</p>
 				</div>
-				<form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-					{error && (
-						<div className="rounded-md bg-red-50 p-4">
-							<p className="text-sm text-red-800">{error}</p>
-						</div>
-					)}
-					<div className="rounded-md shadow-sm -space-y-px">
-						<div>
-							<label htmlFor="email" className="sr-only">
+
+				{/* Form Card */}
+				<div className="rounded-xl border bg-white p-8 shadow-sm">
+					<form onSubmit={handleSubmit} className="space-y-6">
+						{error && (
+							<div className="rounded-lg bg-red-50 border border-red-200 p-3">
+								<p className="text-sm text-red-600">{error}</p>
+							</div>
+						)}
+
+						<div className="space-y-2">
+							<Label htmlFor="email" className="text-sm font-medium text-gray-900">
 								Email address
-							</label>
-							<input
+							</Label>
+							<Input
 								id="email"
 								name="email"
 								type="email"
+								autoComplete="email"
 								required
-								className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
-								placeholder="Email address"
+								className="h-11"
+								placeholder="you@example.com"
 								value={email}
 								onChange={(e) => setEmail(e.target.value)}
 							/>
 						</div>
-						<div>
-							<label htmlFor="password" className="sr-only">
+
+						<div className="space-y-2">
+							<Label htmlFor="password" className="text-sm font-medium text-gray-900">
 								Password
-							</label>
-							<input
+							</Label>
+							<Input
 								id="password"
 								name="password"
 								type="password"
+								autoComplete="current-password"
 								required
-								className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
-								placeholder="Password"
+								className="h-11"
+								placeholder="••••••••"
 								value={password}
 								onChange={(e) => setPassword(e.target.value)}
 							/>
 						</div>
-					</div>
 
-					<div>
-						<button
+						<Button
 							type="submit"
 							disabled={loading}
-							className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+							className="w-full h-11 gap-2"
 						>
 							{loading ? "Signing in..." : "Sign in"}
-						</button>
-					</div>
+							<ArrowRight className="h-4 w-4" />
+						</Button>
+					</form>
+				</div>
 
-					<div className="flex items-center justify-between">
-						<div className="text-sm">
-							<Link
-								to="/register/user"
-								className="font-medium text-indigo-600 hover:text-indigo-500"
-							>
-								Register as User
-							</Link>
-						</div>
-						<div className="text-sm">
-							<Link
-								to="/register/doctor"
-								className="font-medium text-indigo-600 hover:text-indigo-500"
-							>
-								Register as Doctor
-							</Link>
-						</div>
+				{/* Footer Links */}
+				<div className="space-y-4 text-center text-sm">
+					<div className="flex items-center justify-center gap-1">
+						<span className="text-gray-600">Don't have an account?</span>
+						<Link
+							to="/register/user"
+							className="font-medium text-primary hover:text-primary/80"
+						>
+							Sign up as pet owner
+						</Link>
 					</div>
-				</form>
+					<div className="flex items-center justify-center gap-1">
+						<span className="text-gray-600">Are you a veterinarian?</span>
+						<Link
+							to="/register/doctor"
+							className="font-medium text-primary hover:text-primary/80"
+						>
+							Register here
+						</Link>
+					</div>
+				</div>
 			</div>
 		</div>
 	);
