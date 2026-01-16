@@ -1,14 +1,14 @@
-pub mod user;
-pub mod pet;
-pub mod doctor;
-pub mod check;
 pub mod auth;
+pub mod check;
+pub mod doctor;
+pub mod pet;
+pub mod user;
 
-pub use user::User;
-pub use pet::{Pet, PetSpecies};
-pub use doctor::{Doctor, Specialization};
-pub use check::{HealthCheck, CheckStatus};
 pub use auth::{
-    AuthUser, UserRole, LoginCredentials, RegisterUserRequest, RegisterDoctorRequest,
-    AuthToken, AuthResponse, UserInfo, Claims,
+    AuthResponse, AuthToken, AuthUser, Claims, LoginCredentials, RegisterDoctorRequest,
+    RegisterUserRequest, UserInfo, UserRole,
 };
+pub use check::{CheckStatus, HealthCheck};
+pub use doctor::{Doctor, Specialization};
+pub use pet::{Pet, PetSpecies};
+pub use user::User;

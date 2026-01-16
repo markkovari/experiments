@@ -51,16 +51,16 @@ impl AuthRepository {
 
     /// Update password
     pub async fn update_password(&self, id: &str, new_password_hash: String) -> Result<bool> {
-        let id_owned = id.to_string();
-        let mut result = self
+        let updated: Option<AuthUser> = self
             .db
             .client
-            .query("UPDATE auth_users SET password_hash = $password_hash, updated_at = time::now() WHERE id = $id")
-            .bind(("id", id_owned))
-            .bind(("password_hash", new_password_hash))
+            .update((TABLE, id))
+            .merge(serde_json::json!({
+                "password_hash": new_password_hash,
+                "updated_at": surrealdb::sql::Datetime::default()
+            }))
             .await?;
 
-        let updated: Option<AuthUser> = result.take(0)?;
         Ok(updated.is_some())
     }
 }
@@ -95,9 +95,10 @@ impl Repository<AuthUser> for AuthRepository {
     }
 
     async fn update(&self, auth_user: &AuthUser) -> Result<AuthUser> {
-        let id = auth_user.id.as_ref().ok_or_else(|| {
-            DbError::Other("Auth user ID required for update".to_string())
-        })?;
+        let id = auth_user
+            .id
+            .as_ref()
+            .ok_or_else(|| DbError::Other("Auth user ID required for update".to_string()))?;
 
         let updated: Option<AuthUser> = self
             .db
@@ -190,10 +191,7 @@ mod tests {
 
         repo.create(&auth_user).await.unwrap();
 
-        let found = repo
-            .find_by_reference_id("doctors:abc123")
-            .await
-            .unwrap();
+        let found = repo.find_by_reference_id("doctors:abc123").await.unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().reference_id, "doctors:abc123");
     }
@@ -216,7 +214,10 @@ mod tests {
         let id = created.id.unwrap();
 
         let new_password_hash = hash_password("new_password").unwrap();
-        let updated = repo.update_password(&id, new_password_hash.clone()).await.unwrap();
+        let updated = repo
+            .update_password(&id, new_password_hash.clone())
+            .await
+            .unwrap();
         assert!(updated);
 
         let found = repo.find_by_id(&id).await.unwrap().unwrap();

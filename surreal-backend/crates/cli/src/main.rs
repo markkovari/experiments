@@ -41,10 +41,14 @@ enum Commands {
 }
 
 async fn connect_database() -> Result<Database> {
-    let database_url = env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "rocksdb://./data/surrealdb".to_string());
+    let database_url =
+        env::var("DATABASE_URL").unwrap_or_else(|_| "rocksdb://./data/surrealdb".to_string());
 
-    let db = if database_url.starts_with("http://") || database_url.starts_with("https://") || database_url.starts_with("ws://") || database_url.starts_with("wss://") {
+    let db = if database_url.starts_with("http://")
+        || database_url.starts_with("https://")
+        || database_url.starts_with("ws://")
+        || database_url.starts_with("wss://")
+    {
         // Remote connection
         let username = env::var("DATABASE_USERNAME").unwrap_or_else(|_| "root".to_string());
         let password = env::var("DATABASE_PASSWORD").unwrap_or_else(|_| "root".to_string());
@@ -56,7 +60,9 @@ async fn connect_database() -> Result<Database> {
         Database::new_in_memory().await?
     } else {
         // Local RocksDB
-        let path = database_url.strip_prefix("rocksdb://").unwrap_or(&database_url);
+        let path = database_url
+            .strip_prefix("rocksdb://")
+            .unwrap_or(&database_url);
         info!("Using local RocksDB database: {}", path);
         Database::new(path).await?
     };

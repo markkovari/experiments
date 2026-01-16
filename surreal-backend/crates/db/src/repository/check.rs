@@ -126,10 +126,8 @@ impl CheckRepository {
 #[async_trait]
 impl Repository<HealthCheck> for CheckRepository {
     async fn create(&self, check: &HealthCheck) -> Result<HealthCheck> {
-        let created: Option<HealthCheck> = self.db.client
-            .create(TABLE)
-            .content(check.clone())
-            .await?;
+        let created: Option<HealthCheck> =
+            self.db.client.create(TABLE).content(check.clone()).await?;
 
         created.ok_or_else(|| DbError::Other("Failed to create health check".to_string()))
     }
@@ -143,17 +141,19 @@ impl Repository<HealthCheck> for CheckRepository {
     }
 
     async fn update(&self, check: &HealthCheck) -> Result<HealthCheck> {
-        let id = check.id.as_ref()
+        let id = check
+            .id
+            .as_ref()
             .ok_or_else(|| DbError::Other("Health check ID required for update".to_string()))?;
 
-        let updated: Option<HealthCheck> = self.db.client
+        let updated: Option<HealthCheck> = self
+            .db
+            .client
             .update((TABLE, id.as_str()))
             .content(check.clone())
             .await?;
 
-        updated.ok_or_else(|| {
-            DbError::NotFound(format!("Health check {} not found", id))
-        })
+        updated.ok_or_else(|| DbError::NotFound(format!("Health check {} not found", id)))
     }
 
     async fn delete(&self, id: &str) -> Result<bool> {
@@ -161,7 +161,10 @@ impl Repository<HealthCheck> for CheckRepository {
         Ok(deleted.is_some())
     }
 
-    async fn find_paginated(&self, params: &PaginationParams) -> Result<PaginatedResponse<HealthCheck>> {
+    async fn find_paginated(
+        &self,
+        params: &PaginationParams,
+    ) -> Result<PaginatedResponse<HealthCheck>> {
         let offset = params.offset();
         let limit = params.limit();
 
@@ -179,7 +182,9 @@ impl Repository<HealthCheck> for CheckRepository {
         let mut result = self
             .db
             .client
-            .query("SELECT * FROM health_checks ORDER BY scheduled_at DESC LIMIT $limit START $offset")
+            .query(
+                "SELECT * FROM health_checks ORDER BY scheduled_at DESC LIMIT $limit START $offset",
+            )
             .bind(("limit", limit))
             .bind(("offset", offset))
             .await?;
@@ -224,8 +229,14 @@ mod tests {
         let pet_id = "pets:test789".to_string();
         let doctor_id = "doctors:test101".to_string();
 
-        let check1 = HealthCheck::new(pet_id.clone(), doctor_id.clone(), Utc::now() + Duration::hours(1)).unwrap();
-        let check2 = HealthCheck::new(pet_id.clone(), doctor_id, Utc::now() + Duration::hours(2)).unwrap();
+        let check1 = HealthCheck::new(
+            pet_id.clone(),
+            doctor_id.clone(),
+            Utc::now() + Duration::hours(1),
+        )
+        .unwrap();
+        let check2 =
+            HealthCheck::new(pet_id.clone(), doctor_id, Utc::now() + Duration::hours(2)).unwrap();
 
         repo.create(&check1).await.unwrap();
         repo.create(&check2).await.unwrap();

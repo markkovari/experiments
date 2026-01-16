@@ -1,7 +1,5 @@
 use chrono::{Duration, Utc};
-use surreal_core::{
-    CheckStatus, Doctor, HealthCheck, Pet, PetSpecies, Specialization, User,
-};
+use surreal_core::{CheckStatus, Doctor, HealthCheck, Pet, PetSpecies, Specialization, User};
 use surreal_db::{
     CheckRepository, Database, DoctorRepository, PetRepository, Repository, UserRepository,
 };
@@ -302,7 +300,10 @@ async fn test_update_health_check_details() {
     started_check.add_notes("Patient arrived on time".to_string());
     let with_notes = check_repo.update(&started_check).await.unwrap();
     assert_eq!(with_notes.status, CheckStatus::InProgress);
-    assert_eq!(with_notes.notes, Some("Patient arrived on time".to_string()));
+    assert_eq!(
+        with_notes.notes,
+        Some("Patient arrived on time".to_string())
+    );
 
     // Test 3: Complete the check
     let mut completed_check = with_notes.clone();

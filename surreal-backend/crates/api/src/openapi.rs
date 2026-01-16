@@ -6,9 +6,7 @@ use crate::dto::{
     pet::{CreatePetRequest, UpdatePetRequest},
     user::{CreateUserRequest, UpdateUserRequest},
 };
-use surreal_core::{
-    CheckStatus, Doctor, HealthCheck, Pet, PetSpecies, Specialization, User,
-};
+use surreal_core::{CheckStatus, Doctor, HealthCheck, Pet, PetSpecies, Specialization, User};
 
 #[derive(OpenApi)]
 #[openapi(

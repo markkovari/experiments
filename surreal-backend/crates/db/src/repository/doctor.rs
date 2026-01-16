@@ -43,10 +43,7 @@ impl DoctorRepository {
 #[async_trait]
 impl Repository<Doctor> for DoctorRepository {
     async fn create(&self, doctor: &Doctor) -> Result<Doctor> {
-        let created: Option<Doctor> = self.db.client
-            .create(TABLE)
-            .content(doctor.clone())
-            .await?;
+        let created: Option<Doctor> = self.db.client.create(TABLE).content(doctor.clone()).await?;
 
         created.ok_or_else(|| DbError::Other("Failed to create doctor".to_string()))
     }
@@ -60,17 +57,19 @@ impl Repository<Doctor> for DoctorRepository {
     }
 
     async fn update(&self, doctor: &Doctor) -> Result<Doctor> {
-        let id = doctor.id.as_ref()
+        let id = doctor
+            .id
+            .as_ref()
             .ok_or_else(|| DbError::Other("Doctor ID required for update".to_string()))?;
 
-        let updated: Option<Doctor> = self.db.client
+        let updated: Option<Doctor> = self
+            .db
+            .client
             .update((TABLE, id.as_str()))
             .content(doctor.clone())
             .await?;
 
-        updated.ok_or_else(|| {
-            DbError::NotFound(format!("Doctor {} not found", id))
-        })
+        updated.ok_or_else(|| DbError::NotFound(format!("Doctor {} not found", id)))
     }
 
     async fn delete(&self, id: &str) -> Result<bool> {

@@ -67,10 +67,7 @@ impl PetRepository {
 #[async_trait]
 impl Repository<Pet> for PetRepository {
     async fn create(&self, pet: &Pet) -> Result<Pet> {
-        let created: Option<Pet> = self.db.client
-            .create(TABLE)
-            .content(pet.clone())
-            .await?;
+        let created: Option<Pet> = self.db.client.create(TABLE).content(pet.clone()).await?;
 
         created.ok_or_else(|| DbError::Other("Failed to create pet".to_string()))
     }
@@ -84,9 +81,14 @@ impl Repository<Pet> for PetRepository {
     }
 
     async fn update(&self, pet: &Pet) -> Result<Pet> {
-        let id = pet.id.as_ref().ok_or_else(|| DbError::Other("Pet ID is required for update".to_string()))?;
+        let id = pet
+            .id
+            .as_ref()
+            .ok_or_else(|| DbError::Other("Pet ID is required for update".to_string()))?;
 
-        let updated: Option<Pet> = self.db.client
+        let updated: Option<Pet> = self
+            .db
+            .client
             .update((TABLE, id.as_str()))
             .content(pet.clone())
             .await?;

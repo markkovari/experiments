@@ -32,7 +32,11 @@ impl MigrationRunner {
         info!("Applying schema definitions");
 
         for (index, definition) in SCHEMA_DEFINITIONS.iter().enumerate() {
-            info!("Applying schema definition {}/{}", index + 1, SCHEMA_DEFINITIONS.len());
+            info!(
+                "Applying schema definition {}/{}",
+                index + 1,
+                SCHEMA_DEFINITIONS.len()
+            );
             self.db.client.query(*definition).await?;
         }
 

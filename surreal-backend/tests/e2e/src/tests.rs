@@ -24,6 +24,7 @@ async fn setup_test_app() -> axum::Router {
     create_router(state)
 }
 
+#[allow(dead_code)]
 async fn register_and_login_user(app: &axum::Router) -> String {
     // Register user
     let register_body = json!({
@@ -33,7 +34,7 @@ async fn register_and_login_user(app: &axum::Router) -> String {
         "phone": "+1234567890"
     });
 
-    let _ = app
+    let response = app
         .clone()
         .oneshot(
             Request::builder()
@@ -46,30 +47,20 @@ async fn register_and_login_user(app: &axum::Router) -> String {
         .await
         .unwrap();
 
-    // Login to get token
-    let login_body = json!({
-        "email": "testuser@example.com",
-        "password": "password123"
-    });
-
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/auth/login")
-                .header("content-type", "application/json")
-                .body(Body::from(login_body.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::CREATED,
+        "User registration failed"
+    );
 
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
     let auth_response: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    auth_response["token"]["access_token"].as_str().unwrap().to_string()
+    auth_response["token"]["access_token"]
+        .as_str()
+        .expect("Failed to get access_token from registration response")
+        .to_string()
 }
 
 async fn register_and_login_doctor(app: &axum::Router) -> String {
@@ -79,12 +70,12 @@ async fn register_and_login_doctor(app: &axum::Router) -> String {
         "password": "password123",
         "name": "Dr. Smith",
         "phone": "+1234567890",
-        "specialization": "general",
+        "specialization": "GeneralPractice",
         "license_number": "LIC123456",
         "years_experience": 10
     });
 
-    let _ = app
+    let response = app
         .clone()
         .oneshot(
             Request::builder()
@@ -97,30 +88,20 @@ async fn register_and_login_doctor(app: &axum::Router) -> String {
         .await
         .unwrap();
 
-    // Login to get token
-    let login_body = json!({
-        "email": "doctor@example.com",
-        "password": "password123"
-    });
-
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/auth/login")
-                .header("content-type", "application/json")
-                .body(Body::from(login_body.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::CREATED,
+        "Doctor registration failed"
+    );
 
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
     let auth_response: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    auth_response["token"]["access_token"].as_str().unwrap().to_string()
+    auth_response["token"]["access_token"]
+        .as_str()
+        .expect("Failed to get access_token from registration response")
+        .to_string()
 }
 
 #[tokio::test]
@@ -143,7 +124,7 @@ async fn test_health_check() {
 #[tokio::test]
 async fn test_user_crud() {
     let app = setup_test_app().await;
-    let token = register_and_login_doctor(&app).await;  // Use doctor token for CRUD operations
+    let token = register_and_login_doctor(&app).await; // Use doctor token for CRUD operations
 
     // Create user
     let create_body = json!({
@@ -243,8 +224,8 @@ async fn test_user_crud() {
 
 #[tokio::test]
 async fn test_pet_crud() {
-    
     let app = setup_test_app().await;
+    let token = register_and_login_doctor(&app).await;
 
     // First create a user (owner)
     let create_user_body = json!({
@@ -259,6 +240,7 @@ async fn test_pet_crud() {
                 .method("POST")
                 .uri("/users")
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(create_user_body.to_string()))
                 .unwrap(),
         )
@@ -287,6 +269,7 @@ async fn test_pet_crud() {
                 .method("POST")
                 .uri("/pets")
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(create_pet_body.to_string()))
                 .unwrap(),
         )
@@ -307,6 +290,7 @@ async fn test_pet_crud() {
         .oneshot(
             Request::builder()
                 .uri(format!("/pets/{}", pet_id))
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -321,6 +305,7 @@ async fn test_pet_crud() {
         .oneshot(
             Request::builder()
                 .uri(format!("/users/{}/pets", owner_id))
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -340,6 +325,7 @@ async fn test_pet_crud() {
                 .method("PUT")
                 .uri(format!("/pets/{}", pet_id))
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(update_body.to_string()))
                 .unwrap(),
         )
@@ -351,8 +337,8 @@ async fn test_pet_crud() {
 
 #[tokio::test]
 async fn test_doctor_crud() {
-    
     let app = setup_test_app().await;
+    let token = register_and_login_doctor(&app).await;
 
     // Create doctor
     let create_body = json!({
@@ -371,6 +357,7 @@ async fn test_doctor_crud() {
                 .method("POST")
                 .uri("/doctors")
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(create_body.to_string()))
                 .unwrap(),
         )
@@ -391,6 +378,7 @@ async fn test_doctor_crud() {
         .oneshot(
             Request::builder()
                 .uri("/doctors/available")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -410,6 +398,7 @@ async fn test_doctor_crud() {
                 .method("PUT")
                 .uri(format!("/doctors/{}", doctor_id))
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(update_body.to_string()))
                 .unwrap(),
         )
@@ -421,8 +410,8 @@ async fn test_doctor_crud() {
 
 #[tokio::test]
 async fn test_health_check_workflow() {
-    
     let app = setup_test_app().await;
+    let token = register_and_login_doctor(&app).await;
 
     // Create user
     let user_body = json!({
@@ -437,6 +426,7 @@ async fn test_health_check_workflow() {
                 .method("POST")
                 .uri("/users")
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(user_body.to_string()))
                 .unwrap(),
         )
@@ -463,6 +453,7 @@ async fn test_health_check_workflow() {
                 .method("POST")
                 .uri("/pets")
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(pet_body.to_string()))
                 .unwrap(),
         )
@@ -492,6 +483,7 @@ async fn test_health_check_workflow() {
                 .method("POST")
                 .uri("/doctors")
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(doctor_body.to_string()))
                 .unwrap(),
         )
@@ -519,6 +511,7 @@ async fn test_health_check_workflow() {
                 .method("POST")
                 .uri("/checks")
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(check_body.to_string()))
                 .unwrap(),
         )
@@ -540,6 +533,7 @@ async fn test_health_check_workflow() {
             Request::builder()
                 .method("PATCH")
                 .uri(format!("/checks/{}/start", check_id))
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -561,6 +555,7 @@ async fn test_health_check_workflow() {
                 .method("PATCH")
                 .uri(format!("/checks/{}/complete", check_id))
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(complete_body.to_string()))
                 .unwrap(),
         )
@@ -572,13 +567,14 @@ async fn test_health_check_workflow() {
 
 #[tokio::test]
 async fn test_not_found() {
-    
     let app = setup_test_app().await;
+    let token = register_and_login_doctor(&app).await;
 
     let response = app
         .oneshot(
             Request::builder()
                 .uri("/users/00000000-0000-0000-0000-000000000000")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -591,6 +587,7 @@ async fn test_not_found() {
 #[tokio::test]
 async fn test_update_health_check_details() {
     let app = setup_test_app().await;
+    let token = register_and_login_doctor(&app).await;
 
     // Create user
     let user_body = json!({
@@ -605,6 +602,7 @@ async fn test_update_health_check_details() {
                 .method("POST")
                 .uri("/users")
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(user_body.to_string()))
                 .unwrap(),
         )
@@ -631,6 +629,7 @@ async fn test_update_health_check_details() {
                 .method("POST")
                 .uri("/pets")
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(pet_body.to_string()))
                 .unwrap(),
         )
@@ -660,6 +659,7 @@ async fn test_update_health_check_details() {
                 .method("POST")
                 .uri("/doctors")
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(doctor_body.to_string()))
                 .unwrap(),
         )
@@ -687,6 +687,7 @@ async fn test_update_health_check_details() {
                 .method("POST")
                 .uri("/checks")
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(check_body.to_string()))
                 .unwrap(),
         )
@@ -714,6 +715,7 @@ async fn test_update_health_check_details() {
                 .method("PUT")
                 .uri(format!("/checks/{}", check_id))
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(update_body.to_string()))
                 .unwrap(),
         )
@@ -729,6 +731,7 @@ async fn test_update_health_check_details() {
             Request::builder()
                 .method("PATCH")
                 .uri(format!("/checks/{}/start", check_id))
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -749,6 +752,7 @@ async fn test_update_health_check_details() {
                 .method("PUT")
                 .uri(format!("/checks/{}", check_id))
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(update_notes_body.to_string()))
                 .unwrap(),
         )
@@ -771,6 +775,7 @@ async fn test_update_health_check_details() {
                 .method("PATCH")
                 .uri(format!("/checks/{}/complete", check_id))
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(complete_body.to_string()))
                 .unwrap(),
         )
@@ -792,6 +797,7 @@ async fn test_update_health_check_details() {
                 .method("PUT")
                 .uri(format!("/checks/{}", check_id))
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(update_completed_body.to_string()))
                 .unwrap(),
         )
@@ -821,6 +827,7 @@ async fn test_update_health_check_details() {
                 .method("PUT")
                 .uri(format!("/checks/{}", check_id))
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", token))
                 .body(Body::from(reschedule_body.to_string()))
                 .unwrap(),
         )

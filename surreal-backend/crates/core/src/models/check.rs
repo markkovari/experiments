@@ -196,9 +196,7 @@ mod tests {
 
         let mut check = HealthCheck::new(pet_id, doctor_id, scheduled).unwrap();
         check.start().unwrap();
-        check
-            .complete("Diagnosis".to_string(), None, None)
-            .unwrap();
+        check.complete("Diagnosis".to_string(), None, None).unwrap();
 
         let result = check.cancel();
         assert!(result.is_err());

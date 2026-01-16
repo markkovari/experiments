@@ -1,4 +1,6 @@
-use surreal_core::{hash_password, verify_password, generate_token, verify_token, AuthUser, UserRole};
+use surreal_core::{
+    generate_token, hash_password, verify_password, verify_token, AuthUser, UserRole,
+};
 use surreal_db::{AuthRepository, Database, Repository};
 
 #[tokio::test]
@@ -132,7 +134,11 @@ async fn test_login_flow() {
     let created = repo.create(&auth_user).await.unwrap();
 
     // Simulate login - find by email
-    let found_user = repo.find_by_email("login@example.com").await.unwrap().unwrap();
+    let found_user = repo
+        .find_by_email("login@example.com")
+        .await
+        .unwrap()
+        .unwrap();
 
     // Verify password
     assert!(verify_password(password, &found_user.password_hash).unwrap());

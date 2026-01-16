@@ -65,7 +65,9 @@ impl User {
 
     fn validate_name(name: &str) -> Result<()> {
         if name.trim().is_empty() {
-            return Err(CoreError::ValidationError("Name cannot be empty".to_string()));
+            return Err(CoreError::ValidationError(
+                "Name cannot be empty".to_string(),
+            ));
         }
         Ok(())
     }
