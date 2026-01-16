@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -32,6 +33,7 @@ interface HealthCheck {
   notes: string | null
   diagnosis: string | null
   treatment: string | null
+  cost: number | null
 }
 
 interface Doctor {
@@ -39,174 +41,220 @@ interface Doctor {
   name: string
 }
 
+// API functions
+const fetchUsers = async (): Promise<User[]> => {
+  const res = await fetch(`${API_URL}/users`)
+  if (!res.ok) throw new Error('Failed to fetch users')
+  return res.json()
+}
+
+const fetchPets = async (): Promise<Pet[]> => {
+  const res = await fetch(`${API_URL}/pets`)
+  if (!res.ok) throw new Error('Failed to fetch pets')
+  return res.json()
+}
+
+const fetchChecks = async (): Promise<HealthCheck[]> => {
+  const res = await fetch(`${API_URL}/checks`)
+  if (!res.ok) throw new Error('Failed to fetch checks')
+  return res.json()
+}
+
+const fetchDoctors = async (): Promise<Doctor[]> => {
+  const res = await fetch(`${API_URL}/doctors`)
+  if (!res.ok) throw new Error('Failed to fetch doctors')
+  return res.json()
+}
+
 function App() {
-  const [users, setUsers] = useState<User[]>([])
-  const [pets, setPets] = useState<Pet[]>([])
-  const [checks, setChecks] = useState<HealthCheck[]>([])
-  const [doctors, setDoctors] = useState<Doctor[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const queryClient = useQueryClient()
   const [showUserForm, setShowUserForm] = useState(false)
   const [showPetForm, setShowPetForm] = useState<Record<string, boolean>>({})
   const [showCheckForm, setShowCheckForm] = useState<Record<string, boolean>>({})
   const [showEditCheckForm, setShowEditCheckForm] = useState<Record<string, boolean>>({})
 
-  const fetchData = async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const [usersRes, petsRes, checksRes, doctorsRes] = await Promise.all([
-        fetch(`${API_URL}/users`),
-        fetch(`${API_URL}/pets`),
-        fetch(`${API_URL}/checks`),
-        fetch(`${API_URL}/doctors`)
-      ])
+  // Queries
+  const { data: users = [], isLoading: usersLoading, error: usersError } = useQuery({
+    queryKey: ['users'],
+    queryFn: fetchUsers,
+  })
 
-      if (!usersRes.ok || !petsRes.ok || !checksRes.ok || !doctorsRes.ok) {
-        throw new Error('Failed to fetch data')
-      }
+  const { data: pets = [], isLoading: petsLoading } = useQuery({
+    queryKey: ['pets'],
+    queryFn: fetchPets,
+  })
 
-      const [usersData, petsData, checksData, doctorsData] = await Promise.all([
-        usersRes.json(),
-        petsRes.json(),
-        checksRes.json(),
-        doctorsRes.json()
-      ])
+  const { data: checks = [], isLoading: checksLoading } = useQuery({
+    queryKey: ['checks'],
+    queryFn: fetchChecks,
+  })
 
-      setUsers(usersData)
-      setPets(petsData)
-      setChecks(checksData)
-      setDoctors(doctorsData)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to fetch data')
-    } finally {
-      setLoading(false)
-    }
-  }
+  const { data: doctors = [] } = useQuery({
+    queryKey: ['doctors'],
+    queryFn: fetchDoctors,
+  })
 
-  useEffect(() => {
-    fetchData()
-  }, [])
-
-  const createUser = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault()
-    const formData = new FormData(e.currentTarget)
-    const userData = {
-      name: formData.get('name') as string,
-      email: formData.get('email') as string,
-      phone: formData.get('phone') as string,
-      address: formData.get('address') as string,
-    }
-
-    try {
+  // Mutations
+  const createUserMutation = useMutation({
+    mutationFn: async (userData: Omit<User, 'id'>) => {
       const res = await fetch(`${API_URL}/users`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(userData)
       })
       if (!res.ok) throw new Error('Failed to create user')
+      return res.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] })
       setShowUserForm(false)
-      e.currentTarget.reset()
-      fetchData()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to create user')
-    }
-  }
+    },
+  })
 
-  const deleteUser = async (userId: string) => {
-    if (!confirm('Are you sure you want to delete this user? All their pets and health checks will remain but be orphaned.')) {
-      return
-    }
-
-    try {
-      const res = await fetch(`${API_URL}/users/${userId}`, {
-        method: 'DELETE'
-      })
+  const deleteUserMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      const res = await fetch(`${API_URL}/users/${userId}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Failed to delete user')
-      fetchData()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete user')
-    }
-  }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] })
+    },
+  })
 
-  const createPet = async (e: React.FormEvent<HTMLFormElement>, ownerId: string) => {
-    e.preventDefault()
-    const formData = new FormData(e.currentTarget)
-    const petData = {
-      owner_id: ownerId,
-      name: formData.get('petName') as string,
-      species: formData.get('species') as string,
-      breed: formData.get('breed') as string,
-      weight_kg: parseFloat(formData.get('weight') as string),
-    }
-
-    try {
+  const createPetMutation = useMutation({
+    mutationFn: async (petData: Omit<Pet, 'id'>) => {
       const res = await fetch(`${API_URL}/pets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(petData)
       })
       if (!res.ok) throw new Error('Failed to create pet')
-      e.currentTarget.reset()
-      fetchData()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to create pet')
-    }
-  }
+      return res.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pets'] })
+    },
+  })
 
-  const deletePet = async (petId: string, petName: string) => {
-    if (!confirm(`Are you sure you want to delete ${petName}? All their health checks will also be deleted.`)) {
-      return
-    }
-
-    try {
-      const res = await fetch(`${API_URL}/pets/${petId}`, {
-        method: 'DELETE'
-      })
+  const deletePetMutation = useMutation({
+    mutationFn: async (petId: string) => {
+      const res = await fetch(`${API_URL}/pets/${petId}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Failed to delete pet')
-      fetchData()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete pet')
-    }
-  }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pets'] })
+      queryClient.invalidateQueries({ queryKey: ['checks'] })
+    },
+  })
 
-  const createCheck = async (e: React.FormEvent<HTMLFormElement>, petId: string) => {
-    e.preventDefault()
-    const formData = new FormData(e.currentTarget)
-    const checkData = {
-      pet_id: petId,
-      doctor_id: formData.get('doctorId') as string,
-      scheduled_at: new Date(formData.get('scheduledAt') as string).toISOString(),
-    }
-
-    try {
+  const createCheckMutation = useMutation({
+    mutationFn: async (checkData: { pet_id: string; doctor_id: string; scheduled_at: string }) => {
       const res = await fetch(`${API_URL}/checks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(checkData)
       })
       if (!res.ok) throw new Error('Failed to create check')
-      e.currentTarget.reset()
-      fetchData()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to create check')
+      return res.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['checks'] })
+    },
+  })
+
+  const updateCheckMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Record<string, unknown> }) => {
+      const res = await fetch(`${API_URL}/checks/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      })
+      if (!res.ok) throw new Error('Failed to update check')
+      return res.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['checks'] })
+    },
+  })
+
+  const deleteCheckMutation = useMutation({
+    mutationFn: async (checkId: string) => {
+      const res = await fetch(`${API_URL}/checks/${checkId}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete check')
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['checks'] })
+    },
+  })
+
+  // Handlers
+  const createUser = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    const formData = new FormData(e.currentTarget)
+    const form = e.currentTarget
+    createUserMutation.mutate({
+      name: formData.get('name') as string,
+      email: formData.get('email') as string,
+      phone: formData.get('phone') as string,
+      address: formData.get('address') as string,
+    }, {
+      onSuccess: () => {
+        form.reset()
+      }
+    })
+  }
+
+  const deleteUser = async (userId: string) => {
+    if (!confirm('Are you sure you want to delete this user? All their pets and health checks will remain but be orphaned.')) {
+      return
     }
+    deleteUserMutation.mutate(userId)
+  }
+
+  const createPet = async (e: React.FormEvent<HTMLFormElement>, ownerId: string) => {
+    e.preventDefault()
+    const formData = new FormData(e.currentTarget)
+    const form = e.currentTarget
+    createPetMutation.mutate({
+      owner_id: ownerId,
+      name: formData.get('petName') as string,
+      species: formData.get('species') as string,
+      breed: formData.get('breed') as string,
+      weight_kg: parseFloat(formData.get('weight') as string),
+    }, {
+      onSuccess: () => {
+        form.reset()
+      }
+    })
+  }
+
+  const deletePet = async (petId: string, petName: string) => {
+    if (!confirm(`Are you sure you want to delete ${petName}? All their health checks will also be deleted.`)) {
+      return
+    }
+    deletePetMutation.mutate(petId)
+  }
+
+  const createCheck = async (e: React.FormEvent<HTMLFormElement>, petId: string) => {
+    e.preventDefault()
+    const formData = new FormData(e.currentTarget)
+    const form = e.currentTarget
+    createCheckMutation.mutate({
+      pet_id: petId,
+      doctor_id: formData.get('doctorId') as string,
+      scheduled_at: new Date(formData.get('scheduledAt') as string).toISOString(),
+    }, {
+      onSuccess: () => {
+        form.reset()
+      }
+    })
   }
 
   const deleteCheck = async (checkId: string) => {
     if (!confirm('Are you sure you want to delete this health check?')) {
       return
     }
-
-    try {
-      const res = await fetch(`${API_URL}/checks/${checkId}`, {
-        method: 'DELETE'
-      })
-      if (!res.ok) throw new Error('Failed to delete health check')
-      fetchData()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete health check')
-    }
+    deleteCheckMutation.mutate(checkId)
   }
 
   const updateCheck = async (e: React.FormEvent<HTMLFormElement>, checkId: string) => {
@@ -232,18 +280,8 @@ function App() {
     const cost = formData.get('cost') as string
     if (cost) updateData.cost = parseFloat(cost)
 
-    try {
-      const res = await fetch(`${API_URL}/checks/${checkId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updateData)
-      })
-      if (!res.ok) throw new Error('Failed to update health check')
-      setShowEditCheckForm({ ...showEditCheckForm, [checkId]: false })
-      fetchData()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to update health check')
-    }
+    updateCheckMutation.mutate({ id: checkId, data: updateData })
+    setShowEditCheckForm({ ...showEditCheckForm, [checkId]: false })
   }
 
   const getPetsByOwner = (ownerId: string) => pets.filter(pet => pet.owner_id === ownerId)
@@ -259,6 +297,9 @@ function App() {
     }
   }
 
+  const loading = usersLoading || petsLoading || checksLoading
+  const error = usersError
+
   return (
     <div className="min-h-screen bg-background p-8">
       <div className="max-w-7xl mx-auto">
@@ -273,7 +314,16 @@ function App() {
             <Button onClick={() => setShowUserForm(!showUserForm)}>
               {showUserForm ? 'Hide' : '+ New User'}
             </Button>
-            <Button onClick={fetchData} disabled={loading} variant="outline">
+            <Button
+              onClick={() => {
+                queryClient.invalidateQueries({ queryKey: ['users'] })
+                queryClient.invalidateQueries({ queryKey: ['pets'] })
+                queryClient.invalidateQueries({ queryKey: ['checks'] })
+                queryClient.invalidateQueries({ queryKey: ['doctors'] })
+              }}
+              disabled={loading}
+              variant="outline"
+            >
               {loading ? 'Loading...' : 'Refresh'}
             </Button>
           </div>
@@ -283,7 +333,7 @@ function App() {
           <Card className="mb-6 border-destructive">
             <CardHeader>
               <CardTitle className="text-destructive">Error</CardTitle>
-              <CardDescription>{error}</CardDescription>
+              <CardDescription>{error instanceof Error ? error.message : 'An error occurred'}</CardDescription>
             </CardHeader>
           </Card>
         )}
@@ -313,7 +363,9 @@ function App() {
                     <Input id="address" name="address" required />
                   </div>
                 </div>
-                <Button type="submit">Create User</Button>
+                <Button type="submit" disabled={createUserMutation.isPending}>
+                  {createUserMutation.isPending ? 'Creating...' : 'Create User'}
+                </Button>
               </form>
             </CardContent>
           </Card>
@@ -335,33 +387,28 @@ function App() {
                         <CardTitle className="text-2xl">{user.name}</CardTitle>
                         <CardDescription className="mt-2">
                           <div className="space-y-1">
-                            <p>📧 {user.email}</p>
-                            <p>📱 {user.phone}</p>
+                            <p>✉️ {user.email}</p>
+                            <p>📞 {user.phone}</p>
                             <p>🏠 {user.address}</p>
+                            <p className="text-xs font-mono">{user.id}</p>
                           </div>
                         </CardDescription>
                       </div>
-                      <div className="text-right space-y-2">
-                        <div>
-                          <p className="text-xs text-muted-foreground">User ID</p>
-                          <p className="text-xs font-mono">{user.id}</p>
-                        </div>
-                        <Button 
-                          variant="destructive" 
-                          size="sm"
-                          onClick={() => deleteUser(user.id)}
-                        >
-                          Delete User
-                        </Button>
-                      </div>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => deleteUser(user.id)}
+                        disabled={deleteUserMutation.isPending}
+                      >
+                        Delete User
+                      </Button>
                     </div>
                   </CardHeader>
-                  
                   <CardContent className="pt-6">
                     <div className="flex justify-between items-center mb-4">
-                      <h3 className="font-semibold text-lg">Pets ({userPets.length})</h3>
-                      <Button 
-                        size="sm" 
+                      <h3 className="text-lg font-semibold">Pets ({userPets.length})</h3>
+                      <Button
+                        size="sm"
                         variant="outline"
                         onClick={() => setShowPetForm({...showPetForm, [user.id]: !showPetForm[user.id]})}
                       >
@@ -370,9 +417,9 @@ function App() {
                     </div>
 
                     {showPetForm[user.id] && (
-                      <div className="border rounded-lg p-4 mb-4 bg-accent/30">
+                      <div className="mb-4 p-4 border rounded-lg bg-muted/50">
                         <form onSubmit={(e) => createPet(e, user.id)} className="space-y-3">
-                          <div className="grid grid-cols-2 gap-3">
+                          <div className="grid grid-cols-3 gap-3">
                             <div>
                               <Label htmlFor={`petName-${user.id}`}>Pet Name</Label>
                               <Input id={`petName-${user.id}`} name="petName" required />
@@ -390,7 +437,9 @@ function App() {
                               <Input id={`weight-${user.id}`} name="weight" type="number" step="0.1" required />
                             </div>
                           </div>
-                          <Button type="submit" size="sm">Add Pet</Button>
+                          <Button type="submit" size="sm" disabled={createPetMutation.isPending}>
+                            {createPetMutation.isPending ? 'Adding...' : 'Add Pet'}
+                          </Button>
                         </form>
                       </div>
                     )}
@@ -399,14 +448,11 @@ function App() {
                       <p className="text-muted-foreground text-sm">No pets registered</p>
                     ) : (
                       <div className="space-y-4">
-                        {userPets.map((pet) => {
+                        {userPets.map(pet => {
                           const petChecks = getChecksByPet(pet.id)
                           return (
-                            <div
-                              key={pet.id}
-                              className="border rounded-lg p-4 space-y-3 hover:bg-accent/30 transition-colors"
-                            >
-                              <div className="flex justify-between items-start">
+                            <div key={pet.id} className="border rounded-lg p-4 bg-card">
+                              <div className="flex justify-between items-start mb-2">
                                 <div>
                                   <h4 className="font-semibold text-lg">🐾 {pet.name}</h4>
                                   <p className="text-sm text-muted-foreground">
@@ -415,17 +461,18 @@ function App() {
                                   <p className="text-xs text-muted-foreground font-mono mt-1">{pet.id}</p>
                                 </div>
                                 <div className="flex gap-2">
-                                  <Button 
-                                    size="sm" 
+                                  <Button
+                                    size="sm"
                                     variant="outline"
                                     onClick={() => setShowCheckForm({...showCheckForm, [pet.id]: !showCheckForm[pet.id]})}
                                   >
                                     {showCheckForm[pet.id] ? 'Cancel' : '+ Schedule Check'}
                                   </Button>
-                                  <Button 
-                                    size="sm" 
+                                  <Button
+                                    size="sm"
                                     variant="destructive"
                                     onClick={() => deletePet(pet.id, pet.name)}
+                                    disabled={deletePetMutation.isPending}
                                   >
                                     Delete
                                   </Button>
@@ -438,29 +485,31 @@ function App() {
                                     <div className="grid grid-cols-2 gap-3">
                                       <div>
                                         <Label htmlFor={`doctor-${pet.id}`}>Doctor</Label>
-                                        <select 
+                                        <select
                                           id={`doctor-${pet.id}`}
-                                          name="doctorId" 
+                                          name="doctorId"
                                           className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                                           required
                                         >
                                           <option value="">Select a doctor</option>
-                                          {doctors.map(doc => (
-                                            <option key={doc.id} value={doc.id}>{doc.name}</option>
+                                          {doctors.map(doctor => (
+                                            <option key={doctor.id} value={doctor.id}>{doctor.name}</option>
                                           ))}
                                         </select>
                                       </div>
                                       <div>
                                         <Label htmlFor={`scheduledAt-${pet.id}`}>Scheduled Date & Time</Label>
-                                        <Input 
+                                        <Input
                                           id={`scheduledAt-${pet.id}`}
-                                          name="scheduledAt" 
-                                          type="datetime-local" 
-                                          required 
+                                          name="scheduledAt"
+                                          type="datetime-local"
+                                          required
                                         />
                                       </div>
                                     </div>
-                                    <Button type="submit" size="sm">Schedule Check</Button>
+                                    <Button type="submit" size="sm" disabled={createCheckMutation.isPending}>
+                                      {createCheckMutation.isPending ? 'Scheduling...' : 'Schedule Check'}
+                                    </Button>
                                   </form>
                                 </div>
                               )}
@@ -538,8 +587,8 @@ function App() {
                                                 className="text-xs h-8"
                                               />
                                             </div>
-                                            <Button type="submit" size="sm" className="w-full">
-                                              Update Check
+                                            <Button type="submit" size="sm" className="w-full" disabled={updateCheckMutation.isPending}>
+                                              {updateCheckMutation.isPending ? 'Updating...' : 'Update Check'}
                                             </Button>
                                           </form>
                                         ) : (
@@ -566,6 +615,7 @@ function App() {
                                                     variant="ghost"
                                                     className="h-6 px-2 text-xs text-destructive hover:text-destructive"
                                                     onClick={() => deleteCheck(check.id)}
+                                                    disabled={deleteCheckMutation.isPending}
                                                   >
                                                     Delete
                                                   </Button>
@@ -579,6 +629,9 @@ function App() {
                                               )}
                                               {check.treatment && (
                                                 <p className="text-xs mt-1">💊 Treatment: {check.treatment}</p>
+                                              )}
+                                              {check.cost !== null && check.cost !== undefined && (
+                                                <p className="text-xs mt-1">💰 Cost: ${check.cost.toFixed(2)}</p>
                                               )}
                                               <p className="text-xs text-muted-foreground font-mono mt-1">
                                                 Check ID: {check.id}
