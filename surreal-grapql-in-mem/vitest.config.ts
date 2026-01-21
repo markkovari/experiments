@@ -6,6 +6,7 @@ export default defineConfig({
     environment: 'node',
     testTimeout: 60000,
     hookTimeout: 120000,
+    globalSetup: ['./tests/globalSetup.ts'],
     setupFiles: ['./tests/setup.ts'],
     include: ['tests/**/*.test.ts'],
     fileParallelism: true,
@@ -14,6 +15,8 @@ export default defineConfig({
       forks: {
         singleFork: false,
         isolate: true,
+        maxForks: 8,
+        minForks: 2,
       },
     },
   },
