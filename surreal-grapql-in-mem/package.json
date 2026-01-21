@@ -8,6 +8,9 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest run",
+    "test:e2e": "vitest run",
+    "test:stress": "vitest run --config vitest.stress.config.ts",
+    "test:all": "vitest run --config vitest.config.ts && vitest run --config vitest.stress.config.ts",
     "test:watch": "vitest"
   },
   "dependencies": {
