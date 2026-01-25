@@ -71,6 +71,38 @@ func (n *NATSClient) PublishRequest(ctx context.Context, req FactorialRequest) e
 	return nil
 }
 
+// RequestFactorial makes a synchronous request-response call for factorial calculation
+// This enables distributed recursion across workers
+func (n *NATSClient) RequestFactorial(ctx context.Context, number int64, requestID string) (*FactorialResponse, error) {
+	req := FactorialRequest{
+		Number:      number,
+		RequestID:   requestID,
+		OriginalReq: number,
+	}
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// Make synchronous request with timeout
+	msg, err := n.conn.Request(FactorialRequestSubject, data, 30*1000000000) // 30 second timeout
+	if err != nil {
+		return nil, fmt.Errorf("failed to make request: %w", err)
+	}
+
+	var resp FactorialResponse
+	if err := json.Unmarshal(msg.Data, &resp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	if resp.Error != "" {
+		return nil, fmt.Errorf("calculation error: %s", resp.Error)
+	}
+
+	return &resp, nil
+}
+
 func (n *NATSClient) PublishResponse(ctx context.Context, resp FactorialResponse) error {
 	data, err := json.Marshal(resp)
 	if err != nil {
@@ -84,7 +116,7 @@ func (n *NATSClient) PublishResponse(ctx context.Context, resp FactorialResponse
 	return nil
 }
 
-func (n *NATSClient) SubscribeRequests(ctx context.Context, handler func(*FactorialRequest) error) error {
+func (n *NATSClient) SubscribeRequests(ctx context.Context, handler func(*FactorialRequest, *nats.Msg) error) error {
 	_, err := n.conn.Subscribe(FactorialRequestSubject, func(msg *nats.Msg) {
 		var req FactorialRequest
 		if err := json.Unmarshal(msg.Data, &req); err != nil {
@@ -92,7 +124,7 @@ func (n *NATSClient) SubscribeRequests(ctx context.Context, handler func(*Factor
 			return
 		}
 
-		if err := handler(&req); err != nil {
+		if err := handler(&req, msg); err != nil {
 			log.Printf("Handler error: %v", err)
 		}
 	})

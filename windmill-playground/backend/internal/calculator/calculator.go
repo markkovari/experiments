@@ -6,21 +6,25 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/markkovari/windmill-playground/backend/internal/cache"
+	"github.com/markkovari/windmill-playground/backend/internal/messaging"
 	"github.com/markkovari/windmill-playground/backend/pkg/logger"
 )
 
 type Calculator struct {
-	cache    *cache.Cache
-	workerID string
-	logger   *logger.Logger
+	cache      *cache.Cache
+	natsClient *messaging.NATSClient
+	workerID   string
+	logger     *logger.Logger
 }
 
-func New(c *cache.Cache, workerID string, log *logger.Logger) *Calculator {
+func New(c *cache.Cache, natsClient *messaging.NATSClient, workerID string, log *logger.Logger) *Calculator {
 	return &Calculator{
-		cache:    c,
-		workerID: workerID,
-		logger:   log,
+		cache:      c,
+		natsClient: natsClient,
+		workerID:   workerID,
+		logger:     log,
 	}
 }
 
@@ -76,11 +80,35 @@ func (c *Calculator) CalculateFactorial(ctx context.Context, n int64) (*big.Int,
 		return result, nil
 	}
 
-	// Recursive case: n! = n * (n-1)!
-	prevFactorial, err := c.CalculateFactorial(ctx, n-1)
+	// Distributed recursive case: n! = n * (n-1)!
+	// Instead of calling locally, make a distributed NATS request
+	c.logger.DebugWithFields("Making distributed request for sub-factorial", map[string]interface{}{
+		"parent_number":   n,
+		"request_number":  n - 1,
+		"requesting_from": "distributed_workers",
+	})
+
+	subRequestID := uuid.New().String()
+	resp, err := c.natsClient.RequestFactorial(ctx, n-1, subRequestID)
 	if err != nil {
+		c.logger.ErrorWithFields("Failed to get distributed sub-factorial", map[string]interface{}{
+			"parent_number":  n,
+			"request_number": n - 1,
+			"error":          err.Error(),
+		})
 		return nil, err
 	}
+
+	prevFactorial := new(big.Int)
+	if _, ok := prevFactorial.SetString(resp.Result, 10); !ok {
+		return nil, fmt.Errorf("invalid result from distributed calculation: %s", resp.Result)
+	}
+
+	c.logger.DebugWithFields("Received distributed sub-factorial result", map[string]interface{}{
+		"parent_number":  n,
+		"request_number": n - 1,
+		"result":         resp.Result,
+	})
 
 	// Calculate product
 	result := c.Product(ctx, n, prevFactorial)

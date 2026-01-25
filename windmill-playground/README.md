@@ -41,11 +41,11 @@ A distributed factorial calculator using Windmill, NATS, SurrealDB, and Go worke
 ## Features
 
 - **Distributed Computing**: Multiple Go workers process factorial calculations in parallel
-- **Recursive Calculation**: Factorial computed recursively with distributed sub-tasks
+- **Distributed Recursion**: Each recursive step (n-1)! is distributed across workers via NATS
 - **Smart Caching**: Results cached in NATS KV with native TTL (auto-deletion)
 - **Calculation Logging**: All operations logged to SurrealDB for analytics
-- **Real-time Messaging**: NATS enables efficient pub/sub communication
-- **Workflow Orchestration**: Windmill manages the calculation workflow
+- **Real-time Messaging**: NATS enables efficient pub/sub and request-response communication
+- **Workflow Orchestration**: NATS orchestrates the distributed recursive workflow
 - **Modern UI**: React frontend with clean, responsive design
 
 ## Tech Stack
@@ -92,17 +92,22 @@ windmill-playground/
 3. **API service** publishes request to NATS topic `factorial.api.request`
 4. **Windmill Orchestrator** (Go NATS subscriber) receives the request
 5. **Orchestrator** forwards request to workers via `factorial.request` topic
-6. **3 Go Workers** receive the request (all 3 process in parallel)
-7. **Workers** check NATS KV cache for cached results
-8. If not cached, workers **recursively calculate**:
-   - n! = n × (n-1)!
-   - Each sub-calculation is also cached
-9. **Results cached** in NATS KV and all calculations logged to SurrealDB
-10. **Workers** publish responses to `factorial.response` topic
-11. **Orchestrator** receives worker responses
-12. **Orchestrator** forwards first response to `factorial.api.response` topic
-13. **API service** receives response and returns to frontend
-14. **Frontend** displays the result
+6. **Worker A** receives factorial(10) request
+7. **Worker A** checks NATS KV cache - miss
+8. **Worker A** makes NATS request for factorial(9) (distributed recursion!)
+9. **Worker B** receives factorial(9) request, checks cache - miss
+10. **Worker B** makes NATS request for factorial(8)
+11. **Worker C** receives factorial(8) request... (recursion continues)
+12. Eventually a worker finds factorial(1) in cache or calculates it
+13. **Results bubble back** through NATS request-response chain
+14. Each worker calculates its product (n × prev) and caches in NATS KV
+15. All calculations logged to SurrealDB
+16. **Worker A** receives final result, publishes to `factorial.response`
+17. **Orchestrator** forwards to `factorial.api.response`
+18. **API service** receives response and returns to frontend
+19. **Frontend** displays the result
+
+**Key insight**: Each recursive step can be handled by a different worker, truly distributing the computation!
 
 ## Getting Started
 
@@ -132,7 +137,24 @@ docker-compose up --build
    - **API**: http://localhost:8080
    - **NATS Monitor**: http://localhost:8222
    - **SurrealDB**: http://localhost:8000
-   - **Windmill UI** (optional): http://localhost:8001
+   - **Windmill UI**: http://localhost:8001
+
+### Two Orchestration Modes
+
+The system supports two modes:
+
+#### Direct NATS Mode (Default)
+- Faster, lower latency
+- Distributed recursion via NATS request-response
+- No job tracking UI
+- ✅ Works out of the box
+
+#### Windmill Orchestration Mode
+- Full job observability in Windmill UI
+- View all runs at http://localhost:8001/runs
+- Track execution history
+- Slightly higher latency due to job scheduling
+- 📋 **Requires setup** - see [WINDMILL_SETUP.md](WINDMILL_SETUP.md)
 
 ### Using the Calculator
 
@@ -142,7 +164,11 @@ docker-compose up --build
 
 3. Click "Calculate Factorial"
 
-4. View the result, request ID, and see the distributed calculation in action
+4. View the result and request ID
+
+**To view job executions in Windmill UI:**
+- See [WINDMILL_SETUP.md](WINDMILL_SETUP.md) for enabling Windmill mode
+- Then access http://localhost:8001/runs to see all calculations
 
 ### Monitoring
 
@@ -230,28 +256,35 @@ npm start
 Environment variables:
 - `REACT_APP_WINDMILL_URL`: Windmill API URL (default: `http://localhost:8001`)
 
-## Example Calculation Flow
+## Example Distributed Calculation Flow
 
-For `factorial(5)`:
+For `factorial(5)` with 3 workers:
 
-1. Initial request: Calculate 5!
-2. Worker checks cache → miss
-3. Recursive calls:
-   - Calculate 4! → checks cache → miss
-   - Calculate 3! → checks cache → miss
-   - Calculate 2! → checks cache → miss
-   - Calculate 1! → checks cache → miss → returns 1 → **cache**
-   - Product: 2 × 1 = 2 → **cache** → returns 2!
-   - Product: 3 × 2 = 6 → **cache** → returns 3!
-   - Product: 4 × 6 = 24 → **cache** → returns 4!
-   - Product: 5 × 24 = 120 → **cache** → returns 5!
-4. Result: 120
-5. All calculations logged in SurrealDB
+1. **Worker-1** receives: Calculate 5!
+2. **Worker-1** checks NATS KV cache → miss
+3. **Worker-1** → NATS request: "Need factorial(4)"
+4. **Worker-2** receives: Calculate 4!
+5. **Worker-2** checks cache → miss
+6. **Worker-2** → NATS request: "Need factorial(3)"
+7. **Worker-3** receives: Calculate 3!
+8. **Worker-3** checks cache → miss
+9. **Worker-3** → NATS request: "Need factorial(2)"
+10. **Worker-1** receives: Calculate 2! (round-robin)
+11. **Worker-1** checks cache → miss
+12. **Worker-1** → NATS request: "Need factorial(1)"
+13. **Worker-2** receives: Calculate 1!
+14. **Worker-2** finds base case → returns 1 → **cache in NATS KV**
+15. **Worker-1** receives "1" → calculates 2 × 1 = 2 → **cache** → returns 2!
+16. **Worker-3** receives "2" → calculates 3 × 2 = 6 → **cache** → returns 3!
+17. **Worker-2** receives "6" → calculates 4 × 6 = 24 → **cache** → returns 4!
+18. **Worker-1** receives "24" → calculates 5 × 24 = 120 → **cache** → returns 5!
+19. Result: **120** (calculated by multiple workers!)
+20. All operations logged in SurrealDB
 
-If you calculate `factorial(6)` next:
-- 1!, 2!, 3!, 4!, 5! are **cache hits**
-- Only 6! needs to be calculated
-- Much faster response!
+**Next request for factorial(6)**:
+- 1!, 2!, 3!, 4!, 5! are **cache hits** in NATS KV
+- Only one worker needed to calculate 6 × 120 = 720
+- **Instant response!**
 
 ### Cache TTL
 
@@ -302,10 +335,14 @@ Or via command-line flags:
 ## Performance Considerations
 
 - **Caching**: Dramatically speeds up subsequent calculations
-- **Distributed Workers**: Multiple workers process calculations in parallel
-- **NATS**: Low-latency message delivery + in-memory KV cache
-- **Native TTL**: Automatic cache eviction without manual cleanup overhead
+- **Distributed Recursion**: Each recursive step can be handled by different workers
+- **Load Balancing**: NATS automatically distributes work across available workers
+- **NATS Request-Response**: Synchronous RPC pattern with 30-second timeout
+- **In-Memory KV**: Fast cache lookups with native TTL
+- **Automatic Eviction**: No cleanup overhead - NATS handles TTL
 - **SurrealDB**: Persistent calculation logs for analytics
+
+**Note**: For small factorials, distributed recursion may add overhead. For large computations or high load, it enables true horizontal scaling.
 
 ## Scaling
 

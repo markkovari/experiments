@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"os"
 	"os/signal"
@@ -11,8 +12,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/markkovari/windmill-playground/backend/internal/cache"
 	"github.com/markkovari/windmill-playground/backend/internal/calculator"
-	"github.com/markkovari/windmill-playground/backend/pkg/logger"
 	"github.com/markkovari/windmill-playground/backend/internal/messaging"
+	"github.com/markkovari/windmill-playground/backend/pkg/logger"
+	"github.com/nats-io/nats.go"
 )
 
 func main() {
@@ -75,10 +77,7 @@ func main() {
 	}
 	defer cacheClient.Close()
 
-	// Initialize calculator
-	calc := calculator.New(cacheClient, workerID, log)
-
-	// Initialize NATS client
+	// Initialize NATS client first (needed by calculator)
 	log.Debug("Connecting to NATS at %s", natsURL)
 	natsClient, err := messaging.NewNATSClient(natsURL)
 	if err != nil {
@@ -86,43 +85,57 @@ func main() {
 	}
 	defer natsClient.Close()
 
+	// Initialize calculator with NATS client for distributed recursion
+	calc := calculator.New(cacheClient, natsClient, workerID, log)
+
 	// Subscribe to factorial requests
 	ctx := context.Background()
-	if err := natsClient.SubscribeRequests(ctx, func(req *messaging.FactorialRequest) error {
+	if err := natsClient.SubscribeRequests(ctx, func(req *messaging.FactorialRequest, msg *nats.Msg) error {
 		log.InfoWithFields("Received factorial request", map[string]interface{}{
 			"number":     req.Number,
 			"request_id": req.RequestID,
+			"worker_id":  workerID[:8],
 		})
 
 		result, err := calc.CalculateFactorial(ctx, req.Number)
+
+		// Create response
+		response := messaging.FactorialResponse{
+			Number:    req.Number,
+			RequestID: req.RequestID,
+		}
+
 		if err != nil {
 			log.ErrorWithFields("Error calculating factorial", map[string]interface{}{
 				"number":     req.Number,
 				"request_id": req.RequestID,
 				"error":      err.Error(),
 			})
-
-			// Publish error response
-			natsClient.PublishResponse(ctx, messaging.FactorialResponse{
-				Number:    req.Number,
-				RequestID: req.RequestID,
-				Error:     err.Error(),
+			response.Error = err.Error()
+		} else {
+			log.InfoWithFields("Calculated factorial", map[string]interface{}{
+				"number":     req.Number,
+				"result":     result.String(),
+				"request_id": req.RequestID,
+				"worker_id":  workerID[:8],
 			})
+			response.Result = result.String()
+		}
+
+		// Reply directly to the request (for request-response pattern)
+		responseData, err := json.Marshal(response)
+		if err != nil {
+			log.Error("Failed to marshal response: %v", err)
 			return err
 		}
 
-		// Publish success response
-		log.InfoWithFields("Calculated factorial", map[string]interface{}{
-			"number":     req.Number,
-			"result":     result.String(),
-			"request_id": req.RequestID,
-		})
+		if err := msg.Respond(responseData); err != nil {
+			log.Error("Failed to respond to request: %v", err)
+			return err
+		}
 
-		return natsClient.PublishResponse(ctx, messaging.FactorialResponse{
-			Number:    req.Number,
-			RequestID: req.RequestID,
-			Result:    result.String(),
-		})
+		// Also publish to response topic for orchestrator
+		return natsClient.PublishResponse(ctx, response)
 	}); err != nil {
 		log.Fatal("Failed to subscribe to requests: %v", err)
 	}

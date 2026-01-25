@@ -40,8 +40,11 @@ services:
     environment:
       DATABASE_URL: postgres://postgres:windmill@windmill-db/windmill?sslmode=disable
       MODE: server
+      # Make NATS accessible to Windmill scripts
+      NATS_URL: nats://nats:4222
     depends_on:
       - windmill-db
+      - nats
     restart: unless-stopped
 
   windmill-worker:
@@ -50,9 +53,12 @@ services:
       DATABASE_URL: postgres://postgres:windmill@windmill-db/windmill?sslmode=disable
       MODE: worker
       WORKER_TAGS: deno,python3,go,bash
+      # Make NATS accessible to Windmill scripts
+      NATS_URL: nats://nats:4222
     depends_on:
       - windmill-db
       - windmill-server
+      - nats
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -106,12 +112,23 @@ services:
     ports:
       - "8080:8080"
     environment:
+      # NATS configuration (for direct mode)
       NATS_URL: nats://nats:4222
+
+      # Windmill configuration (optional - set USE_WINDMILL=true to enable)
+      USE_WINDMILL: "false"
+      WINDMILL_URL: http://windmill-server:8000
+      WINDMILL_TOKEN: ""  # Set this after creating a token in Windmill UI
+      WINDMILL_WORKSPACE: demo
+      WINDMILL_SCRIPT_PATH: u/admin/factorial
+
+      # API configuration
       PORT: "8080"
       LOG_LEVEL: info
       LOG_JSON: "false"
     depends_on:
       - nats
+      - windmill-server
     restart: unless-stopped
 
   # React Frontend
