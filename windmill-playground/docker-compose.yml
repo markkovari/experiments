@@ -1,0 +1,146 @@
+services:
+  # SurrealDB - Database with KV cache
+  surrealdb:
+    image: surrealdb/surrealdb:latest
+    ports:
+      - "8000:8000"
+    command: start --log trace --user root --pass root memory
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # NATS - Message broker
+  nats:
+    image: nats:latest
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: "-js -m 8222"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Windmill - Workflow orchestration
+  windmill-db:
+    image: postgres:14
+    environment:
+      POSTGRES_PASSWORD: windmill
+      POSTGRES_DB: windmill
+    volumes:
+      - windmill-db-data:/var/lib/postgresql/data
+
+  windmill-server:
+    image: ghcr.io/windmill-labs/windmill:main
+    ports:
+      - "8001:8000"
+    environment:
+      DATABASE_URL: postgres://postgres:windmill@windmill-db/windmill?sslmode=disable
+      MODE: server
+      # Make NATS accessible to Windmill scripts
+      NATS_URL: nats://nats:4222
+    depends_on:
+      - windmill-db
+      - nats
+    restart: unless-stopped
+
+  windmill-worker:
+    image: ghcr.io/windmill-labs/windmill:main
+    environment:
+      DATABASE_URL: postgres://postgres:windmill@windmill-db/windmill?sslmode=disable
+      MODE: worker
+      WORKER_TAGS: deno,python3,go,bash
+      # Make NATS accessible to Windmill scripts
+      NATS_URL: nats://nats:4222
+    depends_on:
+      - windmill-db
+      - windmill-server
+      - nats
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  windmill-lsp:
+    image: ghcr.io/windmill-labs/windmill-lsp:latest
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+
+  # Windmill Orchestrator - NATS event subscriber
+  windmill-orchestrator:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.orchestrator
+    environment:
+      NATS_URL: nats://nats:4222
+      LOG_LEVEL: info
+      LOG_JSON: "false"
+    depends_on:
+      - nats
+    restart: unless-stopped
+
+  # Go Worker - Factorial calculator
+  factorial-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      NATS_URL: nats://nats:4222
+      SURREALDB_URL: ws://surrealdb:8000/rpc
+      SURREALDB_USER: root
+      SURREALDB_PASS: root
+      SURREALDB_NS: factorial
+      SURREALDB_DB: calculations
+      CACHE_TTL: 24h
+      LOG_LEVEL: info
+      LOG_JSON: "false"
+    depends_on:
+      - nats
+      - surrealdb
+    restart: unless-stopped
+    deploy:
+      replicas: 3
+
+  # Go API - HTTP endpoint for frontend
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.api
+    ports:
+      - "8080:8080"
+    environment:
+      # NATS configuration (for direct mode)
+      NATS_URL: nats://nats:4222
+
+      # Windmill configuration (optional - set USE_WINDMILL=true to enable)
+      USE_WINDMILL: "false"
+      WINDMILL_URL: http://windmill-server:8000
+      WINDMILL_TOKEN: ""  # Set this after creating a token in Windmill UI
+      WINDMILL_WORKSPACE: demo
+      WINDMILL_SCRIPT_PATH: u/admin/factorial
+
+      # API configuration
+      PORT: "8080"
+      LOG_LEVEL: info
+      LOG_JSON: "false"
+    depends_on:
+      - nats
+      - windmill-server
+    restart: unless-stopped
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  windmill-db-data:
