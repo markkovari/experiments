@@ -8,6 +8,6 @@
     "dependencies": {
         "@pulumi/aws": "^6.83.0",
         "@pulumi/digitalocean": "^4.49.0",
-        "@pulumi/pulumi": "^3.113.0"
+        "@pulumi/pulumi": "^3.217.0"
     }
 }
