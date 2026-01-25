@@ -1,6 +1,6 @@
 module github.com/markkovari/windmill-playground/backend
 
-go 1.21
+go 1.24.0
 
 require (
 	github.com/google/uuid v1.5.0
@@ -13,7 +13,7 @@ require (
 	github.com/klauspost/compress v1.17.2 // indirect
 	github.com/nats-io/nkeys v0.4.6 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
-	golang.org/x/crypto v0.14.0 // indirect
-	golang.org/x/net v0.17.0 // indirect
-	golang.org/x/sys v0.13.0 // indirect
+	golang.org/x/crypto v0.45.0 // indirect
+	golang.org/x/net v0.47.0 // indirect
+	golang.org/x/sys v0.38.0 // indirect
 )
