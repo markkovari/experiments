@@ -64,7 +64,7 @@ SSH into your Raspberry Pi and run:
 
 ```bash
 # Clone the repository
-git clone https://github.com/youruser/ai-kanban-inference.git
+git clone https://github.com/markkovari/ai-kanban-inference.git
 cd ai-kanban-inference
 
 # Run setup script as root
@@ -79,7 +79,7 @@ On your MacBook:
 
 ```bash
 # Clone the repository
-git clone https://github.com/youruser/ai-kanban-inference.git
+git clone https://github.com/markkovari/ai-kanban-inference.git
 cd ai-kanban-inference
 
 # Run setup script
