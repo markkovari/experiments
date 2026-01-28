@@ -69,22 +69,63 @@ if ! command -v brew &> /dev/null; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
 fi
 
-# 2. Install Tailscale
-log_info "Installing Tailscale..."
-if ! command -v tailscale &> /dev/null; then
-    brew install tailscale
+# 2. Check for Tailscale (GUI app or Homebrew)
+log_info "Checking Tailscale..."
+
+# Check if GUI app is installed
+GUI_APP_INSTALLED=false
+if [ -d "/Applications/Tailscale.app" ]; then
+    GUI_APP_INSTALLED=true
+    log_info "Tailscale GUI app detected"
 fi
 
-# 3. Start Tailscale service and authenticate
-log_info "Starting Tailscale..."
-brew services start tailscale 2>/dev/null || true
-sleep 2
+# Check if tailscale CLI is available
+if ! command -v tailscale &> /dev/null; then
+    if [ "$GUI_APP_INSTALLED" = true ]; then
+        log_warn "Tailscale GUI is installed but CLI not in PATH"
+        log_warn "Please ensure Tailscale is running or install via: brew install tailscale"
+        exit 1
+    else
+        log_info "Installing Tailscale via Homebrew..."
+        brew install tailscale
+        brew services start tailscale
+        sleep 2
+    fi
+else
+    # Check if already connected
+    if tailscale status &> /dev/null 2>&1; then
+        log_info "Tailscale already running and connected ($([ "$GUI_APP_INSTALLED" = true ] && echo "GUI app" || echo "daemon"))"
+    else
+        if [ "$GUI_APP_INSTALLED" = false ]; then
+            # Only start brew service if not GUI app
+            log_info "Starting Tailscale daemon..."
+            brew services start tailscale 2>/dev/null || true
+            sleep 2
+        else
+            log_warn "Tailscale GUI app is installed but not running. Please start it manually."
+            exit 1
+        fi
+    fi
+fi
 
-log_info "Authenticating Tailscale..."
-sudo tailscale up --authkey="$TAILSCALE_KEY" --hostname="macbook-data"
+# 3. Authenticate/configure Tailscale
+log_info "Configuring Tailscale..."
+if sudo tailscale up --authkey="$TAILSCALE_KEY" --hostname="macbook-data" 2>&1 | tee /tmp/tailscale-up.log; then
+    log_info "Tailscale configured successfully"
+else
+    if grep -q "already logged in" /tmp/tailscale-up.log || grep -q "Success" /tmp/tailscale-up.log; then
+        log_info "Tailscale already authenticated"
+    else
+        log_error "Failed to configure Tailscale. Check /tmp/tailscale-up.log for details"
+        cat /tmp/tailscale-up.log
+        exit 1
+    fi
+fi
+rm -f /tmp/tailscale-up.log
 
-# Wait for Tailscale to connect
-sleep 5
+# Wait for Tailscale to be fully connected
+log_info "Waiting for Tailscale connection..."
+sleep 3
 TAILSCALE_IP=$(tailscale ip -4)
 TAILSCALE_HOSTNAME=$(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')
 log_info "Tailscale IP: $TAILSCALE_IP"
