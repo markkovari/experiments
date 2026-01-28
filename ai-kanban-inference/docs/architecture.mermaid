@@ -1,0 +1,43 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#4f46e5', 'primaryTextColor': '#fff', 'primaryBorderColor': '#3730a3', 'lineColor': '#6366f1', 'secondaryColor': '#f0fdf4', 'tertiaryColor': '#fef3c7'}}}%%
+
+%% Main Architecture Diagram
+graph TB
+    subgraph TAILSCALE["🌐 Tailscale Mesh VPN"]
+        direction TB
+
+        subgraph RPI["🍓 Raspberry Pi 5<br/><i>Control Plane</i>"]
+            direction TB
+            NOMAD_SERVER["📦 Nomad Server<br/><small>:4646-4648</small>"]
+            CONSUL_SERVER["🔍 Consul Server<br/><small>:8500</small>"]
+            CLAUDE_FLOW["🧠 Claude-Flow<br/><small>:8080</small>"]
+
+            NOMAD_SERVER <--> CONSUL_SERVER
+            CLAUDE_FLOW --> CONSUL_SERVER
+            CLAUDE_FLOW --> NOMAD_SERVER
+        end
+
+        subgraph MAC["💻 MacBook Pro M1 MAX<br/><i>Data Plane</i>"]
+            direction TB
+            NOMAD_CLIENT["📦 Nomad Client"]
+            CONSUL_CLIENT["🔍 Consul Client"]
+            OLLAMA["🤖 Ollama<br/><small>:11434</small>"]
+            AGENTS["⚡ Agent Workers<br/><small>Batch Jobs</small>"]
+
+            NOMAD_CLIENT <--> CONSUL_CLIENT
+            AGENTS --> OLLAMA
+            NOMAD_CLIENT --> AGENTS
+        end
+
+        NOMAD_SERVER <--"RPC"--> NOMAD_CLIENT
+        CONSUL_SERVER <--"Gossip"--> CONSUL_CLIENT
+        CLAUDE_FLOW --"Service Discovery"--> OLLAMA
+    end
+
+    USER["👤 User"] --> CLAUDE_FLOW
+
+    classDef control fill:#4f46e5,stroke:#3730a3,color:#fff
+    classDef data fill:#059669,stroke:#047857,color:#fff
+    classDef network fill:#0ea5e9,stroke:#0284c7,color:#fff
+
+    class NOMAD_SERVER,CONSUL_SERVER,CLAUDE_FLOW control
+    class NOMAD_CLIENT,CONSUL_CLIENT,OLLAMA,AGENTS data
