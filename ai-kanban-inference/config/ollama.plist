@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Ollama LaunchAgent for macOS
+
+  This plist configures Ollama to:
+  - Start automatically at login
+  - Bind to all interfaces (0.0.0.0) for network access
+  - Allow cross-origin requests for API access
+
+  Installation:
+    cp config/ollama.plist ~/Library/LaunchAgents/com.ollama.ollama.plist
+    launchctl load -w ~/Library/LaunchAgents/com.ollama.ollama.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.ollama.ollama.plist
+    rm ~/Library/LaunchAgents/com.ollama.ollama.plist
+-->
+<plist version="1.0">
+<dict>
+    <!-- Service identifier -->
+    <key>Label</key>
+    <string>com.ollama.ollama</string>
+
+    <!-- Program to run -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/ollama</string>
+        <string>serve</string>
+    </array>
+
+    <!-- Environment variables -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Bind to all interfaces for Tailscale access -->
+        <key>OLLAMA_HOST</key>
+        <string>0.0.0.0:11434</string>
+
+        <!-- Allow cross-origin requests -->
+        <key>OLLAMA_ORIGINS</key>
+        <string>*</string>
+
+        <!-- Optional: Set model storage location -->
+        <!-- <key>OLLAMA_MODELS</key> -->
+        <!-- <string>/path/to/models</string> -->
+
+        <!-- Optional: Enable debug logging -->
+        <!-- <key>OLLAMA_DEBUG</key> -->
+        <!-- <string>1</string> -->
+
+        <!-- Optional: Set number of parallel requests -->
+        <key>OLLAMA_NUM_PARALLEL</key>
+        <string>2</string>
+
+        <!-- Optional: Keep models in memory longer -->
+        <key>OLLAMA_KEEP_ALIVE</key>
+        <string>5m</string>
+    </dict>
+
+    <!-- Start at load (login) -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Keep alive - restart if it exits -->
+    <key>KeepAlive</key>
+    <dict>
+        <!-- Restart on crash -->
+        <key>Crashed</key>
+        <true/>
+        <!-- Restart on success (to handle model loading failures) -->
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Throttle restarts -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>/tmp</string>
+
+    <!-- Log files -->
+    <key>StandardOutPath</key>
+    <string>/tmp/ollama.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/ollama.err</string>
+
+    <!-- Resource limits (optional) -->
+    <!-- Uncomment to set memory limit -->
+    <!--
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>MemoryLimit</key>
+        <integer>68719476736</integer>
+    </dict>
+    -->
+
+    <!-- Nice value (lower priority than foreground apps) -->
+    <key>Nice</key>
+    <integer>5</integer>
+
+    <!-- Process type hint for macOS -->
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

@@ -1,0 +1,107 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ruvnet/claude-flow/main/schema/config.json",
+  "version": "1.0",
+
+  "providers": {
+    "ollama": {
+      "type": "ollama",
+      "baseUrl": "http://ollama.service.consul:11434",
+      "timeout": 300000,
+      "retries": 3,
+      "models": {
+        "default": "codellama:34b",
+        "code": "deepseek-coder:33b",
+        "reasoning": "llama3.2:70b",
+        "fast": "qwen2.5-coder:32b"
+      }
+    }
+  },
+
+  "agents": {
+    "defaultProvider": "ollama",
+    "defaultModel": "codellama:34b",
+
+    "types": {
+      "coder": {
+        "model": "deepseek-coder:33b",
+        "systemPrompt": "You are an expert software developer. Write clean, efficient, and well-documented code.",
+        "temperature": 0.2,
+        "maxTokens": 4096
+      },
+      "reviewer": {
+        "model": "codellama:34b",
+        "systemPrompt": "You are a code reviewer. Analyze code for bugs, security issues, and improvements.",
+        "temperature": 0.3,
+        "maxTokens": 2048
+      },
+      "architect": {
+        "model": "llama3.2:70b",
+        "systemPrompt": "You are a software architect. Design scalable and maintainable systems.",
+        "temperature": 0.4,
+        "maxTokens": 4096
+      },
+      "debugger": {
+        "model": "deepseek-coder:33b",
+        "systemPrompt": "You are a debugging expert. Find and fix bugs systematically.",
+        "temperature": 0.1,
+        "maxTokens": 2048
+      },
+      "documenter": {
+        "model": "qwen2.5-coder:32b",
+        "systemPrompt": "You are a technical writer. Create clear and comprehensive documentation.",
+        "temperature": 0.3,
+        "maxTokens": 4096
+      },
+      "tester": {
+        "model": "codellama:34b",
+        "systemPrompt": "You are a QA engineer. Write comprehensive tests and identify edge cases.",
+        "temperature": 0.2,
+        "maxTokens": 2048
+      }
+    },
+
+    "swarm": {
+      "enabled": true,
+      "consensus": "raft",
+      "maxConcurrent": 4,
+      "taskTimeout": "30m",
+      "healthCheckInterval": "30s"
+    }
+  },
+
+  "persistence": {
+    "type": "sqlite",
+    "path": "/opt/claude-flow/data/state.db",
+    "backupInterval": "1h"
+  },
+
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "mcpPort": 8081,
+    "cors": {
+      "enabled": true,
+      "origins": ["*"]
+    }
+  },
+
+  "nomad": {
+    "enabled": true,
+    "address": "http://localhost:4646",
+    "datacenter": "home",
+    "jobPrefix": "agent-",
+    "taskTemplate": "/opt/claude-flow/templates/agent-task.nomad.tpl"
+  },
+
+  "logging": {
+    "level": "info",
+    "format": "json",
+    "file": "/opt/claude-flow/logs/claude-flow.log"
+  },
+
+  "metrics": {
+    "enabled": true,
+    "port": 9090,
+    "path": "/metrics"
+  }
+}
