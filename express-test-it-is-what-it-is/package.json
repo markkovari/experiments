@@ -25,7 +25,8 @@
     "@prisma/client": "^7.3.0",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
-    "prisma": "^7.3.0"
+    "prisma": "^7.3.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@prisma/adapter-pg": "^7.3.0",
