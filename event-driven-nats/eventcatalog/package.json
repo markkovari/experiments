@@ -11,6 +11,6 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "@eventcatalog/core": "3.2.2"
+    "@eventcatalog/core": "3.12.0"
   }
 }
