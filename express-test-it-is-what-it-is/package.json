@@ -1,0 +1,45 @@
+{
+  "name": "express-test-it-is-what-it-is",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test": "vitest",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:api": "vitest run tests/api",
+    "test:e2e": "vitest run tests/e2e",
+    "test:ui": "vitest --ui",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.28.2",
+  "dependencies": {
+    "@prisma/client": "^7.3.0",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "prisma": "^7.3.0"
+  },
+  "devDependencies": {
+    "@prisma/adapter-pg": "^7.3.0",
+    "@testcontainers/postgresql": "^11.11.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.2.0",
+    "@types/pg": "^8.16.0",
+    "@types/supertest": "^6.0.3",
+    "@vitest/ui": "^4.0.18",
+    "pg": "^8.18.0",
+    "supertest": "^7.2.2",
+    "testcontainers": "^11.11.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
