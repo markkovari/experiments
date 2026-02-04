@@ -1,0 +1,133 @@
+# Justfile for axum-test-it-is-whay-it-is
+# Install just: cargo install just
+# Run: just <recipe>
+
+# Default recipe (runs when you just type 'just')
+default:
+    @just --list
+
+# Development commands
+alias t := test
+alias b := build
+alias r := run
+alias c := check
+
+# Build the project
+build:
+    cargo build
+
+# Build for release
+build-release:
+    cargo build --release
+
+# Run the server
+run:
+    cargo run
+
+# Run in watch mode (requires cargo-watch)
+dev:
+    cargo watch -x run
+
+# Check without building
+check:
+    cargo check
+
+# Format code
+fmt:
+    cargo fmt
+
+# Check formatting
+fmt-check:
+    cargo fmt --check
+
+# Run clippy
+clippy:
+    cargo clippy -- -D warnings
+
+# Run all tests with nextest
+test:
+    cargo nextest run
+
+# Run tests with output
+test-verbose:
+    cargo nextest run --success-output immediate
+
+# Run unit tests only
+test-unit:
+    cargo nextest run --lib
+
+# Run specific test file
+test-file FILE:
+    cargo nextest run --test {{FILE}}
+
+# Run tests with CI profile (includes retries)
+test-ci:
+    cargo nextest run --profile ci
+
+# Run tests in watch mode
+test-watch:
+    cargo watch -x "nextest run"
+
+# Run doctests
+test-doc:
+    cargo test --doc
+
+# Run all checks (fmt, clippy, test)
+ci: fmt-check clippy test
+
+# Database commands
+db-migrate:
+    sqlx migrate run
+
+db-reset:
+    sqlx database reset -y
+
+db-create:
+    sqlx database create
+
+# Clean build artifacts
+clean:
+    cargo clean
+
+# Install development dependencies
+install-deps:
+    cargo install cargo-nextest
+    cargo install cargo-watch
+    cargo install sqlx-cli --no-default-features --features postgres
+
+# Generate documentation
+doc:
+    cargo doc --no-deps --open
+
+# Show project info
+info:
+    @echo "Project: axum-test-it-is-whay-it-is"
+    @echo "Rust version: $(rustc --version)"
+    @echo "Cargo version: $(cargo --version)"
+    @echo ""
+    @echo "Dependencies:"
+    @cargo tree --depth 1
+
+# Count lines of code
+loc:
+    @echo "Lines of code:"
+    @find src -name "*.rs" | xargs wc -l | tail -1
+    @echo ""
+    @echo "Test lines:"
+    @find tests -name "*.rs" 2>/dev/null | xargs wc -l 2>/dev/null | tail -1 || echo "0"
+
+# Run benchmarks (if any)
+bench:
+    cargo bench
+
+# Security audit
+audit:
+    cargo audit
+
+# Update dependencies
+update:
+    cargo update
+
+# Show outdated dependencies
+outdated:
+    cargo outdated
