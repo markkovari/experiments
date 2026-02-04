@@ -6,8 +6,8 @@ use tower::util::ServiceExt;
 
 #[tokio::test]
 async fn test_complete_user_workflow() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let app = create_test_app(pool.clone()).await;
+    let ctx = super::common::setup_test_db().await;
+    let app = create_test_app(ctx.pool.clone()).await;
 
     // 1. Register a new user
     let register_body = json!({
@@ -66,13 +66,13 @@ async fn test_complete_user_workflow() {
     assert_eq!(body["data"]["email"], "test@example.com");
     assert_eq!(body["data"]["name"], "Test User");
 
-    pool.close().await;
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn test_unauthorized_access() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let app = create_test_app(pool.clone()).await;
+    let ctx = super::common::setup_test_db().await;
+    let app = create_test_app(ctx.pool.clone()).await;
 
     // Try to access protected route without token
     let request = Request::builder()
@@ -84,13 +84,13 @@ async fn test_unauthorized_access() {
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-    pool.close().await;
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn test_invalid_credentials() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let app = create_test_app(pool.clone()).await;
+    let ctx = super::common::setup_test_db().await;
+    let app = create_test_app(ctx.pool.clone()).await;
 
     // Register user
     let register_body = json!({
@@ -124,13 +124,13 @@ async fn test_invalid_credentials() {
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-    pool.close().await;
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn test_health_endpoint() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let app = create_test_app(pool.clone()).await;
+    let ctx = super::common::setup_test_db().await;
+    let app = create_test_app(ctx.pool.clone()).await;
 
     let request = Request::builder()
         .uri("/health")
@@ -147,5 +147,5 @@ async fn test_health_endpoint() {
     let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(body["status"], "ok");
 
-    pool.close().await;
+    ctx.cleanup().await;
 }

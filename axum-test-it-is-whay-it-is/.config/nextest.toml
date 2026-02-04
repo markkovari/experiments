@@ -1,8 +1,8 @@
 # Nextest configuration for axum-test-it-is-whay-it-is
 
 [profile.default]
-# Run tests with all available CPUs
-test-threads = "num-cpus"
+# Limit concurrent DB operations for shared container
+test-threads = 4
 
 # Show output for failing tests
 failure-output = "immediate"

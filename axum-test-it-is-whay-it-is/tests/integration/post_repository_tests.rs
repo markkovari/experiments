@@ -23,9 +23,9 @@ async fn create_test_user(pool: &PgPool) -> Uuid {
 
 #[tokio::test]
 async fn test_create_post() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let author_id = create_test_user(&pool).await;
-    let repo: axum_test_it_is_whay_it_is::modules::posts::repository::PostRepository = create_post_repository(pool.clone());
+    let ctx = super::common::setup_test_db().await;
+    let author_id = create_test_user(&ctx.pool).await;
+    let repo: axum_test_it_is_whay_it_is::modules::posts::repository::PostRepository = create_post_repository(ctx.pool.clone());
 
     let input = CreatePostInput {
         title: "Test Post".to_string(),
@@ -40,14 +40,14 @@ async fn test_create_post() {
     assert_eq!(post.published, false);
     assert_eq!(post.author_id, author_id);
 
-    pool.close().await;
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn test_find_post_by_id() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let author_id = create_test_user(&pool).await;
-    let repo = create_post_repository(pool.clone());
+    let ctx = super::common::setup_test_db().await;
+    let author_id = create_test_user(&ctx.pool).await;
+    let repo = create_post_repository(ctx.pool.clone());
 
     let input = CreatePostInput {
         title: "Test Post".to_string(),
@@ -63,14 +63,14 @@ async fn test_find_post_by_id() {
     assert_eq!(found_post.id, created_post.id);
     assert_eq!(found_post.title, created_post.title);
 
-    pool.close().await;
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn test_find_published_posts() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let author_id = create_test_user(&pool).await;
-    let repo = create_post_repository(pool.clone());
+    let ctx = super::common::setup_test_db().await;
+    let author_id = create_test_user(&ctx.pool).await;
+    let repo = create_post_repository(ctx.pool.clone());
 
     // Create published post
     let input1 = CreatePostInput {
@@ -92,15 +92,15 @@ async fn test_find_published_posts() {
     assert_eq!(published.len(), 1);
     assert_eq!(published[0].title, "Published Post");
 
-    pool.close().await;
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn test_find_posts_by_author() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let author1_id = create_test_user(&pool).await;
-    let author2_id = create_test_user(&pool).await;
-    let repo = create_post_repository(pool.clone());
+    let ctx = super::common::setup_test_db().await;
+    let author1_id = create_test_user(&ctx.pool).await;
+    let author2_id = create_test_user(&ctx.pool).await;
+    let repo = create_post_repository(ctx.pool.clone());
 
     // Create posts for author 1
     for i in 1..=2 {
@@ -123,14 +123,14 @@ async fn test_find_posts_by_author() {
     let author1_posts = repo.find_by_author(author1_id).await.unwrap();
     assert_eq!(author1_posts.len(), 2);
 
-    pool.close().await;
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn test_update_post() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let author_id = create_test_user(&pool).await;
-    let repo = create_post_repository(pool.clone());
+    let ctx = super::common::setup_test_db().await;
+    let author_id = create_test_user(&ctx.pool).await;
+    let repo = create_post_repository(ctx.pool.clone());
 
     let input = CreatePostInput {
         title: "Original Title".to_string(),
@@ -154,14 +154,14 @@ async fn test_update_post() {
     assert_eq!(updated_post.content, "Original Content");
     assert_eq!(updated_post.published, true);
 
-    pool.close().await;
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn test_delete_post() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let author_id = create_test_user(&pool).await;
-    let repo = create_post_repository(pool.clone());
+    let ctx = super::common::setup_test_db().await;
+    let author_id = create_test_user(&ctx.pool).await;
+    let repo = create_post_repository(ctx.pool.clone());
 
     let input = CreatePostInput {
         title: "To Be Deleted".to_string(),
@@ -177,14 +177,14 @@ async fn test_delete_post() {
     let found = repo.find_by_id(created_post.id).await.unwrap();
     assert!(found.is_none());
 
-    pool.close().await;
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn test_find_all_posts() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let author_id = create_test_user(&pool).await;
-    let repo = create_post_repository(pool.clone());
+    let ctx = super::common::setup_test_db().await;
+    let author_id = create_test_user(&ctx.pool).await;
+    let repo = create_post_repository(ctx.pool.clone());
 
     // Create multiple posts
     for i in 1..=3 {
@@ -199,14 +199,14 @@ async fn test_find_all_posts() {
     let posts = repo.find_all().await.unwrap();
     assert_eq!(posts.len(), 3);
 
-    pool.close().await;
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn test_post_cascade_delete_with_user() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let user_repo = UserRepository::new(pool.clone());
-    let post_repo: axum_test_it_is_whay_it_is::modules::posts::repository::PostRepository = create_post_repository(pool.clone());
+    let ctx = super::common::setup_test_db().await;
+    let user_repo = UserRepository::new(ctx.pool.clone());
+    let post_repo: axum_test_it_is_whay_it_is::modules::posts::repository::PostRepository = create_post_repository(ctx.pool.clone());
 
     // Create user
     let input = CreateUserInput {
@@ -231,5 +231,5 @@ async fn test_post_cascade_delete_with_user() {
     let found_post = post_repo.find_by_id(post.id).await.unwrap();
     assert!(found_post.is_none());
 
-    pool.close().await;
+    ctx.cleanup().await;
 }
