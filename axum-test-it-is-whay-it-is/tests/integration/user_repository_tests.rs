@@ -5,8 +5,8 @@ use axum_test_it_is_whay_it_is::modules::users::{
 
 #[tokio::test]
 async fn test_create_user() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let repo = UserRepository::new(pool.clone());
+    let ctx = super::common::setup_test_db().await;
+    let repo = UserRepository::new(ctx.pool.clone());
 
     let input = CreateUserInput {
         email: "test@example.com".to_string(),
@@ -20,13 +20,13 @@ async fn test_create_user() {
     assert_eq!(user.name, "Test User");
     assert!(!user.password_hash.is_empty());
 
-    pool.close().await;
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn test_find_user_by_id() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let repo = UserRepository::new(pool.clone());
+    let ctx = super::common::setup_test_db().await;
+    let repo = UserRepository::new(ctx.pool.clone());
 
     let input = CreateUserInput {
         email: "test@example.com".to_string(),
@@ -42,13 +42,13 @@ async fn test_find_user_by_id() {
     assert_eq!(found_user.id, created_user.id);
     assert_eq!(found_user.email, created_user.email);
 
-    pool.close().await;
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn test_find_user_by_email() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let repo = UserRepository::new(pool.clone());
+    let ctx = super::common::setup_test_db().await;
+    let repo = UserRepository::new(ctx.pool.clone());
 
     let input = CreateUserInput {
         email: "test@example.com".to_string(),
@@ -63,13 +63,13 @@ async fn test_find_user_by_email() {
     let found_user = found_user.unwrap();
     assert_eq!(found_user.id, created_user.id);
 
-    pool.close().await;
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn test_update_user() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let repo = UserRepository::new(pool.clone());
+    let ctx = super::common::setup_test_db().await;
+    let repo = UserRepository::new(ctx.pool.clone());
 
     let input = CreateUserInput {
         email: "test@example.com".to_string(),
@@ -91,13 +91,13 @@ async fn test_update_user() {
     assert_eq!(updated_user.name, "Updated Name");
     assert_eq!(updated_user.email, "test@example.com");
 
-    pool.close().await;
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn test_delete_user() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let repo = UserRepository::new(pool.clone());
+    let ctx = super::common::setup_test_db().await;
+    let repo = UserRepository::new(ctx.pool.clone());
 
     let input = CreateUserInput {
         email: "test@example.com".to_string(),
@@ -113,13 +113,13 @@ async fn test_delete_user() {
     let found = repo.find_by_id(created_user.id).await.unwrap();
     assert!(found.is_none());
 
-    pool.close().await;
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn test_duplicate_email() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let repo = UserRepository::new(pool.clone());
+    let ctx = super::common::setup_test_db().await;
+    let repo = UserRepository::new(ctx.pool.clone());
 
     let input1 = CreateUserInput {
         email: "test@example.com".to_string(),
@@ -138,13 +138,13 @@ async fn test_duplicate_email() {
     let result = repo.create(input2).await;
     assert!(result.is_err());
 
-    pool.close().await;
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn test_find_all_users() {
-    let (_container, pool) = super::common::setup_test_db().await;
-    let repo = UserRepository::new(pool.clone());
+    let ctx = super::common::setup_test_db().await;
+    let repo = UserRepository::new(ctx.pool.clone());
 
     // Create multiple users
     for i in 1..=3 {
@@ -159,5 +159,5 @@ async fn test_find_all_users() {
     let users = repo.find_all().await.unwrap();
     assert_eq!(users.len(), 3);
 
-    pool.close().await;
+    ctx.cleanup().await;
 }

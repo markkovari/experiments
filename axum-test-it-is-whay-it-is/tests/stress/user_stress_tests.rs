@@ -8,8 +8,8 @@ macro_rules! generate_user_registration_test {
     ($name:ident, $email:expr, $username:expr) => {
         #[tokio::test]
         async fn $name() {
-            let (_container, pool) = crate::common::setup_test_db().await;
-            let app = create_test_app(pool.clone()).await;
+            let ctx = crate::common::setup_test_db().await;
+            let app = create_test_app(ctx.pool.clone()).await;
 
             let register_body = json!({
                 "email": $email,
@@ -27,7 +27,7 @@ macro_rules! generate_user_registration_test {
             let response = app.oneshot(request).await.unwrap();
             assert_eq!(response.status(), StatusCode::CREATED);
 
-            pool.close().await;
+            ctx.cleanup().await;
         }
     };
 }
@@ -36,8 +36,8 @@ macro_rules! generate_login_test {
     ($name:ident, $email:expr, $username:expr) => {
         #[tokio::test]
         async fn $name() {
-            let (_container, pool) = crate::common::setup_test_db().await;
-            let app = create_test_app(pool.clone()).await;
+            let ctx = crate::common::setup_test_db().await;
+            let app = create_test_app(ctx.pool.clone()).await;
 
             // Register first
             let register_body = json!({
@@ -71,7 +71,7 @@ macro_rules! generate_login_test {
             let response = app.oneshot(request).await.unwrap();
             assert_eq!(response.status(), StatusCode::OK);
 
-            pool.close().await;
+            ctx.cleanup().await;
         }
     };
 }
@@ -80,8 +80,8 @@ macro_rules! generate_profile_test {
     ($name:ident, $email:expr, $username:expr) => {
         #[tokio::test]
         async fn $name() {
-            let (_container, pool) = crate::common::setup_test_db().await;
-            let app = create_test_app(pool.clone()).await;
+            let ctx = crate::common::setup_test_db().await;
+            let app = create_test_app(ctx.pool.clone()).await;
 
             // Register
             let register_body = json!({
@@ -136,7 +136,7 @@ macro_rules! generate_profile_test {
             let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(body["data"]["email"], $email);
 
-            pool.close().await;
+            ctx.cleanup().await;
         }
     };
 }
@@ -145,8 +145,8 @@ macro_rules! generate_health_test {
     ($name:ident) => {
         #[tokio::test]
         async fn $name() {
-            let (_container, pool) = crate::common::setup_test_db().await;
-            let app = create_test_app(pool.clone()).await;
+            let ctx = crate::common::setup_test_db().await;
+            let app = create_test_app(ctx.pool.clone()).await;
 
             let request = Request::builder()
                 .uri("/health")
@@ -157,7 +157,7 @@ macro_rules! generate_health_test {
             let response = app.oneshot(request).await.unwrap();
             assert_eq!(response.status(), StatusCode::OK);
 
-            pool.close().await;
+            ctx.cleanup().await;
         }
     };
 }
