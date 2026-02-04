@@ -40,6 +40,8 @@ testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["postgres"] }
 tokio-test = "0.4"
 mockall = "0.13"
+# Enable test-helpers feature for integration tests
+axum-test-it-is-whay-it-is = { path = ".", features = ["test-helpers"] }
 
 [features]
 test-helpers = []
