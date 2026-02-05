@@ -17,6 +17,6 @@ bench = false
 async-nats = "0.42.0"
 tokio = { version = "1.46.1", features = ["full"]}
 futures = { version = "0.3.28", default-features = false, features = ["std"] }
-time = "0.3.41"
+time = "0.3.47"
 log = "0.4.27"
 env_logger = "0.11.8"
