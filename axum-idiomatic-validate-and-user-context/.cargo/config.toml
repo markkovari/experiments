@@ -1,0 +1,10 @@
+[build]
+# Use all available CPU cores
+jobs = 8
+
+[target.aarch64-apple-darwin]
+rustflags = [
+    # Use LLD-compatible linker flags for faster linking
+    "-C", "link-arg=-fuse-ld=/usr/bin/ld",
+    "-C", "link-arg=-Wl,-dead_strip",
+]
