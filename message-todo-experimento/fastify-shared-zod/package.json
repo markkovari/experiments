@@ -1,0 +1,10 @@
+{
+  "name": "fastify-shared-zod",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Todo app with Fastify and shared Zod schemas",
+  "scripts": {
+    "dev:backend": "pnpm --filter backend dev",
+    "dev:frontend": "pnpm --filter frontend dev"
+  }
+}
