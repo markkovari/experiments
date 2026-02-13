@@ -3,7 +3,7 @@ ROOT_DIR := $(shell pwd)
 INFRA_DIR := $(ROOT_DIR)/infra
 PIPELINE_DIR := $(ROOT_DIR)/pipeline
 
-.PHONY: all infra-up infra-down build-a build-b ingest search stats clean
+.PHONY: all infra-up infra-down build-a build-b ingest search query stats clean
 
 all: ingest
 
@@ -37,6 +37,10 @@ ingest:
 search: setup
 	@read -p "Search query: " query; \
 	cd $(PIPELINE_DIR) && uv run python -m src search "$$query"
+
+query: setup
+	@read -p "Ask about your code: " question; \
+	cd $(PIPELINE_DIR) && uv run python -m src query "$$question" --show-context
 
 stats: setup
 	cd $(PIPELINE_DIR) && uv run python -m src stats

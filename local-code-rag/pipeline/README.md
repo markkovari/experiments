@@ -91,6 +91,11 @@ uv run python -m src search "HTTP request handler" --limit 5
 uv run python -m src search "wasmcloud component dependencies"
 uv run python -m src search "WASI keyvalue interface export"
 
+# RAG: ask a question, get an LLM answer grounded in your code
+uv run python -m src query "How does the HTTP handler work?"
+uv run python -m src query "What are the differences between the two services?" --show-context
+uv run python -m src query "Explain the KV store usage" -m llama3.2
+
 # Show statistics
 uv run python -m src stats
 ```
@@ -110,6 +115,7 @@ All commands accept:
 | [config_parser.py](src/config_parser.py) | TOML, YAML, and WIT section-based parsing |
 | [embedder.py](src/embedder.py) | Ollama embedding client (batch support) |
 | [store.py](src/store.py) | SurrealDB vector + graph storage and search |
+| [rag.py](src/rag.py) | RAG module: retrieval + LLM generation |
 | [chunker.py](src/chunker.py) | Orchestration: collect files, route to parsers, embed, store, relate |
 | [models.py](src/models.py) | Dataclasses: `CodeChunk`, `FileInfo`, `CodebaseInfo` |
 
