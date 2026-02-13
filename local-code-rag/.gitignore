@@ -1,0 +1,21 @@
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+uv.lock
+
+# Rust / wasmcloud
+target/
+build/
+Cargo.lock
+wasmcloud.lock
+
+# Docker volumes
+surrealdb-data/
+ollama-data/
+
+# OS
+.DS_Store
