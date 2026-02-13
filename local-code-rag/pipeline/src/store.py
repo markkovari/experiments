@@ -1,4 +1,4 @@
-from surrealdb import Surreal
+from surrealdb import AsyncSurreal
 
 from .models import CodeChunk, FileInfo, CodebaseInfo
 
@@ -9,14 +9,15 @@ SURREAL_DB = "code_rag"
 
 async def connect(
     url: str = SURREAL_URL, ns: str = SURREAL_NS, db: str = SURREAL_DB
-) -> Surreal:
-    client = Surreal(url)
-    await client.signin({"user": "root", "pass": "root"})
+) -> AsyncSurreal:
+    client = AsyncSurreal(url)
+    await client.connect()
+    await client.signin({"username": "root", "password": "root"})
     await client.use(ns, db)
     return client
 
 
-async def store_codebase(client: Surreal, codebase: CodebaseInfo) -> str:
+async def store_codebase(client: AsyncSurreal, codebase: CodebaseInfo):
     """Create a codebase node. Returns the record ID."""
     result = await client.create(
         "codebase",
@@ -29,7 +30,7 @@ async def store_codebase(client: Surreal, codebase: CodebaseInfo) -> str:
     return result["id"]
 
 
-async def store_file(client: Surreal, file_info: FileInfo, codebase_id: str) -> str:
+async def store_file(client: AsyncSurreal, file_info: FileInfo, codebase_id):
     """Create a file node and relate it to its codebase."""
     result = await client.create(
         "file",
@@ -43,13 +44,13 @@ async def store_file(client: Surreal, file_info: FileInfo, codebase_id: str) -> 
     file_id = result["id"]
 
     await client.query(
-        "RELATE $codebase->contains_file->$file",
-        {"codebase": codebase_id, "file": file_id},
+        "RELATE $cb->contains_file->$f",
+        {"cb": codebase_id, "f": file_id},
     )
     return file_id
 
 
-async def store_chunk(client: Surreal, chunk: CodeChunk, file_id: str) -> str:
+async def store_chunk(client: AsyncSurreal, chunk: CodeChunk, file_id):
     """Create a chunk node with embedding and relate it to its file."""
     result = await client.create(
         "chunk",
@@ -69,70 +70,108 @@ async def store_chunk(client: Surreal, chunk: CodeChunk, file_id: str) -> str:
     chunk_id = result["id"]
 
     await client.query(
-        "RELATE $file->contains_chunk->$chunk",
-        {"file": file_id, "chunk": chunk_id},
+        "RELATE $f->contains_chunk->$c",
+        {"f": file_id, "c": chunk_id},
     )
     return chunk_id
 
 
 async def relate_impl_to_type(
-    client: Surreal,
-    impl_id: str,
-    type_id: str,
+    client: AsyncSurreal,
+    impl_id,
+    type_id,
     trait_name: str | None = None,
 ):
     """Create graph edge: impl chunk -> implements -> struct/enum chunk."""
-    params = {"impl_id": impl_id, "type_id": type_id}
     if trait_name:
         await client.query(
             "RELATE $impl_id->implements->$type_id SET trait_name = $trait",
-            {**params, "trait": trait_name},
+            {"impl_id": impl_id, "type_id": type_id, "trait": trait_name},
         )
     else:
-        await client.query("RELATE $impl_id->implements->$type_id", params)
+        await client.query(
+            "RELATE $impl_id->implements->$type_id",
+            {"impl_id": impl_id, "type_id": type_id},
+        )
+
+
+def _flatten_results(result) -> list[dict]:
+    """Flatten nested query results from the SurrealDB SDK."""
+    if not result:
+        return []
+    if isinstance(result, list) and len(result) > 0 and isinstance(result[0], list):
+        return result[-1]
+    if isinstance(result, list):
+        return [r for r in result if isinstance(r, dict)]
+    return []
 
 
 async def search_similar(
-    client: Surreal, query_embedding: list[float], limit: int = 5
+    client: AsyncSurreal, query_embedding: list[float], limit: int = 5
 ) -> list[dict]:
-    """Perform vector similarity search on code chunks."""
+    """Perform vector similarity search on code chunks using cosine similarity."""
     result = await client.query(
-        """
+        f"""
         SELECT
             id, kind, name, source_text, signature,
-            vector::distance::knn() AS distance
+            vector::similarity::cosine(embedding, $embedding) AS score
         FROM chunk
-        WHERE embedding <|$limit|> $embedding
-        ORDER BY distance
+        ORDER BY score DESC
+        LIMIT {limit}
         """,
-        {"embedding": query_embedding, "limit": limit},
+        {"embedding": query_embedding},
     )
-    return result
+    return _flatten_results(result)
 
 
 async def search_with_graph(
-    client: Surreal, query_embedding: list[float], limit: int = 5
+    client: AsyncSurreal, query_embedding: list[float], limit: int = 5
 ) -> list[dict]:
     """Vector search + graph expansion for richer context."""
-    result = await client.query(
-        """
-        LET $similar = (
-            SELECT
-                id, kind, name, source_text, signature,
-                vector::distance::knn() AS distance
-            FROM chunk
-            WHERE embedding <|$limit|> $embedding
-            ORDER BY distance
-        );
+    # First: find similar chunks
+    similar = await search_similar(client, query_embedding, limit)
+    if not similar:
+        return []
 
+    # Deduplicate by chunk ID
+    seen = set()
+    unique = []
+    for r in similar:
+        rid = str(r.get("id", ""))
+        if rid not in seen:
+            seen.add(rid)
+            unique.append(r)
+    similar = unique
+
+    # Second: enrich each chunk with graph context
+    chunk_ids = [r["id"] for r in similar]
+    raw_enriched = await client.query(
+        """
         SELECT
             *,
             <-contains_chunk<-file.relative_path AS file_path,
             <-contains_chunk<-file<-contains_file<-codebase.name AS codebase_name,
             ->implements->chunk AS implements_types,
             <-implements<-chunk AS implemented_by
-        FROM $similar;
+        FROM $ids
         """,
-        {"embedding": query_embedding, "limit": limit},
+        {"ids": chunk_ids},
     )
-    return result
+    enriched = _flatten_results(raw_enriched)
+
+    # Deduplicate enriched results by ID
+    seen = set()
+    unique_enriched = []
+    for item in enriched:
+        rid = str(item.get("id", ""))
+        if rid not in seen:
+            seen.add(rid)
+            unique_enriched.append(item)
+
+    # Merge scores back in
+    score_map = {str(r["id"]): r["score"] for r in similar}
+    for item in unique_enriched:
+        item["score"] = score_map.get(str(item.get("id")), 0)
+    unique_enriched.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+    return unique_enriched

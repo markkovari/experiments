@@ -50,6 +50,7 @@ This project demonstrates an end-to-end workflow for building a code knowledge b
                                     v
                           +-------------------+
                           |  CLI: search      |  "find code similar to X"
+                          |       query       |  RAG: search + LLM answer
                           |       stats       |  + graph context (file, codebase,
                           |                   |    related types, implementations)
                           +-------------------+
@@ -126,14 +127,36 @@ uv run python -m src search "error handling pattern"
 
 Search returns semantically similar code chunks along with graph context: which file and codebase they belong to, what types they implement, etc.
 
-### 5. View Stats
+### 5. Ask Questions (RAG)
+
+This is the full RAG loop: your question gets embedded, relevant code is retrieved from the vector+graph DB, and a local LLM generates an answer grounded in your actual code.
+
+```bash
+cd pipeline
+
+# Basic question
+uv run python -m src query "How does the HTTP handler work?"
+
+# Show the retrieved context alongside the answer
+uv run python -m src query "What is the difference between the two counter services?" --show-context
+
+# Use a specific model
+uv run python -m src query "Explain the KV store usage" -m llama3.2
+
+# Or via Makefile (interactive prompt)
+make query
+```
+
+The first time you run `query`, Ollama will pull the generation model (~4GB for `qwen2.5-coder:7b`). You can switch to a smaller model with `-m qwen2.5-coder:1.5b` or any model you already have.
+
+### 6. View Stats
 
 ```bash
 cd pipeline
 uv run python -m src stats
 ```
 
-### 6. Tear Down
+### 7. Tear Down
 
 ```bash
 make clean        # Stop containers, remove volumes, delete venv and build artifacts
@@ -155,6 +178,7 @@ make infra-down   # Stop containers only (preserves data)
 | `make setup` | Install Python deps with uv |
 | `make ingest` | Run full ingestion pipeline |
 | `make search` | Interactive semantic search |
+| `make query` | Interactive RAG question answering |
 | `make stats` | Show ingestion statistics |
 | `make clean` | Remove everything |
 

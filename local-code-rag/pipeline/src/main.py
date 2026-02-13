@@ -6,6 +6,7 @@ import click
 
 from .chunker import ingest_codebase
 from .embedder import embed_text
+from .rag import query_rag
 from .store import connect, search_with_graph
 
 
@@ -82,7 +83,7 @@ def search(query: str, limit: int, ollama_host: str, surreal_url: str):
                 continue
             kind = r.get("kind", "?")
             name = r.get("name", "?")
-            distance = r.get("distance", "?")
+            score = r.get("score", "?")
             codebase = r.get("codebase_name", ["?"])
             file_path = r.get("file_path", ["?"])
             source = r.get("source_text", "")
@@ -91,7 +92,7 @@ def search(query: str, limit: int, ollama_host: str, surreal_url: str):
             print(f"  [{kind}] {name}")
             print(f"  Codebase: {codebase}")
             print(f"  File: {file_path}")
-            print(f"  Distance: {distance}")
+            print(f"  Score: {score}")
             print(f"  Source preview:")
             for line in source.split("\n")[:10]:
                 print(f"    {line}")
@@ -99,6 +100,71 @@ def search(query: str, limit: int, ollama_host: str, surreal_url: str):
                 print(f"    ... ({source.count(chr(10)) - 10} more lines)")
 
     asyncio.run(_search())
+
+
+@cli.command()
+@click.argument("question")
+@click.option("--limit", "-l", default=5, help="Number of code chunks to retrieve")
+@click.option(
+    "--model",
+    "-m",
+    default="qwen2.5-coder:7b",
+    help="Ollama model for generation",
+)
+@click.option(
+    "--show-context",
+    is_flag=True,
+    help="Print retrieved code chunks before the answer",
+)
+@click.option(
+    "--ollama-host",
+    default="http://localhost:11434",
+    help="Ollama server URL",
+)
+@click.option(
+    "--surreal-url",
+    default="ws://localhost:8000/rpc",
+    help="SurrealDB WebSocket URL",
+)
+def query(
+    question: str,
+    limit: int,
+    model: str,
+    show_context: bool,
+    ollama_host: str,
+    surreal_url: str,
+):
+    """Ask a question about your codebase using RAG.
+
+    Retrieves relevant code via vector search, then uses a local LLM to answer.
+
+    Examples:
+
+        uv run python -m src query "How does the HTTP handler work?"
+
+        uv run python -m src query "What is the difference between the two counter services?" --show-context
+
+        uv run python -m src query "Explain the KV store usage" -m llama3.2
+    """
+
+    async def _query():
+        print(f"Question: {question}")
+        print(f"Model: {model}")
+        print(f"Retrieving {limit} relevant code chunks...\n")
+
+        answer = await query_rag(
+            question=question,
+            ollama_host=ollama_host,
+            surreal_url=surreal_url,
+            model=model,
+            limit=limit,
+            show_context=show_context,
+        )
+
+        print("=== Answer ===\n")
+        print(answer)
+
+    asyncio.run(_query())
 
 
 @cli.command()

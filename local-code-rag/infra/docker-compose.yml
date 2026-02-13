@@ -5,14 +5,12 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
-    volumes:
-      - surrealdb-data:/data
     command:
       - start
       - --log=info
       - --user=root
       - --pass=root
-      - file:/data/database.db
+      - memory
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -33,9 +31,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 8G
+          memory: 16G
         reservations:
-          memory: 4G
+          memory: 8G
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
       interval: 30s
@@ -43,5 +41,4 @@ services:
       retries: 5
 
 volumes:
-  surrealdb-data:
   ollama-data:
