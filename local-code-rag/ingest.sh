@@ -26,10 +26,10 @@ for i in $(seq 1 30); do
     sleep 2
 done
 
-# 3. Wait for Ollama
+# 3. Wait for Ollama (Docker container on port 11435)
 echo "[3/6] Waiting for Ollama to be healthy..."
 for i in $(seq 1 60); do
-    if curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; then
+    if curl -sf http://localhost:11435/api/tags > /dev/null 2>&1; then
         echo "  Ollama is ready."
         break
     fi
@@ -42,7 +42,7 @@ done
 
 # Ensure the embedding model is available
 echo "  Ensuring nomic-embed-text model is pulled..."
-curl -sf http://localhost:11434/api/tags | grep -q "nomic-embed-text" || \
+curl -sf http://localhost:11435/api/tags | grep -q "nomic-embed-text" || \
     docker exec ollama ollama pull nomic-embed-text
 
 # 4. Apply SurrealDB schema
@@ -65,16 +65,16 @@ uv sync
 echo "[6/6] Ingesting codebases..."
 echo ""
 echo "--- Ingesting counter-service-a ---"
-uv run python -m src ingest "$SCRIPT_DIR/counter-service-a" --name counter-service-a
+uv run python -m src ingest "$SCRIPT_DIR/counter-service-a" --name counter-service-a --ollama-host http://localhost:11435
 
 echo ""
 echo "--- Ingesting counter-service-b ---"
-uv run python -m src ingest "$SCRIPT_DIR/counter-service-b" --name counter-service-b
+uv run python -m src ingest "$SCRIPT_DIR/counter-service-b" --name counter-service-b --ollama-host http://localhost:11435
 
 echo ""
 echo "=== Ingestion complete! ==="
 echo ""
 echo "Usage:"
-echo "  Search:  cd $SCRIPT_DIR/pipeline && uv run python -m src search 'HTTP handler'"
+echo "  Search:  cd $SCRIPT_DIR/pipeline && uv run python -m src search 'HTTP handler' --ollama-host http://localhost:11435"
 echo "  Stats:   cd $SCRIPT_DIR/pipeline && uv run python -m src stats"
 echo "  Cleanup: make -C $SCRIPT_DIR infra-down"
