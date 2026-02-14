@@ -7,6 +7,7 @@ import click
 from .chunker import ingest_codebase
 from .embedder import embed_text
 from .rag import query_rag
+from .repl import run_repl
 from .store import connect, search_with_graph
 
 
@@ -201,6 +202,41 @@ def stats(surreal_url: str):
         print(f"Edges: {edges}")
 
     asyncio.run(_stats())
+
+
+@cli.command()
+@click.option(
+    "--surreal-url",
+    default="ws://localhost:8000/rpc",
+    help="SurrealDB WebSocket URL",
+)
+@click.option(
+    "--ollama-host",
+    default="http://localhost:11434",
+    help="Ollama server URL",
+)
+def repl(surreal_url: str, ollama_host: str):
+    """Start interactive knowledge graph REPL.
+
+    Launch an interactive shell for exploring and modifying the knowledge graph.
+    Supports node/edge CRUD, graph traversal, semantic search, and raw queries.
+
+    Examples:
+
+        uv run python -m src repl
+
+        uv run python -m src repl --surreal-url ws://localhost:8000/rpc
+
+    In the REPL:
+
+        graph> stats
+        graph> node list chunk --limit 5
+        graph> search "HTTP handler"
+        graph> traverse chunk:xyz --direction out --depth 2
+        graph> query SELECT * FROM chunk WHERE kind = 'function'
+        graph> exit
+    """
+    run_repl(surreal_url=surreal_url, ollama_host=ollama_host)
 
 
 if __name__ == "__main__":

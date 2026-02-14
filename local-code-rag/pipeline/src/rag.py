@@ -1,18 +1,27 @@
 """RAG module: retrieval-augmented generation over ingested codebases."""
 
+import json
+
 import ollama
 
 from .embedder import embed_text
 from .store import connect, search_with_graph
+from .tools import AVAILABLE_TOOLS, TOOL_FUNCTIONS
 
 DEFAULT_MODEL = "qwen2.5-coder:7b"
 
 SYSTEM_PROMPT = """\
-You are a code assistant that answers questions about codebases.
-You will be given relevant code snippets retrieved from a vector+graph database.
-Use ONLY the provided context to answer. If the context doesn't contain enough
-information, say so. Reference specific functions, structs, and file paths in
-your answers."""
+You are a code assistant with access to:
+1. Retrieved code snippets from a local codebase
+2. Web search for external knowledge (standards, frameworks, concepts)
+
+Use the provided codebase context first. When you need external information about
+technologies, standards, or concepts not in the codebase (like WASM, WASI, HTTP
+specifications, library documentation), use the search_web tool.
+
+When referencing code, mention specific functions, structs, and file paths.
+If the context doesn't contain enough information and web search doesn't help,
+say so clearly."""
 
 CONTEXT_TEMPLATE = """\
 ## {kind}: `{name}`
@@ -52,6 +61,28 @@ def format_context(results: list[dict]) -> str:
     return "\n---\n".join(sections)
 
 
+def execute_tool_call(tool_call: dict) -> str:
+    """Execute a tool call and return the result."""
+    name = tool_call.get("function", {}).get("name", "")
+    args = tool_call.get("function", {}).get("arguments", {})
+
+    # Arguments may be a string (JSON) or dict
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except json.JSONDecodeError:
+            args = {}
+
+    if name in TOOL_FUNCTIONS:
+        try:
+            result = TOOL_FUNCTIONS[name](**args)
+            return result
+        except Exception as e:
+            return f"Tool execution error: {e}"
+    else:
+        return f"Unknown tool: {name}"
+
+
 async def query_rag(
     question: str,
     ollama_host: str = "http://localhost:11434",
@@ -59,8 +90,9 @@ async def query_rag(
     model: str = DEFAULT_MODEL,
     limit: int = 5,
     show_context: bool = False,
+    max_tool_calls: int = 3,
 ) -> str:
-    """Full RAG pipeline: embed question -> search -> LLM answer."""
+    """Full RAG pipeline: embed question -> search -> LLM answer with tool calling."""
 
     # 1. Embed the question
     query_embedding = embed_text(question, host=ollama_host)
@@ -80,7 +112,7 @@ async def query_rag(
         print(context)
         print("=========================\n")
 
-    # 4. Build the prompt and call the LLM
+    # 4. Build the initial prompt
     user_prompt = f"""Here are relevant code snippets from the codebase:
 
 {context}
@@ -89,15 +121,51 @@ async def query_rag(
 
 **Question:** {question}
 
-Please answer based on the code above."""
+Please answer based on the code above. If you need additional information about external
+technologies, standards, or concepts (like WASM, WASI, HTTP specs), use the search_web tool."""
+
+    # 5. Build messages for LLM
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
 
     llm_client = ollama.Client(host=ollama_host)
+
+    # 6. Tool calling loop
+    for _ in range(max_tool_calls):
+        response = llm_client.chat(
+            model=model,
+            messages=messages,
+            tools=AVAILABLE_TOOLS,
+        )
+
+        message = response.get("message", {})
+
+        # Check if the model wants to call tools
+        tool_calls = message.get("tool_calls", [])
+
+        if not tool_calls:
+            # No tool calls, return the final answer
+            return message.get("content", "")
+
+        # Execute each tool call
+        print(f"[RAG] Executing {len(tool_calls)} tool call(s)...")
+        messages.append(message)  # Add assistant message with tool_calls
+
+        for tool_call in tool_calls:
+            tool_name = tool_call.get("function", {}).get("name", "unknown")
+            print(f"[RAG] Calling tool: {tool_name}")
+
+            result = execute_tool_call(tool_call)
+
+            # Add tool result to messages
+            messages.append({"role": "tool", "content": result})
+
+    # If we exhausted tool calls, make one final call without tools
     response = llm_client.chat(
         model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
+        messages=messages,
     )
 
-    return response["message"]["content"]
+    return response.get("message", {}).get("content", "")
