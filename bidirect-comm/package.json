@@ -1,0 +1,10 @@
+{
+  "name": "bidirect-comm",
+  "private": true,
+  "scripts": {
+    "backend:http": "cd backend && npm run http",
+    "backend:ws": "cd backend && npm run ws",
+    "backend:sse": "cd backend && npm run sse",
+    "frontend": "cd frontend && npm run dev"
+  }
+}

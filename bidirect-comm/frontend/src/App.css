@@ -1,0 +1,153 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  background: #0f0f13;
+  color: #e0e0e0;
+}
+
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+h1 {
+  text-align: center;
+  margin-bottom: 2rem;
+  font-size: 1.8rem;
+  color: #fff;
+}
+
+.group {
+  margin-bottom: 2.5rem;
+}
+
+.group-title {
+  font-size: 1.1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #666;
+  margin: 0 0 1rem 0;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #2e2e3e;
+}
+
+.panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+}
+
+.panel {
+  background: #1a1a24;
+  border: 1px solid #2e2e3e;
+  border-radius: 12px;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.panel h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #a0a0ff;
+}
+
+.description {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #888;
+}
+
+.input-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.input-row input {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid #3a3a4e;
+  background: #0f0f18;
+  color: #e0e0e0;
+  font-size: 1rem;
+}
+
+.input-row input:focus {
+  outline: none;
+  border-color: #6060cc;
+}
+
+.input-row input:disabled {
+  opacity: 0.4;
+}
+
+.input-row button {
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  border: none;
+  background: #5050cc;
+  color: #fff;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.input-row button:hover:not(:disabled) {
+  background: #6060e0;
+}
+
+.input-row button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.result {
+  margin: 0;
+  font-family: monospace;
+  font-size: 1rem;
+  color: #7ef7b0;
+}
+
+.message-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.message-list li {
+  font-family: monospace;
+  font-size: 0.9rem;
+  color: #7ef7b0;
+  padding: 0.2rem 0;
+  border-bottom: 1px solid #1e1e2e;
+}
+
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.dot.green {
+  background: #4ade80;
+}
+
+.dot.red {
+  background: #f87171;
+}
