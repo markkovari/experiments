@@ -13,7 +13,7 @@ spec:
       traits:
         - type: spreadscaler
           properties:
-            instances: 1
+            instances: 10
         - type: link
           properties:
             target: keyvalue-nats
