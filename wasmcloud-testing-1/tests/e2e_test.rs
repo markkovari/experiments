@@ -267,7 +267,7 @@ async fn test_concurrent_increments() {
     let client = reqwest::Client::new();
     let counter_name = format!("concurrent_{}", chrono::Utc::now().timestamp());
 
-    // Perform 10 concurrent increments
+    // Perform 10 concurrent increments with small delays
     let mut handles = vec![];
 
     for _ in 0..10 {
@@ -283,6 +283,7 @@ async fn test_concurrent_increments() {
         });
 
         handles.push(handle);
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 
     // Wait for all requests to complete

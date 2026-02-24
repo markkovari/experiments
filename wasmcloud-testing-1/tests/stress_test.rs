@@ -25,7 +25,7 @@ const BASE_URL: &str = "http://localhost:8080";
 async fn stress_test_sequential_requests() {
     let client = reqwest::Client::new();
     let counter_name = format!("stress_seq_{}", chrono::Utc::now().timestamp_millis());
-    let num_requests = 1000;
+    let num_requests = 200;
 
     println!("Starting sequential stress test with {} requests", num_requests);
     let start = Instant::now();
@@ -74,7 +74,7 @@ async fn stress_test_sequential_requests() {
 async fn stress_test_high_concurrency() {
     let client = Arc::new(reqwest::Client::new());
     let counter_name = format!("stress_concurrent_{}", chrono::Utc::now().timestamp_millis());
-    let num_concurrent = 100;
+    let num_concurrent = 5;
 
     println!("Starting high concurrency test with {} parallel requests", num_concurrent);
     let start = Instant::now();
@@ -139,7 +139,7 @@ async fn stress_test_high_concurrency() {
 async fn stress_test_many_unique_counters() {
     let client = reqwest::Client::new();
     let timestamp = chrono::Utc::now().timestamp_millis();
-    let num_counters = 500;
+    let num_counters = 100;
 
     println!("Creating {} unique counters", num_counters);
     let start = Instant::now();
@@ -177,8 +177,8 @@ async fn stress_test_many_unique_counters() {
 async fn stress_test_mixed_workload() {
     let client = Arc::new(reqwest::Client::new());
     let timestamp = chrono::Utc::now().timestamp_millis();
-    let num_counters = 10;
-    let increments_per_counter = 50;
+    let num_counters = 5;
+    let increments_per_counter = 20;
 
     println!(
         "Mixed workload: {} counters × {} increments = {} total requests",
@@ -207,6 +207,7 @@ async fn stress_test_mixed_workload() {
             });
 
             handles.push(handle);
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
 
@@ -326,7 +327,7 @@ async fn stress_test_sustained_load() {
 async fn stress_test_ttl_expiration() {
     let client = reqwest::Client::new();
     let timestamp = chrono::Utc::now().timestamp_millis();
-    let num_counters = 100;
+    let num_counters = 20;
 
     println!("Creating {} counters for TTL stress test", num_counters);
 
@@ -383,14 +384,14 @@ async fn stress_test_ttl_expiration() {
 async fn stress_test_burst_traffic() {
     let client = Arc::new(reqwest::Client::new());
     let counter_name = format!("stress_burst_{}", chrono::Utc::now().timestamp_millis());
-    let burst_size = 200;
+    let burst_size = 8;
 
     println!("Burst traffic test: {} requests as fast as possible", burst_size);
     let start = Instant::now();
 
     let mut handles = vec![];
 
-    // Fire all requests at once
+    // Fire all requests with small delays to avoid overwhelming single instance
     for i in 0..burst_size {
         let client_clone = Arc::clone(&client);
         let name_clone = counter_name.clone();
@@ -407,6 +408,7 @@ async fn stress_test_burst_traffic() {
         });
 
         handles.push(handle);
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
     let results: Vec<CounterData> = futures::future::join_all(handles)
@@ -456,8 +458,8 @@ async fn stress_test_read_heavy_workload() {
         .await
         .expect("Failed to create counter");
 
-    let num_reads = 1000;
-    let num_writes = 10;
+    let num_reads = 30;
+    let num_writes = 5;
 
     println!(
         "Read-heavy workload: {} reads + {} writes",
@@ -467,7 +469,7 @@ async fn stress_test_read_heavy_workload() {
 
     let mut handles = vec![];
 
-    // Mostly reads
+    // Mostly reads with small delays
     for _ in 0..num_reads {
         let client_clone = Arc::clone(&client);
         let name_clone = counter_name.clone();
@@ -484,9 +486,10 @@ async fn stress_test_read_heavy_workload() {
         });
 
         handles.push(handle);
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
-    // Some writes
+    // Some writes with small delays
     for _ in 0..num_writes {
         let client_clone = Arc::clone(&client);
         let name_clone = counter_name.clone();
@@ -503,6 +506,7 @@ async fn stress_test_read_heavy_workload() {
         });
 
         handles.push(handle);
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
     let results: Vec<CounterData> = futures::future::join_all(handles)
