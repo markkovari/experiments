@@ -1,0 +1,28 @@
+# Rust
+/target
+/build
+Cargo.lock
+**/*.rs.bk
+
+# wasmCloud
+*.wasm
+*.signed.wasm
+*_s.wasm
+.wash/
+
+# WIT dependencies
+/wit/deps/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test outputs
+*.log

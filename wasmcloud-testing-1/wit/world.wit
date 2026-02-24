@@ -1,0 +1,13 @@
+package wasmcloud:http-kv-counter@0.1.0;
+
+world http-kv-counter {
+    // Import HTTP server interface
+    import wasi:http/incoming-handler@0.2.0;
+
+    // Import keyvalue interfaces
+    import wasi:keyvalue/store@0.2.0-draft2;
+    import wasi:keyvalue/atomics@0.2.0-draft2;
+
+    // Export HTTP handler interface
+    export wasi:http/incoming-handler@0.2.0;
+}
