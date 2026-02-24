@@ -23,7 +23,7 @@ spec:
             target_config:
               - name: counters-config
                 properties:
-                  bucket: counters
+                  bucket: default
                   max_age: 3s
 
     # HTTP Server provider
