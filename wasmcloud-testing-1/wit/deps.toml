@@ -1,0 +1,5 @@
+# Dependencies for WIT interfaces
+# wash will automatically fetch these dependencies
+
+wasi-http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"
+wasi-keyvalue = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"

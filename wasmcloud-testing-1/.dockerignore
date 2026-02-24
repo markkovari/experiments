@@ -1,0 +1,49 @@
+# Rust build artifacts
+target/
+build/
+**/*.wasm
+**/*.signed.wasm
+**/*_s.wasm
+
+# Dependencies
+Cargo.lock
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test outputs
+test-results/
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Documentation (not needed for build)
+README.md
+*.md
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Local wash artifacts
+.wash/
+
+# WIT dependencies (will be fetched during build)
+wit/deps/
