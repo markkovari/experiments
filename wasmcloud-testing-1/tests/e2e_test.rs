@@ -38,14 +38,14 @@ async fn test_get_root_info() {
 
     assert_eq!(response.status(), 200);
 
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .expect("Failed to parse JSON");
+    let json: serde_json::Value = response.json().await.expect("Failed to parse JSON");
 
     // Should return an info message
     assert!(json["message"].as_str().is_some());
-    assert!(json["message"].as_str().unwrap().contains("Counter service"));
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("Counter service"));
 }
 
 /// Test POST /:name endpoint - creates and increments counter
@@ -64,10 +64,7 @@ async fn test_post_increment_counter() {
 
     assert_eq!(response.status(), 200);
 
-    let counter: CounterData = response
-        .json()
-        .await
-        .expect("Failed to parse JSON");
+    let counter: CounterData = response.json().await.expect("Failed to parse JSON");
 
     assert_eq!(counter.name, counter_name);
     assert_eq!(counter.value, 1);
@@ -81,10 +78,7 @@ async fn test_post_increment_counter() {
 
     assert_eq!(response.status(), 200);
 
-    let counter: CounterData = response
-        .json()
-        .await
-        .expect("Failed to parse JSON");
+    let counter: CounterData = response.json().await.expect("Failed to parse JSON");
 
     assert_eq!(counter.name, counter_name);
     assert_eq!(counter.value, 2);
@@ -113,10 +107,7 @@ async fn test_get_specific_counter() {
 
     assert_eq!(response.status(), 200);
 
-    let counter: CounterData = response
-        .json()
-        .await
-        .expect("Failed to parse JSON");
+    let counter: CounterData = response.json().await.expect("Failed to parse JSON");
 
     assert_eq!(counter.name, counter_name);
     assert_eq!(counter.value, 1);
@@ -137,10 +128,7 @@ async fn test_get_nonexistent_counter() {
 
     assert_eq!(response.status(), 200);
 
-    let counter: CounterData = response
-        .json()
-        .await
-        .expect("Failed to parse JSON");
+    let counter: CounterData = response.json().await.expect("Failed to parse JSON");
 
     assert_eq!(counter.name, counter_name);
     assert_eq!(counter.value, 0);
@@ -164,10 +152,7 @@ async fn test_counter_ttl_expiration() {
 
     assert_eq!(response.status(), 200);
 
-    let counter: CounterData = response
-        .json()
-        .await
-        .expect("Failed to parse JSON");
+    let counter: CounterData = response.json().await.expect("Failed to parse JSON");
 
     assert_eq!(counter.value, 1);
 
@@ -198,10 +183,7 @@ async fn test_counter_ttl_expiration() {
 
     assert_eq!(response.status(), 200);
 
-    let counter: CounterData = response
-        .json()
-        .await
-        .expect("Failed to parse JSON");
+    let counter: CounterData = response.json().await.expect("Failed to parse JSON");
 
     // Should return 0 after TTL expiration (counter resets)
     assert_eq!(counter.value, 0);
@@ -231,10 +213,7 @@ async fn test_multiple_counters() {
 
         assert_eq!(response.status(), 200);
 
-        let counter: CounterData = response
-            .json()
-            .await
-            .expect("Failed to parse JSON");
+        let counter: CounterData = response.json().await.expect("Failed to parse JSON");
 
         assert_eq!(counter.name, *name);
         assert_eq!(counter.value, 1);
@@ -250,10 +229,7 @@ async fn test_multiple_counters() {
 
         assert_eq!(response.status(), 200);
 
-        let counter: CounterData = response
-            .json()
-            .await
-            .expect("Failed to parse JSON");
+        let counter: CounterData = response.json().await.expect("Failed to parse JSON");
 
         assert_eq!(counter.name, *name);
         assert_eq!(counter.value, 1);
@@ -300,13 +276,14 @@ async fn test_concurrent_increments() {
 
     assert_eq!(response.status(), 200);
 
-    let counter: CounterData = response
-        .json()
-        .await
-        .expect("Failed to parse JSON");
+    let counter: CounterData = response.json().await.expect("Failed to parse JSON");
 
     // Should have incremented to 10 (with proper atomics)
-    assert_eq!(counter.value, 10, "Concurrent increments failed, expected 10 got {}", counter.value);
+    assert_eq!(
+        counter.value, 10,
+        "Concurrent increments failed, expected 10 got {}",
+        counter.value
+    );
 }
 
 /// Test invalid HTTP methods
@@ -351,10 +328,7 @@ async fn test_counter_special_characters() {
 
     assert_eq!(response.status(), 200);
 
-    let counter: CounterData = response
-        .json()
-        .await
-        .expect("Failed to parse JSON");
+    let counter: CounterData = response.json().await.expect("Failed to parse JSON");
 
     assert_eq!(counter.name, counter_name);
     assert_eq!(counter.value, 1);

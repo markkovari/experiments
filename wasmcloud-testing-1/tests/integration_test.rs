@@ -16,7 +16,10 @@ fn test_path_parsing() {
     assert_eq!(parse_path("/"), ("root", None));
 
     // Test counter path
-    assert_eq!(parse_path("/mycounter"), ("counter", Some("mycounter".to_string())));
+    assert_eq!(
+        parse_path("/mycounter"),
+        ("counter", Some("mycounter".to_string()))
+    );
 
     // Test invalid paths
     assert_eq!(parse_path("/foo/bar/baz"), ("unknown", None));
@@ -73,7 +76,8 @@ fn test_json_array_serialization() {
     ];
 
     let json = serde_json::to_string(&counters).expect("Failed to serialize");
-    let deserialized: Vec<CounterData> = serde_json::from_str(&json).expect("Failed to deserialize");
+    let deserialized: Vec<CounterData> =
+        serde_json::from_str(&json).expect("Failed to deserialize");
 
     assert_eq!(deserialized.len(), 2);
     assert_eq!(deserialized[0].name, "counter1");
@@ -145,9 +149,9 @@ fn increment_counter_logic(current_value: Option<i64>) -> i64 {
 }
 
 fn parse_counter_value(bytes: &[u8]) -> Result<i64, String> {
-    let value_str = std::str::from_utf8(bytes)
-        .map_err(|e| format!("Invalid UTF-8: {}", e))?;
-    value_str.parse::<i64>()
+    let value_str = std::str::from_utf8(bytes).map_err(|e| format!("Invalid UTF-8: {}", e))?;
+    value_str
+        .parse::<i64>()
         .map_err(|e| format!("Invalid number: {}", e))
 }
 

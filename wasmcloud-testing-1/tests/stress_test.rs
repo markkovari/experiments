@@ -27,7 +27,10 @@ async fn stress_test_sequential_requests() {
     let counter_name = format!("stress_seq_{}", chrono::Utc::now().timestamp_millis());
     let num_requests = 200;
 
-    println!("Starting sequential stress test with {} requests", num_requests);
+    println!(
+        "Starting sequential stress test with {} requests",
+        num_requests
+    );
     let start = Instant::now();
 
     for i in 0..num_requests {
@@ -73,10 +76,16 @@ async fn stress_test_sequential_requests() {
 #[ignore] // Requires running wasmCloud host
 async fn stress_test_high_concurrency() {
     let client = Arc::new(reqwest::Client::new());
-    let counter_name = format!("stress_concurrent_{}", chrono::Utc::now().timestamp_millis());
+    let counter_name = format!(
+        "stress_concurrent_{}",
+        chrono::Utc::now().timestamp_millis()
+    );
     let num_concurrent = 5;
 
-    println!("Starting high concurrency test with {} parallel requests", num_concurrent);
+    println!(
+        "Starting high concurrency test with {} parallel requests",
+        num_concurrent
+    );
     let start = Instant::now();
 
     let mut handles = vec![];
@@ -93,7 +102,10 @@ async fn stress_test_high_concurrency() {
                 .expect(&format!("Failed at concurrent request {}", i));
 
             assert_eq!(response.status(), 200, "Failed at concurrent request {}", i);
-            response.json::<CounterData>().await.expect("Failed to parse JSON")
+            response
+                .json::<CounterData>()
+                .await
+                .expect("Failed to parse JSON")
         });
 
         handles.push(handle);
@@ -161,10 +173,7 @@ async fn stress_test_many_unique_counters() {
     }
 
     let duration = start.elapsed();
-    println!(
-        "Created {} unique counters in {:?}",
-        num_counters, duration
-    );
+    println!("Created {} unique counters in {:?}", num_counters, duration);
     println!(
         "Average: {:.2} counters/sec",
         num_counters as f64 / duration.as_secs_f64()
@@ -220,7 +229,10 @@ async fn stress_test_mixed_workload() {
     let duration = start.elapsed();
     let total_requests = num_counters * increments_per_counter;
 
-    println!("Completed {} mixed requests in {:?}", total_requests, duration);
+    println!(
+        "Completed {} mixed requests in {:?}",
+        total_requests, duration
+    );
     println!(
         "Average: {:.2} req/sec",
         total_requests as f64 / duration.as_secs_f64()
@@ -386,7 +398,10 @@ async fn stress_test_burst_traffic() {
     let counter_name = format!("stress_burst_{}", chrono::Utc::now().timestamp_millis());
     let burst_size = 8;
 
-    println!("Burst traffic test: {} requests as fast as possible", burst_size);
+    println!(
+        "Burst traffic test: {} requests as fast as possible",
+        burst_size
+    );
     let start = Instant::now();
 
     let mut handles = vec![];
@@ -419,10 +434,7 @@ async fn stress_test_burst_traffic() {
 
     let duration = start.elapsed();
 
-    println!(
-        "Burst completed: {} requests in {:?}",
-        burst_size, duration
-    );
+    println!("Burst completed: {} requests in {:?}", burst_size, duration);
     println!(
         "Peak rate: {:.2} req/sec",
         burst_size as f64 / duration.as_secs_f64()
@@ -449,7 +461,10 @@ async fn stress_test_burst_traffic() {
 #[ignore] // Requires running wasmCloud host
 async fn stress_test_read_heavy_workload() {
     let client = Arc::new(reqwest::Client::new());
-    let counter_name = format!("stress_read_heavy_{}", chrono::Utc::now().timestamp_millis());
+    let counter_name = format!(
+        "stress_read_heavy_{}",
+        chrono::Utc::now().timestamp_millis()
+    );
 
     // Create counter with initial value
     client
