@@ -2,7 +2,6 @@ use serde::Serialize;
 use wasmcloud_component::http;
 use wasmcloud_component::http::ErrorCode;
 use wasmcloud_component::wasi::keyvalue::*;
-use wasmcloud_component::wasmcloud::bus::lattice;
 
 #[derive(Serialize)]
 struct CounterData {
@@ -51,16 +50,6 @@ impl http::Server for Component {
 
         let object_name = path_with_query.path();
         let method = parts.method;
-
-        // Set the link name before performing keyvalue operations
-        lattice::set_link_name(
-            "default",
-            vec![
-                lattice::CallTargetInterface::new("wasi", "keyvalue", "store"),
-                lattice::CallTargetInterface::new("wasi", "keyvalue", "atomics"),
-            ],
-        )
-        .map_err(|e| ErrorCode::InternalError(Some(e.to_string())))?;
 
         // Open the KV bucket
         let bucket = store::open("default")
