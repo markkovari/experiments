@@ -1,8 +1,11 @@
 #!/bin/bash
 # Manual E2E Test Script for HTTP KV Counter
-# Tests the component running on port 8081 (Docker) or 8080 (local)
+#
+# Usage:
+#   ./scripts/manual-e2e-test.sh         # Tests local (wash dev) on port 8080
+#   ./scripts/manual-e2e-test.sh 8081    # Tests Docker on port 8081
 
-PORT=${1:-8081}
+PORT=${1:-8080}
 BASE_URL="http://localhost:$PORT"
 
 echo "🧪 Starting E2E Tests against $BASE_URL"
