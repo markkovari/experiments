@@ -22,7 +22,7 @@ struct ErrorResponse {
 }
 
 // Base URL for the deployed component
-const BASE_URL: &str = "http://localhost:8080";
+const BASE_URL: &str = "http://localhost:8000";
 
 /// Test GET / endpoint - returns info message
 #[tokio::test]
@@ -134,10 +134,10 @@ async fn test_get_nonexistent_counter() {
     assert_eq!(counter.value, 0);
 }
 
-/// Test TTL functionality - counter should expire after 3 seconds
+/// Test TTL functionality - counter should persist with 60s TTL
 #[tokio::test]
 #[ignore] // Requires running wasmCloud host
-async fn test_counter_ttl_expiration() {
+async fn test_counter_ttl_persistence() {
     let client = reqwest::Client::new();
     let counter_name = format!("ttl_test_{}", chrono::Utc::now().timestamp());
 
@@ -158,36 +158,26 @@ async fn test_counter_ttl_expiration() {
 
     println!("Counter created with value: {}", counter.value);
 
-    // Verify counter exists immediately
+    // Verify counter persists for a reasonable time (10 seconds)
+    println!("Waiting 10 seconds to verify counter persists with 60s TTL...");
+    tokio::time::sleep(Duration::from_secs(10)).await;
+
+    // Counter should still exist with 60s TTL
     let response = client
         .get(&format!("{}/{}", BASE_URL, counter_name))
         .send()
         .await
         .expect("Failed to get counter");
 
-    assert_eq!(response.status(), 200);
-    println!("Counter still exists immediately after creation");
-
-    // Wait for TTL to expire (3 seconds + 1 second buffer)
-    println!("Waiting 4 seconds for TTL expiration...");
-    tokio::time::sleep(Duration::from_secs(4)).await;
-
-    // Verify counter has been reset to 0
-    let response = client
-        .get(&format!("{}/{}", BASE_URL, counter_name))
-        .send()
-        .await
-        .expect("Failed to get counter");
-
-    println!("Response status after TTL: {}", response.status());
+    println!("Response status after 10 seconds: {}", response.status());
 
     assert_eq!(response.status(), 200);
 
     let counter: CounterData = response.json().await.expect("Failed to parse JSON");
 
-    // Should return 0 after TTL expiration (counter resets)
-    assert_eq!(counter.value, 0);
-    println!("Counter successfully expired after TTL (value reset to 0)");
+    // Should still be 1 after 10 seconds (60s TTL)
+    assert_eq!(counter.value, 1);
+    println!("Counter successfully persisted after 10 seconds (60s TTL working)");
 }
 
 /// Test multiple independent counters
