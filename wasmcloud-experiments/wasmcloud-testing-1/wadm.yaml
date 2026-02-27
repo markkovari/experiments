@@ -3,7 +3,7 @@ kind: Application
 metadata:
   name: http-kv-counter
   annotations:
-    description: "HTTP server with NATS KV counter with 3-second TTL"
+    description: "HTTP server with NATS KV counter with 60-second TTL"
 spec:
   components:
     - name: http-kv-counter
@@ -24,7 +24,7 @@ spec:
               - name: counters-config
                 properties:
                   bucket: default
-                  max_age: 3s
+                  max_age: 60s
 
     # HTTP Server provider
     - name: httpserver

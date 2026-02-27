@@ -17,7 +17,7 @@ struct CounterData {
     value: i64,
 }
 
-const BASE_URL: &str = "http://localhost:8080";
+const BASE_URL: &str = "http://localhost:8000";
 
 /// Test high volume sequential requests
 #[tokio::test]
@@ -333,15 +333,15 @@ async fn stress_test_sustained_load() {
     );
 }
 
-/// Test TTL stress - create many counters and verify they expire
+/// Test TTL stress - create many counters and verify they persist
 #[tokio::test]
 #[ignore] // Requires running wasmCloud host
-async fn stress_test_ttl_expiration() {
+async fn stress_test_ttl_persistence() {
     let client = reqwest::Client::new();
     let timestamp = chrono::Utc::now().timestamp_millis();
     let num_counters = 20;
 
-    println!("Creating {} counters for TTL stress test", num_counters);
+    println!("Creating {} counters for TTL persistence stress test", num_counters);
 
     // Create many counters
     let counter_names: Vec<String> = (0..num_counters)
@@ -358,11 +358,11 @@ async fn stress_test_ttl_expiration() {
         assert_eq!(response.status(), 200);
     }
 
-    println!("All counters created, waiting for TTL expiration (4 seconds)...");
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    println!("All counters created, waiting 10 seconds to verify persistence...");
+    tokio::time::sleep(Duration::from_secs(10)).await;
 
-    // Verify all counters have expired (value = 0)
-    let mut expired_count = 0;
+    // Verify all counters still exist (value = 1) with 60s TTL
+    let mut persisted_count = 0;
 
     for name in &counter_names {
         let response = client
@@ -373,20 +373,20 @@ async fn stress_test_ttl_expiration() {
 
         let counter: CounterData = response.json().await.expect("Failed to parse JSON");
 
-        if counter.value == 0 {
-            expired_count += 1;
+        if counter.value == 1 {
+            persisted_count += 1;
         }
     }
 
     println!(
-        "TTL expiration: {}/{} counters expired",
-        expired_count, num_counters
+        "TTL persistence: {}/{} counters persisted",
+        persisted_count, num_counters
     );
 
-    // All counters should have expired
+    // All counters should still exist with 60s TTL
     assert_eq!(
-        expired_count, num_counters,
-        "Not all counters expired after TTL"
+        persisted_count, num_counters,
+        "Not all counters persisted (60s TTL)"
     );
 }
 
