@@ -1,13 +1,16 @@
 // E2E tests — programmatic, no CLI subprocesses for live infrastructure.
 //
-// Tests that need wasmCloud running are gated behind a runtime check:
-// if NATS is not reachable they are skipped (print a note and return Ok(())).
-// Run a full suite with a live host: `wash up -d && cargo test -p e2e-tests`
+// A module-level NATS probe runs once (beforeAll equivalent) using
+// `tokio::sync::OnceCell`. Live tests call `require_nats()` which returns
+// a connected client or fails the test when NATS is unreachable.
+//
+// Run with a live host:  wash up -d && cargo test -p e2e-tests
 
 #[cfg(test)]
 mod tests {
     use anyhow::{Context, Result};
     use std::path::PathBuf;
+    use tokio::sync::OnceCell;
 
     fn project_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -18,12 +21,43 @@ mod tests {
             .to_path_buf()
     }
 
-    // ── helpers ──────────────────────────────────────────────────────────────
+    // ── beforeAll: single NATS probe ─────────────────────────────────────────
 
-    /// Try to connect to NATS. Returns None if the server is not available,
-    /// allowing each test to skip gracefully rather than fail.
-    async fn nats_client() -> Option<async_nats::Client> {
-        async_nats::connect("nats://127.0.0.1:4222").await.ok()
+    /// Cached result of the one-time NATS connectivity check.
+    /// `true`  = NATS is reachable (wasmCloud running)
+    /// `false` = NATS is down (live tests will be skipped)
+    static NATS_UP: OnceCell<bool> = OnceCell::const_new();
+
+    /// Run at most once per test process. Prints a banner so the skip reason
+    /// appears exactly once in the output instead of once per live test.
+    async fn nats_available() -> bool {
+        *NATS_UP
+            .get_or_init(|| async {
+                let up = async_nats::ConnectOptions::new()
+                    .connection_timeout(std::time::Duration::from_millis(500))
+                    .connect("nats://127.0.0.1:4222")
+                    .await
+                    .is_ok();
+                if up {
+                    println!("\n[e2e setup] ✓ NATS reachable — live infrastructure tests will run");
+                } else {
+                    println!("\n[e2e setup] ✗ NATS not reachable — live tests will FAIL\n             run `wash up -d` to fix this");
+                }
+                up
+            })
+            .await
+    }
+
+    /// Return a connected NATS client, or an error when NATS is unreachable.
+    /// The banner from `nats_available()` is printed once; this just propagates
+    /// the failure so the calling test is marked as failed, not skipped.
+    async fn require_nats() -> Result<async_nats::Client> {
+        if !nats_available().await {
+            anyhow::bail!("NATS not reachable — run `wash up -d` to start wasmCloud");
+        }
+        async_nats::connect("nats://127.0.0.1:4222")
+            .await
+            .context("failed to connect to NATS")
     }
 
     /// Query `wadm.api.default.model.list` and return the parsed app list.
@@ -152,10 +186,7 @@ mod tests {
     #[tokio::test]
     async fn test_ratelimit_wash_available() -> Result<()> {
         // Checks wasmCloud is reachable via NATS and at least one host is up.
-        let Some(nc) = nats_client().await else {
-            println!("⚠ NATS not reachable — skipping (run `wash up -d` first)");
-            return Ok(());
-        };
+        let nc = require_nats().await?;
 
         // Ping the lattice: wasmbus.ctl.v1.default.ping.hosts returns host pings.
         let reply = nc
@@ -175,10 +206,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_auth_deployed() -> Result<()> {
-        let Some(nc) = nats_client().await else {
-            println!("⚠ NATS not reachable — skipping (run `wash up -d && ./scripts/e2e-auth-test.sh`)");
-            return Ok(());
-        };
+        let nc = require_nats().await?;
 
         let apps = wadm_app_list(&nc).await?;
         let names: Vec<&str> = apps
@@ -200,10 +228,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_auth_nats_kv_buckets_exist() -> Result<()> {
-        let Some(nc) = nats_client().await else {
-            println!("⚠ NATS not reachable — skipping");
-            return Ok(());
-        };
+        let nc = require_nats().await?;
 
         // List KV buckets by querying JS API directly (no nats CLI needed).
         // KV buckets are JetStream streams prefixed with "KV_".
@@ -238,10 +263,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_auth_session_via_wash_call() -> Result<()> {
-        let Some(nc) = nats_client().await else {
-            println!("⚠ NATS not reachable — skipping");
-            return Ok(());
-        };
+        let nc = require_nats().await?;
 
         // wRPC call: `init` takes an auth-config argument.
         // The wire encoding for a zero-argument call (or simple variants) is an
@@ -278,10 +300,7 @@ mod tests {
     async fn test_ratelimit_unit_tests_pass() -> Result<()> {
         // Verifies the lattice is healthy and all rate-limit apps are deployed.
         // (Replaces the slow `cargo test --workspace` subprocess.)
-        let Some(nc) = nats_client().await else {
-            println!("⚠ NATS not reachable — skipping");
-            return Ok(());
-        };
+        let nc = require_nats().await?;
 
         let apps = wadm_app_list(&nc).await?;
         let names: Vec<&str> = apps
@@ -309,10 +328,7 @@ mod tests {
     async fn test_ratelimit_full_deployment_via_script() -> Result<()> {
         // Verifies all 6 managed apps are in 'deployed' status using NATS/wadm
         // directly rather than shelling out to a script.
-        let Some(nc) = nats_client().await else {
-            println!("⚠ NATS not reachable — skipping (run `wash up -d` first)");
-            return Ok(());
-        };
+        let nc = require_nats().await?;
 
         let apps = wadm_app_list(&nc).await?;
 
