@@ -1876,4 +1876,540 @@ mod tests {
         );
         Ok(())
     }
+
+    // ── event-trigger unit tests (no infrastructure) ──────────────────────────
+
+    #[test]
+    fn test_event_trigger_manifest_valid_yaml() -> Result<()> {
+        use std::fs;
+        let path = project_root().join("wadm/event-trigger.yaml");
+        let content = fs::read_to_string(&path).context("Failed to read wadm/event-trigger.yaml")?;
+        assert!(content.contains("apiVersion:"), "missing apiVersion");
+        assert!(content.contains("kind: Application"), "not an Application");
+        assert!(content.contains("metadata:"), "missing metadata");
+        Ok(())
+    }
+
+    #[test]
+    fn test_event_trigger_wit_exists() -> Result<()> {
+        let wit = project_root().join("wit/wasmcloud-event-trigger/event-trigger.wit");
+        assert!(wit.exists(), "WIT file not found: {:?}", wit);
+        let content = std::fs::read_to_string(&wit)?;
+        assert!(content.contains("interface event-api"), "event-api interface missing");
+        assert!(content.contains("subscribe"), "subscribe func missing");
+        assert!(content.contains("emit"), "emit func missing");
+        Ok(())
+    }
+
+    #[test]
+    fn test_event_trigger_subscribe_and_emit() {
+        use event_trigger_core::{subscribe, emit, unsubscribe, subscribers, all_events, EventError};
+
+        std::thread::spawn(|| {
+            subscribe("order.placed", "send-confirmation").unwrap();
+            subscribe("order.placed", "update-stock").unwrap();
+            subscribe("user.signed-up", "send-welcome").unwrap();
+
+            // emit returns all subscribed fn-names
+            let fns = emit("order.placed", b"{}").unwrap();
+            assert_eq!(fns.len(), 2);
+            assert!(fns.contains(&"send-confirmation".to_string()));
+            assert!(fns.contains(&"update-stock".to_string()));
+
+            // unknown event returns empty list, not an error
+            let fns = emit("unknown.event", b"{}").unwrap();
+            assert!(fns.is_empty());
+
+            // subscribers lists current subs for an event
+            let subs = subscribers("order.placed").unwrap();
+            assert_eq!(subs.len(), 2);
+
+            // all_events includes both events
+            let evts = all_events().unwrap();
+            assert!(evts.contains(&"order.placed".to_string()));
+            assert!(evts.contains(&"user.signed-up".to_string()));
+
+            // duplicate subscribe is an error
+            assert_eq!(
+                subscribe("order.placed", "send-confirmation").unwrap_err(),
+                EventError::AlreadySubscribed
+            );
+
+            // unsubscribe removes a fn
+            unsubscribe("order.placed", "update-stock").unwrap();
+            let subs = subscribers("order.placed").unwrap();
+            assert_eq!(subs.len(), 1);
+
+            // unsubscribe unknown event/fn is NotFound
+            assert_eq!(
+                unsubscribe("no.event", "no-fn").unwrap_err(),
+                EventError::NotFound
+            );
+
+            // invalid names are rejected
+            assert_eq!(subscribe("", "fn").unwrap_err(), EventError::InvalidName);
+            assert_eq!(subscribe("evt", "").unwrap_err(), EventError::InvalidName);
+        }).join().unwrap();
+    }
+
+    #[test]
+    fn test_event_trigger_fan_out_multiple_events() {
+        use event_trigger_core::{subscribe, emit};
+
+        std::thread::spawn(|| {
+            // Multiple events independently fan out to their own subscribers
+            subscribe("payment.succeeded", "record-revenue").unwrap();
+            subscribe("payment.succeeded", "send-receipt").unwrap();
+            subscribe("payment.failed", "alert-ops").unwrap();
+
+            let success_fns = emit("payment.succeeded", b"{}").unwrap();
+            let failure_fns = emit("payment.failed", b"{}").unwrap();
+
+            assert_eq!(success_fns.len(), 2);
+            assert_eq!(failure_fns.len(), 1);
+            assert!(failure_fns.contains(&"alert-ops".to_string()));
+
+            // Emitting with arbitrary payload bytes is accepted
+            let payload = serde_json::json!({"amount": 42, "currency": "USD"});
+            let fns = emit("payment.succeeded", payload.to_string().as_bytes()).unwrap();
+            assert_eq!(fns.len(), 2);
+        }).join().unwrap();
+    }
+
+    // ── job-queue unit tests (no infrastructure) ──────────────────────────────
+
+    #[test]
+    fn test_job_queue_manifest_valid_yaml() -> Result<()> {
+        use std::fs;
+        let path = project_root().join("wadm/job-queue.yaml");
+        let content = fs::read_to_string(&path).context("Failed to read wadm/job-queue.yaml")?;
+        assert!(content.contains("apiVersion:"), "missing apiVersion");
+        assert!(content.contains("kind: Application"), "not an Application");
+        assert!(content.contains("metadata:"), "missing metadata");
+        Ok(())
+    }
+
+    #[test]
+    fn test_job_queue_wit_exists() -> Result<()> {
+        let wit = project_root().join("wit/wasmcloud-job-queue/job-queue.wit");
+        assert!(wit.exists(), "WIT file not found: {:?}", wit);
+        let content = std::fs::read_to_string(&wit)?;
+        assert!(content.contains("interface job-api"), "job-api interface missing");
+        assert!(content.contains("enqueue"), "enqueue func missing");
+        assert!(content.contains("dead-letters"), "dead-letters func missing");
+        Ok(())
+    }
+
+    #[test]
+    fn test_job_queue_happy_path() {
+        use job_queue_core::{enqueue, start, succeed, get, RunState};
+
+        std::thread::spawn(|| {
+            // enqueue → start → succeed
+            let id = enqueue("process-order", b"order-123".to_vec(), None, 3, 100, 1000).unwrap();
+            assert!(!id.is_empty());
+
+            let info = get(&id).unwrap();
+            assert_eq!(info.fn_name, "process-order");
+            assert_eq!(info.state, RunState::Pending);
+            assert_eq!(info.attempt, 0);
+            assert_eq!(info.max_attempts, 3);
+
+            start(&id, 1001).unwrap();
+            assert_eq!(get(&id).unwrap().state, RunState::Running);
+            assert_eq!(get(&id).unwrap().attempt, 1);
+
+            succeed(&id, b"done".to_vec(), 1002).unwrap();
+            let info = get(&id).unwrap();
+            assert_eq!(info.state, RunState::Succeeded);
+            assert_eq!(info.output, Some(b"done".to_vec()));
+        }).join().unwrap();
+    }
+
+    #[test]
+    fn test_job_queue_retry_and_dead_letter() {
+        use job_queue_core::{enqueue, start, fail, get, dead_letters, RunState};
+
+        std::thread::spawn(|| {
+            // max_attempts=2: fail once → retry, fail again → dead-letter
+            let id = enqueue("flaky-fn", b"".to_vec(), None, 2, 500, 0).unwrap();
+
+            start(&id, 1).unwrap();
+            fail(&id, "transient error".to_string(), 1000).unwrap();
+
+            // attempt=1 < max_attempts(2) → rescheduled as Pending
+            let info = get(&id).unwrap();
+            assert_eq!(info.state, RunState::Pending);
+            assert!(info.scheduled_at_ms > 1000, "scheduled_at_ms should be after now");
+            assert_eq!(info.error, Some("transient error".to_string()));
+
+            // second failure exhausts retries → DeadLetter
+            start(&id, info.scheduled_at_ms + 1).unwrap();
+            fail(&id, "final error".to_string(), info.scheduled_at_ms + 2).unwrap();
+            assert_eq!(get(&id).unwrap().state, RunState::DeadLetter);
+
+            // appears in dead_letters list
+            assert!(dead_letters().unwrap().contains(&id));
+        }).join().unwrap();
+    }
+
+    #[test]
+    fn test_job_queue_cancel_and_pause_resume() {
+        use job_queue_core::{enqueue, cancel, pause, resume, get, RunState};
+
+        std::thread::spawn(|| {
+            // cancel a pending run
+            let id_cancel = enqueue("cancel-fn", b"".to_vec(), None, 3, 100, 0).unwrap();
+            cancel(&id_cancel).unwrap();
+            assert_eq!(get(&id_cancel).unwrap().state, RunState::Cancelled);
+
+            // pause → resume
+            let id_pause = enqueue("pause-fn", b"".to_vec(), None, 3, 100, 0).unwrap();
+            pause(&id_pause).unwrap();
+            assert_eq!(get(&id_pause).unwrap().state, RunState::Paused);
+            resume(&id_pause, 9999).unwrap();
+            let info = get(&id_pause).unwrap();
+            assert_eq!(info.state, RunState::Pending);
+            assert_eq!(info.scheduled_at_ms, 9999);
+        }).join().unwrap();
+    }
+
+    #[test]
+    fn test_job_queue_due_scheduling() {
+        use job_queue_core::{enqueue, due};
+
+        std::thread::spawn(|| {
+            let id = enqueue("sched-fn", b"".to_vec(), None, 3, 100, 5000).unwrap();
+
+            // not due before scheduled time
+            assert!(!due(4999).unwrap().contains(&id));
+
+            // due at or after scheduled_at_ms
+            assert!(due(5000).unwrap().contains(&id));
+            assert!(due(9999).unwrap().contains(&id));
+        }).join().unwrap();
+    }
+
+    #[test]
+    fn test_job_queue_idempotent_enqueue() {
+        use job_queue_core::{enqueue, JobError};
+
+        std::thread::spawn(|| {
+            // same (fn, idem_key, now_ms) → DuplicateRun
+            enqueue("idem-fn", b"".to_vec(), Some("key-1"), 3, 100, 100).unwrap();
+            assert_eq!(
+                enqueue("idem-fn", b"".to_vec(), Some("key-1"), 3, 100, 100).unwrap_err(),
+                JobError::DuplicateRun
+            );
+            // different idem_key → allowed
+            enqueue("idem-fn", b"".to_vec(), Some("key-2"), 3, 100, 100).unwrap();
+        }).join().unwrap();
+    }
+
+    #[test]
+    fn test_job_queue_exponential_backoff_schedule() {
+        // Pure math test, no state
+        use job_queue_core::{enqueue, start, fail, get};
+
+        std::thread::spawn(|| {
+            let base = 1000u64;
+            let id = enqueue("backoff-fn", b"".to_vec(), None, 10, base, 0).unwrap();
+
+            // attempt 1: delay = 1000 * 2^0 = 1000
+            start(&id, 0).unwrap();
+            fail(&id, "e".to_string(), 10_000).unwrap();
+            assert_eq!(get(&id).unwrap().scheduled_at_ms, 10_000 + 1000);
+
+            // attempt 2: delay = 1000 * 2^1 = 2000
+            start(&id, 11_001).unwrap();
+            fail(&id, "e".to_string(), 20_000).unwrap();
+            assert_eq!(get(&id).unwrap().scheduled_at_ms, 20_000 + 2000);
+        }).join().unwrap();
+    }
+
+    // ── workflow unit tests (no infrastructure) ───────────────────────────────
+
+    #[test]
+    fn test_workflow_manifest_valid_yaml() -> Result<()> {
+        use std::fs;
+        let path = project_root().join("wadm/workflow.yaml");
+        let content = fs::read_to_string(&path).context("Failed to read wadm/workflow.yaml")?;
+        assert!(content.contains("apiVersion:"), "missing apiVersion");
+        assert!(content.contains("kind: Application"), "not an Application");
+        assert!(content.contains("metadata:"), "missing metadata");
+        Ok(())
+    }
+
+    #[test]
+    fn test_workflow_wit_exists() -> Result<()> {
+        let wit = project_root().join("wit/wasmcloud-workflow/workflow.wit");
+        assert!(wit.exists(), "WIT file not found: {:?}", wit);
+        let content = std::fs::read_to_string(&wit)?;
+        assert!(content.contains("interface workflow-api"), "workflow-api interface missing");
+        assert!(content.contains("ready-steps"), "ready-steps func missing");
+        assert!(content.contains("step-done"), "step-done func missing");
+        Ok(())
+    }
+
+    #[test]
+    fn test_workflow_linear_chain() {
+        use workflow_core::{define, run, step_done, ready_steps, get_run, StepDef, WfState};
+
+        std::thread::spawn(|| {
+            define("e2e-chain", vec![
+                StepDef { name: "fetch".into(), depends_on: vec![], max_attempts: 3, base_delay_ms: 100 },
+                StepDef { name: "transform".into(), depends_on: vec!["fetch".into()], max_attempts: 3, base_delay_ms: 100 },
+                StepDef { name: "store".into(), depends_on: vec!["transform".into()], max_attempts: 3, base_delay_ms: 100 },
+            ]).unwrap();
+
+            let run_id = run("e2e-chain", b"input".to_vec(), None, 0).unwrap();
+            assert_eq!(get_run(&run_id).unwrap().state, WfState::Running);
+
+            // only first step is ready
+            let ready = ready_steps(&run_id, 0).unwrap();
+            assert_eq!(ready.len(), 1);
+            assert_eq!(ready[0].name, "fetch");
+
+            step_done(&run_id, "fetch", b"fetched".to_vec(), 0).unwrap();
+            let ready = ready_steps(&run_id, 0).unwrap();
+            assert_eq!(ready[0].name, "transform");
+
+            step_done(&run_id, "transform", b"transformed".to_vec(), 0).unwrap();
+            let ready = ready_steps(&run_id, 0).unwrap();
+            assert_eq!(ready[0].name, "store");
+
+            step_done(&run_id, "store", b"stored".to_vec(), 0).unwrap();
+            assert_eq!(get_run(&run_id).unwrap().state, WfState::Succeeded);
+
+            // all steps produce memoised output
+            assert_eq!(
+                workflow_core::step_output(&run_id, "fetch").unwrap().unwrap(),
+                b"fetched"
+            );
+        }).join().unwrap();
+    }
+
+    #[test]
+    fn test_workflow_fan_out_fan_in() {
+        use workflow_core::{define, run, step_done, ready_steps, get_run, StepDef, WfState};
+
+        std::thread::spawn(|| {
+            define("e2e-fan", vec![
+                StepDef { name: "root".into(), depends_on: vec![], max_attempts: 1, base_delay_ms: 100 },
+                StepDef { name: "branch-a".into(), depends_on: vec!["root".into()], max_attempts: 1, base_delay_ms: 100 },
+                StepDef { name: "branch-b".into(), depends_on: vec!["root".into()], max_attempts: 1, base_delay_ms: 100 },
+                StepDef { name: "join".into(), depends_on: vec!["branch-a".into(), "branch-b".into()], max_attempts: 1, base_delay_ms: 100 },
+            ]).unwrap();
+
+            let run_id = run("e2e-fan", b"".to_vec(), None, 0).unwrap();
+
+            step_done(&run_id, "root", b"r".to_vec(), 0).unwrap();
+
+            // both branches unblocked simultaneously
+            let ready = ready_steps(&run_id, 0).unwrap();
+            assert_eq!(ready.len(), 2);
+            let names: Vec<&str> = ready.iter().map(|s| s.name.as_str()).collect();
+            assert!(names.contains(&"branch-a"));
+            assert!(names.contains(&"branch-b"));
+
+            // join is blocked until both branches done; branch-b is still ready
+            step_done(&run_id, "branch-a", b"a".to_vec(), 0).unwrap();
+            let ready = ready_steps(&run_id, 0).unwrap();
+            assert_eq!(ready.len(), 1);
+            assert_eq!(ready[0].name, "branch-b");
+
+            step_done(&run_id, "branch-b", b"b".to_vec(), 0).unwrap();
+            let ready = ready_steps(&run_id, 0).unwrap();
+            assert_eq!(ready[0].name, "join");
+
+            step_done(&run_id, "join", b"merged".to_vec(), 0).unwrap();
+            assert_eq!(get_run(&run_id).unwrap().state, WfState::Succeeded);
+        }).join().unwrap();
+    }
+
+    #[test]
+    fn test_workflow_step_retry_then_succeed() {
+        use workflow_core::{define, run, step_done, step_failed, ready_steps, get_run, StepDef, WfState};
+
+        std::thread::spawn(|| {
+            define("e2e-retry", vec![
+                StepDef { name: "fragile".into(), depends_on: vec![], max_attempts: 3, base_delay_ms: 500 },
+            ]).unwrap();
+
+            let run_id = run("e2e-retry", b"".to_vec(), None, 0).unwrap();
+
+            // first attempt fails → rescheduled
+            step_failed(&run_id, "fragile", "timeout".to_string(), 1000).unwrap();
+            assert_eq!(get_run(&run_id).unwrap().state, WfState::Running);
+
+            // not ready yet (scheduled in future)
+            assert!(ready_steps(&run_id, 1000).unwrap().is_empty());
+
+            // ready after delay
+            let ready = ready_steps(&run_id, 1500).unwrap();
+            assert_eq!(ready.len(), 1);
+
+            // second attempt succeeds
+            step_done(&run_id, "fragile", b"ok".to_vec(), 1500).unwrap();
+            assert_eq!(get_run(&run_id).unwrap().state, WfState::Succeeded);
+        }).join().unwrap();
+    }
+
+    #[test]
+    fn test_workflow_step_exhaustion_fails_run() {
+        use workflow_core::{define, run, step_failed, get_run, StepDef, WfState};
+
+        std::thread::spawn(|| {
+            define("e2e-exhaust", vec![
+                StepDef { name: "doomed".into(), depends_on: vec![], max_attempts: 2, base_delay_ms: 100 },
+            ]).unwrap();
+
+            let run_id = run("e2e-exhaust", b"".to_vec(), None, 0).unwrap();
+
+            step_failed(&run_id, "doomed", "err1".to_string(), 0).unwrap();
+            assert_eq!(get_run(&run_id).unwrap().state, WfState::Running);
+
+            step_failed(&run_id, "doomed", "err2".to_string(), 0).unwrap();
+            assert_eq!(get_run(&run_id).unwrap().state, WfState::Failed);
+        }).join().unwrap();
+    }
+
+    #[test]
+    fn test_workflow_cancel_mid_run() {
+        use workflow_core::{define, run, step_done, cancel_run, get_run, StepDef, WfState};
+
+        std::thread::spawn(|| {
+            define("e2e-cancel", vec![
+                StepDef { name: "s1".into(), depends_on: vec![], max_attempts: 1, base_delay_ms: 100 },
+                StepDef { name: "s2".into(), depends_on: vec!["s1".into()], max_attempts: 1, base_delay_ms: 100 },
+            ]).unwrap();
+
+            let run_id = run("e2e-cancel", b"".to_vec(), None, 0).unwrap();
+            step_done(&run_id, "s1", b"done".to_vec(), 0).unwrap();
+
+            // cancel before s2 runs
+            cancel_run(&run_id).unwrap();
+            assert_eq!(get_run(&run_id).unwrap().state, WfState::Cancelled);
+        }).join().unwrap();
+    }
+
+    #[test]
+    fn test_workflow_memoisation_idempotent() {
+        use workflow_core::{define, run, step_done, step_output, StepDef};
+
+        std::thread::spawn(|| {
+            define("e2e-memo", vec![
+                StepDef { name: "memo-step".into(), depends_on: vec![], max_attempts: 1, base_delay_ms: 100 },
+            ]).unwrap();
+
+            let run_id = run("e2e-memo", b"".to_vec(), None, 0).unwrap();
+
+            // first call stores the output
+            step_done(&run_id, "memo-step", b"first-result".to_vec(), 0).unwrap();
+
+            // second call with different output is a no-op
+            step_done(&run_id, "memo-step", b"second-result".to_vec(), 0).unwrap();
+
+            // memoised value is still the first
+            let out = step_output(&run_id, "memo-step").unwrap().unwrap();
+            assert_eq!(out, b"first-result");
+        }).join().unwrap();
+    }
+
+    #[test]
+    fn test_workflow_duplicate_run_idempotency() {
+        use workflow_core::{define, run, StepDef, WorkflowError};
+
+        std::thread::spawn(|| {
+            define("e2e-idem", vec![
+                StepDef { name: "s".into(), depends_on: vec![], max_attempts: 1, base_delay_ms: 100 },
+            ]).unwrap();
+
+            // same (wf_name, idem_key, now_ms) → DuplicateRun
+            run("e2e-idem", b"".to_vec(), Some("idem-key-1"), 1000).unwrap();
+            assert_eq!(
+                run("e2e-idem", b"".to_vec(), Some("idem-key-1"), 1000).unwrap_err(),
+                WorkflowError::DuplicateRun
+            );
+        }).join().unwrap();
+    }
+
+    // ── workflow engine integration (event → job → workflow) ──────────────────
+
+    #[test]
+    fn test_engine_event_triggers_job_triggers_workflow() {
+        use event_trigger_core::{subscribe, emit};
+        use job_queue_core::{enqueue, start, succeed, get as jq_get, RunState};
+        use workflow_core::{define, run, step_done, ready_steps, get_run, StepDef, WfState};
+
+        std::thread::spawn(|| {
+            // 1. Register a workflow
+            define("e2e-integrated", vec![
+                StepDef { name: "ingest".into(), depends_on: vec![], max_attempts: 3, base_delay_ms: 100 },
+                StepDef { name: "process".into(), depends_on: vec!["ingest".into()], max_attempts: 3, base_delay_ms: 100 },
+            ]).unwrap();
+
+            // 2. Subscribe event → job-queue function
+            subscribe("data.received", "run-pipeline").unwrap();
+
+            // 3. Emit event → learn which functions to enqueue
+            let fns = emit("data.received", b"payload").unwrap();
+            assert_eq!(fns, vec!["run-pipeline"]);
+
+            // 4. Enqueue job for the function
+            let job_id = enqueue("run-pipeline", b"payload".to_vec(), None, 3, 100, 0).unwrap();
+
+            // 5. Start and succeed the job (simulating execution dispatching a workflow run)
+            start(&job_id, 1).unwrap();
+            let wf_run_id = run("e2e-integrated", b"payload".to_vec(), None, 0).unwrap();
+            succeed(&job_id, wf_run_id.as_bytes().to_vec(), 2).unwrap();
+            assert_eq!(jq_get(&job_id).unwrap().state, RunState::Succeeded);
+
+            // 6. Execute workflow steps
+            step_done(&wf_run_id, "ingest", b"ingested".to_vec(), 0).unwrap();
+            let ready = ready_steps(&wf_run_id, 0).unwrap();
+            assert_eq!(ready[0].name, "process");
+
+            step_done(&wf_run_id, "process", b"processed".to_vec(), 0).unwrap();
+            assert_eq!(get_run(&wf_run_id).unwrap().state, WfState::Succeeded);
+        }).join().unwrap();
+    }
+
+    // ── live infrastructure tests for new components ──────────────────────────
+
+    #[tokio::test]
+    async fn test_event_trigger_deployed() -> Result<()> {
+        let nc = require_nats().await?;
+        let apps = wadm_app_list(&nc).await?;
+        let names: Vec<&str> = apps.iter()
+            .filter_map(|m| m.get("name").and_then(|n| n.as_str()))
+            .collect();
+        assert!(names.iter().any(|n| *n == "event-trigger"),
+            "Expected 'event-trigger' app to be deployed. Deployed: {:?}", names);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_job_queue_deployed() -> Result<()> {
+        let nc = require_nats().await?;
+        let apps = wadm_app_list(&nc).await?;
+        let names: Vec<&str> = apps.iter()
+            .filter_map(|m| m.get("name").and_then(|n| n.as_str()))
+            .collect();
+        assert!(names.iter().any(|n| *n == "job-queue"),
+            "Expected 'job-queue' app to be deployed. Deployed: {:?}", names);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_workflow_deployed() -> Result<()> {
+        let nc = require_nats().await?;
+        let apps = wadm_app_list(&nc).await?;
+        let names: Vec<&str> = apps.iter()
+            .filter_map(|m| m.get("name").and_then(|n| n.as_str()))
+            .collect();
+        assert!(names.iter().any(|n| *n == "workflow"),
+            "Expected 'workflow' app to be deployed. Deployed: {:?}", names);
+        Ok(())
+    }
 }

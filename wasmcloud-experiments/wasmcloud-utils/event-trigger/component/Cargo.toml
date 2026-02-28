@@ -1,0 +1,17 @@
+[package]
+name = "event-trigger-component"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { workspace = true }
+event-trigger-core = { path = "../core" }
+
+[package.metadata.component]
+package = "wasmcloud:event-trigger"
+
+[package.metadata.component.target]
+path = "../../wit/wasmcloud-event-trigger"
