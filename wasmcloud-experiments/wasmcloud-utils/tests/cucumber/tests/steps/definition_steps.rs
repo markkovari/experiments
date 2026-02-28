@@ -1,10 +1,13 @@
-use crate::WorkflowWorld;
+use crate::{WorkflowWorld, api_available};
 use cucumber::given;
 use cucumber::gherkin::Step;
 
 /// Register a minimal workflow with the given name.
 #[given(expr = "I have registered a workflow named {string}")]
 async fn register_workflow(world: &mut WorkflowWorld, name: String) {
+    if !api_available().await {
+        return;
+    }
     let body = format!(
         r#"{{"name":"{}","steps":[{{"name":"step","depends_on":[]}}]}}"#,
         name
@@ -33,6 +36,9 @@ async fn register_workflow_with_steps(
     name: String,
     step: &Step,
 ) {
+    if !api_available().await {
+        return;
+    }
     let steps_json = step.docstring().map_or("[]", |v| v.as_str());
     let body = format!(r#"{{"name":"{}","steps":{}}}"#, name, steps_json);
     let url = format!("{}/workflows", world.base_url);

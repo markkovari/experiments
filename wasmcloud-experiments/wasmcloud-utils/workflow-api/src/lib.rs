@@ -14,7 +14,7 @@
 #[cfg(target_arch = "wasm32")]
 wit_bindgen::generate!({
     world: "workflow-api-component",
-    path: "../../wit/wasmcloud-workflow-api",
+    path: "../wit/wasmcloud-workflow-api",
     generate_all,
 });
 
@@ -1155,24 +1155,24 @@ impl WasiKv {
 #[cfg(target_arch = "wasm32")]
 impl KvStore for WasiKv {
     fn kv_get(&self, key: &str) -> Option<Vec<u8>> {
-        wasi::keyvalue::store::get(&self.bucket, key)
-            .ok()
-            .flatten()
+        self.bucket.get(key).ok().flatten()
     }
 
     fn kv_set(&self, key: &str, value: Vec<u8>) {
-        let _ = wasi::keyvalue::store::set(&self.bucket, key, &value);
+        let _ = self.bucket.set(key, &value);
     }
 
     fn kv_delete(&self, key: &str) {
-        let _ = wasi::keyvalue::store::delete(&self.bucket, key);
+        let _ = self.bucket.delete(key);
     }
 
     fn kv_list_prefix(&self, prefix: &str) -> Vec<String> {
-        wasi::keyvalue::store::list_keys(&self.bucket, None)
+        self.bucket
+            .list_keys(None)
+            .map(|r| r.keys)
             .unwrap_or_default()
             .into_iter()
-            .filter(|k| k.starts_with(prefix))
+            .filter(|k: &String| k.starts_with(prefix))
             .collect()
     }
 }

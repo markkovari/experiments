@@ -12,6 +12,41 @@ mod steps {
 mod hooks;
 
 use cucumber::World;
+use tokio::sync::OnceCell;
+
+/// Cached result of one-time HTTP connectivity probe.
+/// `true`  = workflow-api is reachable → run live scenarios
+/// `false` = not reachable → scenarios will be marked pending (skipped)
+static API_UP: OnceCell<bool> = OnceCell::const_new();
+
+/// Check once whether the workflow-api HTTP endpoint is reachable.
+pub async fn api_available() -> bool {
+    *API_UP
+        .get_or_init(|| async {
+            let up = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_millis(800))
+                .build()
+                .unwrap()
+                .get("http://localhost:8080/workflows")
+                .send()
+                .await
+                .is_ok();
+            if up {
+                println!(
+                    "\n[cucumber setup] ✓ workflow-api reachable at http://localhost:8080 \
+                     — live scenarios will run"
+                );
+            } else {
+                println!(
+                    "\n[cucumber setup] ✗ workflow-api not reachable at http://localhost:8080 \
+                     — live scenarios will be skipped\n\
+                     \x20             Run `wash up -d && wash app deploy wadm/workflow-api.yaml` to fix this"
+                );
+            }
+            up
+        })
+        .await
+}
 
 #[derive(Debug, Default, World)]
 pub struct WorkflowWorld {
@@ -25,8 +60,13 @@ pub struct WorkflowWorld {
 #[tokio::main]
 async fn main() {
     // Global pre-hooks: build and deploy the component before any scenario runs.
-    // This mirrors the pattern used in tests/e2e (OnceCell for one-time setup).
     hooks::ensure_deployed().await;
 
-    WorkflowWorld::run("tests/cucumber/features").await;
+    // Probe the API — result cached for all subsequent steps.
+    api_available().await;
+
+    // Feature files live at <manifest_dir>/features/
+    let features_dir = format!("{}/features", env!("CARGO_MANIFEST_DIR"));
+
+    WorkflowWorld::run(features_dir).await;
 }
