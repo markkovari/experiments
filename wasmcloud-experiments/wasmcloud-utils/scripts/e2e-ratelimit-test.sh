@@ -189,11 +189,12 @@ run_tests() {
     cd "$PROJECT_ROOT"
 
     # Run tests (timeout not available on macOS by default)
-    if cargo test --package e2e-tests -- --ignored --test-threads=1 --nocapture; then
+    if cargo test --package e2e-tests -- --ignored test_ratelimit_ --test-threads=1 --nocapture; then
         log_success "All e2e tests passed"
         return 0
     else
-        log_error "E2E tests failed"        return 1
+        log_error "E2E tests failed"
+        return 1
     fi
 }
 

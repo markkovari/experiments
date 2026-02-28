@@ -13,4 +13,4 @@ wit-bindgen = { workspace = true }
 package = "wasmcloud:ratelimit"
 
 [package.metadata.component.target]
-path = "../../wit"
+path = "../../wit/wasmcloud-ratelimit"

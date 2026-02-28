@@ -1,0 +1,33 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: auth-session
+  annotations:
+    version: v0.1.0
+    description: "Session-based authentication component linked to NATS KV store"
+spec:
+  components:
+    - name: auth-session
+      type: component
+      properties:
+        image: file://../target/wasm32-wasip2/release/auth_session.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1
+        - type: link
+          properties:
+            target: nats-kv
+            namespace: wasi
+            package: keyvalue
+            interfaces:
+              - store
+            target_config:
+              - name: session-bucket
+                properties:
+                  bucket: auth-sessions
+
+    - name: nats-kv
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/keyvalue-nats:0.3.1

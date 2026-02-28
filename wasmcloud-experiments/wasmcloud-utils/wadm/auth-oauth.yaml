@@ -1,0 +1,33 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: auth-oauth
+  annotations:
+    version: v0.1.0
+    description: "OAuth authentication component with NATS KV token cache"
+spec:
+  components:
+    - name: auth-oauth
+      type: component
+      properties:
+        image: file://../target/wasm32-wasip2/release/auth_oauth.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1
+        - type: link
+          properties:
+            target: nats-kv
+            namespace: wasi
+            package: keyvalue
+            interfaces:
+              - store
+            target_config:
+              - name: oauth-cache-bucket
+                properties:
+                  bucket: auth-oauth-cache
+
+    - name: nats-kv
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/keyvalue-nats:0.3.1

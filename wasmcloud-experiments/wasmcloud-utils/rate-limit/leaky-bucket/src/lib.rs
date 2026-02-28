@@ -1,6 +1,6 @@
 wit_bindgen::generate!({
     world: "rate-limiter-component",
-    path: "../../wit",
+    path: "../../wit/wasmcloud-ratelimit",
 });
 
 use std::cell::RefCell;
