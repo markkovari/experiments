@@ -2,8 +2,8 @@
 //! via `wash` before any scenario runs.
 //!
 //! Each function runs **once** per test process using `tokio::sync::OnceCell`.
-//! If NATS/wasmCloud is unreachable the setup is skipped with a warning;
-//! scenarios that need a live host will then fail at the HTTP level.
+//! If wasmCloud is unreachable the setup is skipped with a warning; scenarios
+//! that need a live host will then fail at the HTTP level.
 
 use std::process::Command;
 use tokio::sync::OnceCell;
@@ -11,8 +11,10 @@ use tokio::sync::OnceCell;
 static SETUP_DONE: OnceCell<()> = OnceCell::const_new();
 
 /// Run the global setup exactly once:
-///   1. `wash build -p workflow-api`       — compile the WASM component
-///   2. `wash app deploy wadm/workflow-api.yaml` — deploy via wadm
+///   1. `cargo build -p workflow-api --target wasm32-wasip2 --release`
+///      — compile the WASM component artifact
+///   2. `wash app deploy wadm/workflow-api.yaml`
+///      — deploy via wadm (best-effort; already-deployed is not an error)
 ///
 /// Both steps are best-effort: if `wash` is not installed or wasmCloud is not
 /// running the test suite still starts, but live scenarios will fail.
@@ -25,31 +27,40 @@ pub async fn ensure_deployed() {
         .await;
 }
 
-/// Build the workflow-api wasmCloud component.
+/// Build the workflow-api wasmCloud component as a WASM binary.
 fn build_component() {
-    println!("\n[cucumber setup] Building workflow-api component (wash build -p workflow-api)…");
+    println!(
+        "\n[cucumber setup] Building workflow-api WASM component \
+         (cargo build -p workflow-api --target wasm32-wasip2 --release)…"
+    );
 
-    let status = Command::new("wash")
-        .args(["build", "-p", "workflow-api"])
+    let status = Command::new("cargo")
+        .args([
+            "build",
+            "-p",
+            "workflow-api",
+            "--target",
+            "wasm32-wasip2",
+            "--release",
+        ])
         .current_dir(workspace_root())
         .status();
 
     match status {
         Ok(s) if s.success() => {
-            println!("[cucumber setup] ✓ workflow-api component built successfully");
+            println!("[cucumber setup] ✓ workflow-api WASM component built successfully");
         }
         Ok(s) => {
             eprintln!(
-                "[cucumber setup] ✗ wash build exited with status {}. \
-                 Scenarios may fail if the component binary is stale.",
+                "[cucumber setup] ✗ cargo build exited with status {}. \
+                 Ensure wasm32-wasip2 target is installed: \
+                 `rustup target add wasm32-wasip2`",
                 s
             );
         }
         Err(e) => {
             eprintln!(
-                "[cucumber setup] ✗ wash not found or failed to execute: {}. \
-                 Install wash (https://wasmcloud.com/docs/installation) and ensure \
-                 it is on PATH.",
+                "[cucumber setup] ✗ Failed to run cargo build: {}",
                 e
             );
         }
@@ -102,8 +113,8 @@ fn deploy_component() {
 }
 
 /// Resolve the workspace root from the test binary's manifest directory.
-fn workspace_root() -> std::path::PathBuf {
-    // CARGO_MANIFEST_DIR points to tests/cucumber/ at compile time.
+/// CARGO_MANIFEST_DIR points to `tests/cucumber/` at compile time.
+pub fn workspace_root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent() // tests/
         .unwrap()

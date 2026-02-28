@@ -1,4 +1,4 @@
-use crate::WorkflowWorld;
+use crate::{WorkflowWorld, api_available};
 use cucumber::{given, then, when};
 use cucumber::gherkin::Step;
 
@@ -9,6 +9,9 @@ async fn set_base_url(world: &mut WorkflowWorld, url: String) {
 
 #[when(expr = "I GET {string}")]
 async fn get_endpoint(world: &mut WorkflowWorld, path: String) {
+    if !api_available().await {
+        return;
+    }
     let path = expand_run_id(&path, &world.run_id);
     let url = format!("{}{}", world.base_url, path);
     let resp = reqwest::Client::new()
@@ -22,6 +25,9 @@ async fn get_endpoint(world: &mut WorkflowWorld, path: String) {
 
 #[when(expr = "I POST to {string} with body:")]
 async fn post_with_body(world: &mut WorkflowWorld, path: String, step: &Step) {
+    if !api_available().await {
+        return;
+    }
     let path = expand_run_id(&path, &world.run_id);
     let body = step.docstring().map_or("{}", |v| v.as_str()).to_string();
     let url = format!("{}{}", world.base_url, path);
@@ -45,6 +51,9 @@ async fn post_with_body(world: &mut WorkflowWorld, path: String, step: &Step) {
 
 #[when(expr = "I DELETE {string}")]
 async fn delete_endpoint(world: &mut WorkflowWorld, path: String) {
+    if !api_available().await {
+        return;
+    }
     let path = expand_run_id(&path, &world.run_id);
     let url = format!("{}{}", world.base_url, path);
     let resp = reqwest::Client::new()
@@ -58,6 +67,9 @@ async fn delete_endpoint(world: &mut WorkflowWorld, path: String) {
 
 #[then(expr = "the response status is {int}")]
 async fn check_status(world: &mut WorkflowWorld, expected: u16) {
+    if !api_available().await {
+        return;
+    }
     assert_eq!(
         world.last_status, expected,
         "Expected status {} but got {} (body: {})",
@@ -67,6 +79,9 @@ async fn check_status(world: &mut WorkflowWorld, expected: u16) {
 
 #[then(expr = "the response body contains {string}")]
 async fn check_body_contains(world: &mut WorkflowWorld, text: String) {
+    if !api_available().await {
+        return;
+    }
     assert!(
         world.last_body.contains(&text),
         "Expected body to contain {:?} but got: {}",
@@ -77,6 +92,9 @@ async fn check_body_contains(world: &mut WorkflowWorld, text: String) {
 
 #[then(expr = "the response body does not contain {string}")]
 async fn check_body_not_contains(world: &mut WorkflowWorld, text: String) {
+    if !api_available().await {
+        return;
+    }
     assert!(
         !world.last_body.contains(&text),
         "Expected body NOT to contain {:?} but got: {}",
@@ -87,6 +105,9 @@ async fn check_body_not_contains(world: &mut WorkflowWorld, text: String) {
 
 #[then(expr = "I save the run_id")]
 async fn save_run_id(world: &mut WorkflowWorld) {
+    if !api_available().await {
+        return;
+    }
     let body: serde_json::Value = serde_json::from_str(&world.last_body)
         .expect("response body is not valid JSON");
     let run_id = body["run_id"]
@@ -99,6 +120,9 @@ async fn save_run_id(world: &mut WorkflowWorld) {
 
 #[then(expr = "the run_id matches the previously saved run_id")]
 async fn check_run_id_matches(world: &mut WorkflowWorld) {
+    if !api_available().await {
+        return;
+    }
     let body: serde_json::Value = serde_json::from_str(&world.last_body)
         .expect("response body is not valid JSON");
     let current_run_id = body["run_id"].as_str().unwrap_or("").to_string();

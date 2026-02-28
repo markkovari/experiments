@@ -3,7 +3,7 @@ kind: Application
 metadata:
   name: workflow-api
   annotations:
-    version: v0.1.0
+    version: v0.2.0
     description: "HTTP REST API for workflow definition and execution management"
 spec:
   components:
@@ -39,7 +39,7 @@ spec:
     - name: httpserver
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.23.1
+        image: ghcr.io/wasmcloud/http-server:0.24.0
 
     - name: nats-kv
       type: capability

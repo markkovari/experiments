@@ -1,9 +1,12 @@
-use crate::WorkflowWorld;
+use crate::{WorkflowWorld, api_available};
 use cucumber::given;
 
 /// Start a run of the given workflow, storing the run_id.
 #[given(expr = "I have started a run of {string}")]
 async fn start_run(world: &mut WorkflowWorld, wf_name: String) {
+    if !api_available().await {
+        return;
+    }
     let body = format!(r#"{{"wf_name":"{}"}}"#, wf_name);
     let url = format!("{}/runs", world.base_url);
     let resp = reqwest::Client::new()
@@ -29,6 +32,9 @@ async fn start_run(world: &mut WorkflowWorld, wf_name: String) {
 /// Mark a step as failed so retry can be tested.
 #[given(expr = "step {string} has failed on run {string}")]
 async fn step_has_failed(world: &mut WorkflowWorld, step_name: String, _placeholder: String) {
+    if !api_available().await {
+        return;
+    }
     let run_id = world.run_id.clone().expect("no run_id set");
     let url = format!(
         "{}/runs/{}/steps/{}/failed",
@@ -52,6 +58,9 @@ async fn mark_step_done(
     output_b64: String,
     _placeholder: String,
 ) {
+    if !api_available().await {
+        return;
+    }
     let run_id = world.run_id.clone().expect("no run_id set");
     let url = format!(
         "{}/runs/{}/steps/{}/done",

@@ -1,6 +1,0 @@
-package wasi:http@0.2.0;
-
-interface outgoing-handler {
-    use types.{request, response};
-    handle: func(request: request) -> result<response, string>;
-}

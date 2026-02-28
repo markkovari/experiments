@@ -1,7 +1,0 @@
-package wasi:keyvalue@0.2.0-draft;
-
-interface atomics {
-    use store.{bucket, error};
-
-    increment: func(bucket: bucket, key: string, delta: u64) -> result<u64, error>;
-}

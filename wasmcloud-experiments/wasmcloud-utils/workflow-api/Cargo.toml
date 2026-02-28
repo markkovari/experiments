@@ -16,4 +16,13 @@ serde_yaml = { workspace = true }
 package = "wasmcloud:workflow-api"
 
 [package.metadata.component.target]
-path = "../../wit/wasmcloud-workflow-api"
+path = "../wit/wasmcloud-workflow-api"
+world = "workflow-api-component"
+
+[package.metadata.component.target.dependencies]
+"wasi:keyvalue" = { path = "../wit/wasmcloud-workflow-api/deps/wasi-keyvalue-0.2.0-draft" }
+"wasi:http" = { path = "../wit/wasmcloud-workflow-api/deps/wasi-http-0.2.0" }
+"wasi:clocks" = { path = "../wit/wasmcloud-workflow-api/deps/wasi-clocks-0.2.0" }
+"wasi:io" = { path = "../wit/wasmcloud-workflow-api/deps/wasi-io-0.2.0" }
+"wasi:cli" = { path = "../wit/wasmcloud-workflow-api/deps/wasi-cli-0.2.0" }
+"wasi:random" = { path = "../wit/wasmcloud-workflow-api/deps/wasi-random-0.2.0" }

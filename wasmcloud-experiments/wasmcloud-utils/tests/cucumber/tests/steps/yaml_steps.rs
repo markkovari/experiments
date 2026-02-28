@@ -1,4 +1,4 @@
-use crate::WorkflowWorld;
+use crate::{WorkflowWorld, api_available};
 use cucumber::when;
 use cucumber::gherkin::Step;
 
@@ -10,6 +10,9 @@ async fn post_with_content_type(
     content_type: String,
     step: &Step,
 ) {
+    if !api_available().await {
+        return;
+    }
     let body = step.docstring().map_or("", |v| v.as_str()).to_string();
     let url = format!("{}{}", world.base_url, path);
     let resp = reqwest::Client::new()

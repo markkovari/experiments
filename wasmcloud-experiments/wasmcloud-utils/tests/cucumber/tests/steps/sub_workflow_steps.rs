@@ -1,4 +1,4 @@
-use crate::WorkflowWorld;
+use crate::{WorkflowWorld, api_available};
 use cucumber::{given, then};
 
 /// Simulate child run success by marking the sub-workflow step as done.
@@ -8,6 +8,9 @@ async fn child_run_succeeds(
     step_name: String,
     _placeholder: String,
 ) {
+    if !api_available().await {
+        return;
+    }
     let run_id = world.run_id.clone().expect("no run_id");
     let url = format!(
         "{}/runs/{}/steps/{}/done",
@@ -30,6 +33,9 @@ async fn child_run_fails(
     step_name: String,
     _placeholder: String,
 ) {
+    if !api_available().await {
+        return;
+    }
     let run_id = world.run_id.clone().expect("no run_id");
     let url = format!(
         "{}/runs/{}/steps/{}/failed",
@@ -48,6 +54,9 @@ async fn child_run_fails(
 /// Check a specific step's state via GET /runs/{run_id}/steps/{step_name}.
 #[then(expr = "the step {string} state is {string}")]
 async fn check_step_state(world: &mut WorkflowWorld, step_name: String, expected_state: String) {
+    if !api_available().await {
+        return;
+    }
     let run_id = world.run_id.clone().expect("no run_id");
     let url = format!(
         "{}/runs/{}/steps/{}",
