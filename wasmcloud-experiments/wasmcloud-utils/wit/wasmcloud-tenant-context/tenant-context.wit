@@ -1,0 +1,41 @@
+package wasmcloud:tenant-context@0.1.0-draft;
+
+world tenant-context-component { export tenant-api; }
+
+/// Any component that needs scoped keys imports this.
+world consumer-with-tenant {
+    import tenant-api;
+    export wasi:http/incoming-handler@0.2.0;
+}
+
+interface types {
+    record tenant-info {
+        id: string,
+        display-name: option<string>,
+        created-at-ms: u64,
+    }
+    enum tenant-error { invalid-tenant-id, not-found, duplicate-tenant, invalid-key }
+}
+
+interface tenant-api {
+    use types.{tenant-info, tenant-error};
+
+    /// Register a tenant. Returns duplicate-tenant if already present.
+    register: func(id: string, display-name: option<string>) -> result<_, tenant-error>;
+
+    /// Scope a bare key under a tenant: "{tenant-id}:{key}".
+    /// Validates both the tenant ID and the key.
+    scope: func(tenant-id: string, key: string) -> result<string, tenant-error>;
+
+    /// Extract the tenant ID prefix from a scoped key (inverse of scope).
+    parse-tenant: func(scoped-key: string) -> result<string, tenant-error>;
+
+    /// Retrieve tenant metadata.
+    get: func(id: string) -> result<tenant-info, tenant-error>;
+
+    /// List all registered tenant IDs.
+    list-tenants: func() -> result<list<string>, tenant-error>;
+
+    /// Remove a tenant registration.
+    deregister: func(id: string) -> result<_, tenant-error>;
+}

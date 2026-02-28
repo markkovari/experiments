@@ -1,0 +1,17 @@
+[package]
+name = "config-loader-component"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { workspace = true }
+config-loader-core = { path = "../core" }
+
+[package.metadata.component]
+package = "wasmcloud:config-loader"
+
+[package.metadata.component.target]
+path = "../../wit/wasmcloud-config-loader"

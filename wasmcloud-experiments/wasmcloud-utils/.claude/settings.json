@@ -215,7 +215,9 @@
       "Bash(rustc:*)",
       "Bash(rustfmt:*)",
       "Bash(clippy:*)",
-      "Bash(wasm-pack:*)"
+      "Bash(wasm-pack:*)",
+      "Bash(wash:*)",
+      "Bash(nats:*)"
     ],
     "deny": [
       "Bash(rm -rf /)",

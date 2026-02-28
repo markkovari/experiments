@@ -1,0 +1,17 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: circuit-breaker
+  annotations:
+    version: v0.1.0
+    description: "Per-key circuit breaker with closed/open/half-open state machine"
+spec:
+  components:
+    - name: circuit-breaker-component
+      type: component
+      properties:
+        image: file://../target/wasm32-wasip2/release/circuit_breaker_component.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1

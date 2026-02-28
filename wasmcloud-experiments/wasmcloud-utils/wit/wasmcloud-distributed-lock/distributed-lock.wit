@@ -1,0 +1,26 @@
+package wasmcloud:distributed-lock@0.1.0-draft;
+
+world distributed-lock-component {
+    export lock-api;
+    import wasi:keyvalue/store@0.2.0-draft;
+}
+world consumer-with-lock { import lock-api; export wasi:http/incoming-handler@0.2.0; }
+
+interface types {
+    record lock-info {
+        key: string,
+        owner-id: string,
+        acquired-at-ms: u64,
+        expires-at-ms: u64,
+    }
+    enum lock-error { already-locked, not-found, invalid-token, invalid-key, storage-error }
+}
+
+interface lock-api {
+    use types.{lock-info, lock-error};
+    acquire: func(key: string, owner-id: string, ttl-ms: u64) -> result<string, lock-error>;
+    release: func(key: string, token: string) -> result<_, lock-error>;
+    extend: func(key: string, token: string, ttl-ms: u64) -> result<_, lock-error>;
+    is-locked: func(key: string) -> result<bool, lock-error>;
+    get-lock: func(key: string) -> result<lock-info, lock-error>;
+}

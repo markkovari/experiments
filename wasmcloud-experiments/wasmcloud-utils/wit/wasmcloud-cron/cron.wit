@@ -1,0 +1,69 @@
+package wasmcloud:cron@0.1.0-draft;
+
+world cron-component { export cron-api; }
+world consumer-with-cron { import cron-api; export wasi:http/incoming-handler@0.2.0; }
+
+interface types {
+    /// Parsed cron schedule: each field is either a wildcard or a sorted list
+    /// of concrete values. Seconds field is always 0 (minute-granularity only).
+    record schedule {
+        /// 0–59
+        minutes: list<u8>,
+        /// 0–23
+        hours: list<u8>,
+        /// 1–31  (empty = wildcard)
+        days-of-month: list<u8>,
+        /// 1–12  (empty = wildcard)
+        months: list<u8>,
+        /// 0–6   (0 = Sunday, empty = wildcard)
+        days-of-week: list<u8>,
+    }
+
+    record task {
+        name: string,
+        expression: string,
+        enabled: bool,
+        last-run-ms: option<u64>,
+        next-run-ms: option<u64>,
+        run-count: u64,
+    }
+
+    enum cron-error {
+        invalid-expression,
+        not-found,
+        duplicate-task,
+        invalid-name,
+    }
+}
+
+interface cron-api {
+    use types.{schedule, task, cron-error};
+
+    /// Register a named task with a cron expression (5-field: min hour dom mon dow).
+    register: func(name: string, expression: string) -> result<_, cron-error>;
+
+    /// Parse an expression into its schedule fields (useful for inspection).
+    parse: func(expression: string) -> result<schedule, cron-error>;
+
+    /// Check whether a task is due at the given unix-ms timestamp.
+    is-due: func(name: string, now-ms: u64) -> result<bool, cron-error>;
+
+    /// Record that a task ran at now-ms; updates last-run and run-count,
+    /// computes next-run based on the schedule.
+    tick: func(name: string, now-ms: u64) -> result<_, cron-error>;
+
+    /// Return all tasks due at now-ms.
+    due-tasks: func(now-ms: u64) -> result<list<task>, cron-error>;
+
+    /// Get a single task by name.
+    get-task: func(name: string) -> result<task, cron-error>;
+
+    /// List all registered tasks.
+    list-tasks: func() -> result<list<task>, cron-error>;
+
+    /// Enable or disable a task without removing it.
+    set-enabled: func(name: string, enabled: bool) -> result<_, cron-error>;
+
+    /// Remove a task.
+    deregister: func(name: string) -> result<_, cron-error>;
+}

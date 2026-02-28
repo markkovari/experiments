@@ -1,0 +1,68 @@
+package wasmcloud:circuit-breaker@0.1.0-draft;
+
+// Pattern 1: Standalone circuit-breaker component
+world circuit-breaker-component {
+    export breaker;
+}
+
+// Pattern 2: Consumer that imports the circuit-breaker
+world consumer-with-circuit-breaker {
+    import breaker;
+    export wasi:http/incoming-handler@0.2.0;
+}
+
+interface types {
+    /// The operational state of the circuit.
+    enum circuit-state {
+        /// Normal operation — calls pass through.
+        closed,
+        /// Tripped — calls are rejected immediately.
+        open,
+        /// Probe state — limited calls allowed to test recovery.
+        half-open,
+    }
+
+    /// Configuration supplied to `init`.
+    record circuit-config {
+        /// Consecutive failures that trip the circuit (Closed → Open).
+        failure-threshold: u64,
+        /// Consecutive successes that reset the circuit (Half-Open → Closed).
+        success-threshold: u64,
+        /// Milliseconds the circuit stays Open before entering Half-Open.
+        timeout-ms: u64,
+    }
+
+    /// Caller-supplied outcome of a protected call.
+    enum call-result {
+        success,
+        failure,
+    }
+
+    /// Errors returned by the breaker interface.
+    enum circuit-error {
+        /// `init` has not been called yet.
+        not-initialized,
+        /// The circuit is Open; the call was rejected without execution.
+        open-circuit,
+        /// The supplied config is invalid (e.g. zero threshold).
+        invalid-config,
+    }
+}
+
+interface breaker {
+    use types.{circuit-config, circuit-state, call-result, circuit-error};
+
+    /// Initialise global configuration. Must be called before any other function.
+    init: func(config: circuit-config) -> result<_, circuit-error>;
+
+    /// Record the outcome of a protected operation for the named circuit.
+    /// Returns `open-circuit` immediately when the circuit is Open and the
+    /// timeout has not yet elapsed.
+    call: func(key: string, outcome: call-result) -> result<_, circuit-error>;
+
+    /// Return the current state of the named circuit (Closed if never seen).
+    state: func(key: string) -> result<circuit-state, circuit-error>;
+
+    /// Force the named circuit back to Closed and clear all counters.
+    reset: func(key: string) -> result<_, circuit-error>;
+}

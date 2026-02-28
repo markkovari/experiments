@@ -1,0 +1,24 @@
+package wasmcloud:health-check@0.1.0-draft;
+
+world health-check-component { export health-api; }
+world consumer-with-health { import health-api; export wasi:http/incoming-handler@0.2.0; }
+
+interface types {
+    enum overall-status { healthy, degraded, unhealthy }
+    record probe-result {
+        name: string,
+        healthy: bool,
+        last-check-ms: u64,
+        message: option<string>,
+    }
+    enum health-error { not-found, invalid-name, duplicate-probe }
+}
+
+interface health-api {
+    use types.{overall-status, probe-result, health-error};
+    register: func(name: string) -> result<_, health-error>;
+    record-result: func(name: string, healthy: bool, message: option<string>) -> result<_, health-error>;
+    status: func() -> result<overall-status, health-error>;
+    all-probes: func() -> result<list<probe-result>, health-error>;
+    deregister: func(name: string) -> result<_, health-error>;
+}

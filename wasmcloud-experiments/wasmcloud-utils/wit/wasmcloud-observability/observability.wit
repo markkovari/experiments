@@ -1,0 +1,92 @@
+package wasmcloud:observability@0.1.0-draft;
+
+// Pattern 1: Standalone observability component
+world observability-component {
+    export logger;
+    export metrics;
+}
+
+// Pattern 2: Consumer that imports observability
+world consumer-with-observability {
+    import logger;
+    import metrics;
+    export wasi:http/incoming-handler@0.2.0;
+}
+
+interface types {
+    /// Severity levels, compatible with wasi:logging level names.
+    enum log-level {
+        trace,
+        debug,
+        info,
+        warn,
+        error,
+    }
+
+    /// A single structured log entry.
+    record log-entry {
+        level: log-level,
+        /// Dot-separated component/module name e.g. "auth.session".
+        target: string,
+        message: string,
+        /// Key-value pairs for structured fields.
+        fields: list<tuple<string, string>>,
+        timestamp-ms: u64,
+    }
+
+    /// Counter metric snapshot.
+    record counter-snapshot {
+        name: string,
+        value: u64,
+        labels: list<tuple<string, string>>,
+    }
+
+    /// Gauge metric snapshot (signed to allow deltas).
+    record gauge-snapshot {
+        name: string,
+        value: s64,
+        labels: list<tuple<string, string>>,
+    }
+
+    enum obs-error {
+        not-initialized,
+        invalid-name,
+    }
+}
+
+/// Structured logging interface.
+interface logger {
+    use types.{log-level, log-entry, obs-error};
+
+    /// Set the minimum log level; entries below this are dropped.
+    set-level: func(level: log-level) -> result<_, obs-error>;
+
+    /// Emit a structured log entry.
+    log: func(entry: log-entry) -> result<_, obs-error>;
+
+    /// Convenience: emit a plain message at the given level.
+    log-msg: func(level: log-level, target: string, message: string) -> result<_, obs-error>;
+
+    /// Return all buffered entries (in-memory sink for testing).
+    drain: func() -> result<list<log-entry>, obs-error>;
+}
+
+/// In-process metrics: counters and gauges.
+interface metrics {
+    use types.{counter-snapshot, gauge-snapshot, obs-error};
+
+    /// Increment a named counter by `delta` (default 1).
+    increment: func(name: string, delta: u64, labels: list<tuple<string, string>>) -> result<_, obs-error>;
+
+    /// Set a gauge to an absolute value.
+    gauge-set: func(name: string, value: s64, labels: list<tuple<string, string>>) -> result<_, obs-error>;
+
+    /// Return all counter snapshots.
+    counters: func() -> result<list<counter-snapshot>, obs-error>;
+
+    /// Return all gauge snapshots.
+    gauges: func() -> result<list<gauge-snapshot>, obs-error>;
+
+    /// Reset all counters and gauges to zero.
+    reset: func() -> result<_, obs-error>;
+}

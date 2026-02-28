@@ -1,0 +1,74 @@
+package wasmcloud:idempotency@0.1.0-draft;
+
+// Pattern 1: Standalone idempotency component backed by NATS KV
+world idempotency-component {
+    export idempotency-api;
+    import wasi:keyvalue/store@0.2.0-draft;
+}
+
+// Pattern 2: Consumer that imports the idempotency service
+world consumer-with-idempotency {
+    import idempotency-api;
+    export wasi:http/incoming-handler@0.2.0;
+}
+
+interface types {
+    /// The processing status of an idempotency key.
+    enum key-status {
+        /// First time seen — caller should process the request.
+        pending,
+        /// Processing completed successfully.
+        completed,
+        /// Processing failed; caller may inspect the stored error.
+        failed,
+    }
+
+    /// Full record stored for each idempotency key.
+    record idempotency-record {
+        key: string,
+        status: key-status,
+        /// Optional serialised response payload (e.g. JSON).
+        response: option<string>,
+        created-at-ms: u64,
+        /// Unix-ms after which the record is considered stale and may be evicted.
+        expires-at-ms: option<u64>,
+    }
+
+    enum idempotency-error {
+        /// Key validation failed (empty, illegal characters).
+        invalid-key,
+        /// Backing store returned an error.
+        storage-error,
+        /// Record not found (used by get/delete).
+        not-found,
+    }
+
+    /// Result of check-or-create.
+    record check-result {
+        /// true  → key was new, caller must process.
+        /// false → key already existed, use cached-record.
+        is-new: bool,
+        cached-record: option<idempotency-record>,
+    }
+}
+
+interface idempotency-api {
+    use types.{idempotency-record, idempotency-error, check-result, key-status};
+
+    /// Atomically check whether a key exists.
+    /// - If new  → inserts a `pending` record and returns is-new=true.
+    /// - If seen → returns is-new=false with the existing record.
+    check-or-create: func(key: string, ttl-ms: option<u64>) -> result<check-result, idempotency-error>;
+
+    /// Mark a key as completed, storing an optional response payload.
+    complete: func(key: string, response: option<string>) -> result<_, idempotency-error>;
+
+    /// Mark a key as failed, storing an optional error payload.
+    fail: func(key: string, error-payload: option<string>) -> result<_, idempotency-error>;
+
+    /// Retrieve the current record for a key.
+    get: func(key: string) -> result<idempotency-record, idempotency-error>;
+
+    /// Delete a key record (e.g. for testing or manual cleanup).
+    delete: func(key: string) -> result<_, idempotency-error>;
+}

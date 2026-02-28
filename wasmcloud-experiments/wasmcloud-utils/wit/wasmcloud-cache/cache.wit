@@ -1,0 +1,55 @@
+package wasmcloud:cache@0.1.0-draft;
+
+// Pattern 1: Standalone cache component
+world cache-component {
+    export cacher;
+    import wasi:keyvalue/store@0.2.0-draft;
+}
+
+// Pattern 2: HTTP middleware with cache
+world cache-http {
+    export wasi:http/incoming-handler@0.2.0;
+    export cacher;
+    import wasi:keyvalue/store@0.2.0-draft;
+}
+
+// Pattern 3: Consumer that imports the cache
+world consumer-with-cache {
+    import cacher;
+    export wasi:http/incoming-handler@0.2.0;
+}
+
+interface types {
+    record cached-entry {
+        value: list<u8>,
+        created-at-ms: u64,
+        expires-at-ms: option<u64>,
+        hit-count: u64,
+    }
+
+    enum cache-error {
+        not-initialized,
+        storage-error,
+        serialization-error,
+        invalid-key,
+    }
+}
+
+interface cacher {
+    use types.{cached-entry, cache-error};
+
+    /// Retrieve a cached entry by key. Returns None if not found or expired.
+    get: func(key: string) -> result<option<cached-entry>, cache-error>;
+
+    /// Store a value under key with optional TTL in milliseconds.
+    set: func(key: string, value: list<u8>, ttl-ms: option<u64>) -> result<_, cache-error>;
+
+    /// Remove a key from the cache.
+    delete: func(key: string) -> result<_, cache-error>;
+
+    /// Check whether a key exists and is not expired.
+    exists: func(key: string) -> result<bool, cache-error>;
+
+    /// Remove all expired entries. Returns the number of entries evicted.
+    flush: func() -> result<u64, cache-error>;
+}

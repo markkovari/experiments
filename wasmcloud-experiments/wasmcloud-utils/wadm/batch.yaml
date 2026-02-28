@@ -1,0 +1,17 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: batch
+  annotations:
+    version: v0.1.0
+    description: "Batch window management: enqueue, auto-flush by size or age"
+spec:
+  components:
+    - name: batch-component
+      type: component
+      properties:
+        image: file://../target/wasm32-wasip2/release/batch_component.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1

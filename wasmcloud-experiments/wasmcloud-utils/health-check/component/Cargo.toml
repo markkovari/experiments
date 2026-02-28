@@ -1,0 +1,17 @@
+[package]
+name = "health-check-component"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { workspace = true }
+health-check-core = { path = "../core" }
+
+[package.metadata.component]
+package = "wasmcloud:health-check"
+
+[package.metadata.component.target]
+path = "../../wit/wasmcloud-health-check"

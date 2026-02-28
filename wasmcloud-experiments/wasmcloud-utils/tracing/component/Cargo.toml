@@ -1,0 +1,17 @@
+[package]
+name = "tracing-component"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { workspace = true }
+tracing-core = { path = "../core" }
+
+[package.metadata.component]
+package = "wasmcloud:tracing"
+
+[package.metadata.component.target]
+path = "../../wit/wasmcloud-tracing"
