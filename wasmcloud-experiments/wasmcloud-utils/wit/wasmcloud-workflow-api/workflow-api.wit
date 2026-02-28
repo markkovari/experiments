@@ -1,0 +1,6 @@
+package wasmcloud:workflow-api@0.1.0-draft;
+
+world workflow-api-component {
+    export wasi:http/incoming-handler@0.2.0;
+    import wasi:keyvalue/store@0.2.0-draft;
+}

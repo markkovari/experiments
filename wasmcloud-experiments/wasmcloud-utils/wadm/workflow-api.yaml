@@ -1,0 +1,47 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: workflow-api
+  annotations:
+    version: v0.1.0
+    description: "HTTP REST API for workflow definition and execution management"
+spec:
+  components:
+    - name: workflow-api-component
+      type: component
+      properties:
+        image: file://../target/wasm32-wasip2/release/workflow_api.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1
+        - type: link
+          properties:
+            target: httpserver
+            namespace: wasi
+            package: http
+            interfaces: [incoming-handler]
+            source_config:
+              - name: default-http
+                properties:
+                  address: 0.0.0.0:8080
+        - type: link
+          properties:
+            target: nats-kv
+            namespace: wasi
+            package: keyvalue
+            interfaces: [store]
+            target_config:
+              - name: bucket
+                properties:
+                  bucket: workflow
+
+    - name: httpserver
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/http-server:0.23.1
+
+    - name: nats-kv
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/keyvalue-nats:0.3.1
