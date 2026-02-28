@@ -1,3 +1,4 @@
 .jj
 .env
 ruvector.db
+**/.ruvector/intelligence.json
