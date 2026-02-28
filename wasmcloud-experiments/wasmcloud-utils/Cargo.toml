@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "rate-limit/token-bucket",
+    "rate-limit/leaky-bucket",
+    "rate-limit/sliding-window",
+    "rate-limit/token-bucket-http",
+    "examples/consumer-app",
+    "tests/e2e",
+]
+
+[workspace.dependencies]
+wasmtime = "27.0"
+wasmtime-wasi = "27.0"
+wit-bindgen = "0.39.0"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[profile.release]
+opt-level = "z"      # Optimize for size aggressively
+lto = true           # Enable Link Time Optimization
+strip = true         # Strip debug symbols
+codegen-units = 1    # Better optimization (slower compile)
+panic = "abort"      # Reduce panic handler code size

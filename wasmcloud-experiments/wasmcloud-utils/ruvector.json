@@ -1,0 +1,22 @@
+{
+  "version": "2.0",
+  "project_name": "my-claude-app",
+  "engine": {
+    "backend": "mmap",         // Change from "sqlite" to "mmap" for instant speed
+    "profile": "Real-Time",    // High-performance mode (<1ms latency)
+    "threads": 4               // Match your CPU cores for faster vector math
+  },
+  "memory": {
+    "persistence": "surreal",  // Optional: only if you have SurrealDB running
+    "surreal_url": "ws://localhost:9090",
+    "surreal_user": "root",
+    "surreal_pass": "root",
+    "surreal_ns": "ruvector",
+    "surreal_db": "memory",
+    "ttl": "7d"                // How long Claude should "remember" things
+  },
+  "context": {
+    "max_tokens_per_recall": 1024, // Reduces "thinking" time by limiting output
+    "compression": true
+  }
+}
