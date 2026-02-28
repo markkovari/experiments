@@ -1,5 +1,5 @@
 [package]
-name = "leaky-bucket"
+name = "auth-jwt"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,9 +8,10 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wit-bindgen = { workspace = true }
+auth-jwt-core = { path = "../jwt-core" }
 
 [package.metadata.component]
-package = "wasmcloud:ratelimit"
+package = "wasmcloud:auth"
 
 [package.metadata.component.target]
-path = "../../wit/wasmcloud-ratelimit"
+path = "../../wit/wasmcloud-auth"

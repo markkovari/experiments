@@ -1,7 +1,7 @@
 // Pattern 1: HTTP Middleware - Rate limiter as HTTP proxy
 wit_bindgen::generate!({
     world: "rate-limiter-http",
-    path: "../../wit",
+    path: "../../wit/wasmcloud-ratelimit",
     generate_all,
 });
 

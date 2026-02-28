@@ -3,7 +3,7 @@
 
 wit_bindgen::generate!({
     world: "consumer-with-ratelimit",
-    path: "../../wit",
+    path: "../../wit/wasmcloud-ratelimit",
     generate_all,
 });
 

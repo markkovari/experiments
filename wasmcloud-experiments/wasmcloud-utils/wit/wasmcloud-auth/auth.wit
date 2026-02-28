@@ -1,0 +1,101 @@
+package wasmcloud:auth@0.1.0-draft;
+
+// Pattern 1: HTTP Middleware - intercepts requests, validates auth
+world auth-http {
+    export wasi:http/incoming-handler@0.2.0;
+    export authenticator;
+    import wasi:keyvalue/store@0.2.0-draft;
+}
+
+// Pattern 2: Library - other components import authenticator
+world auth-component {
+    export authenticator;
+    import wasi:keyvalue/store@0.2.0-draft;
+}
+
+// Pattern 3: Consumer that delegates auth to another component
+world consumer-with-auth {
+    import authenticator;
+    export wasi:http/incoming-handler@0.2.0;
+}
+
+// Pattern 4: OAuth component (needs HTTP egress for token exchange)
+// Note: wasi:http/outgoing-handler is imported at runtime via WADM link;
+// it is omitted here so the WIT compiles against the standard deps bundle.
+world auth-oauth-component {
+    export authenticator;
+    import wasi:keyvalue/store@0.2.0-draft;
+}
+
+interface types {
+    variant credentials {
+        username-password(username-password-creds),
+        bearer-token(string),
+        oauth-code(oauth-code-creds),
+    }
+
+    record username-password-creds {
+        username: string,
+        password: string,
+    }
+
+    record oauth-code-creds {
+        code: string,
+        redirect-uri: string,
+        state: option<string>,
+    }
+
+    record auth-token {
+        token: string,
+        token-type: token-type,
+        expires-at-ms: option<u64>,
+        subject: string,
+        claims: list<tuple<string, string>>,
+    }
+
+    enum token-type { session, jwt, oauth-access }
+
+    record auth-config {
+        token-type: token-type,
+        session-ttl-ms: option<u64>,
+        jwt-secret: option<string>,
+        oauth-token-url: option<string>,
+        oauth-client-id: option<string>,
+        oauth-client-secret: option<string>,
+    }
+
+    enum auth-error {
+        not-initialized,
+        invalid-credentials,
+        expired-token,
+        invalid-token,
+        revoked-token,
+        insufficient-permissions,
+        storage-error,
+        upstream-error,
+        invalid-config,
+    }
+
+    record validate-request {
+        token: string,
+        required-claims: list<string>,
+    }
+
+    record validate-response {
+        valid: bool,
+        subject: string,
+        claims: list<tuple<string, string>>,
+        expires-at-ms: option<u64>,
+    }
+}
+
+interface authenticator {
+    use types.{auth-config, credentials, auth-token, auth-error,
+               validate-request, validate-response};
+
+    init: func(config: auth-config) -> result<_, auth-error>;
+    authenticate: func(creds: credentials) -> result<auth-token, auth-error>;
+    validate: func(req: validate-request) -> result<validate-response, auth-error>;
+    refresh: func(token: string) -> result<auth-token, auth-error>;
+    revoke: func(token: string) -> result<_, auth-error>;
+}

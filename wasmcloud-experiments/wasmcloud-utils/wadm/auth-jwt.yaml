@@ -1,0 +1,33 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: auth-jwt
+  annotations:
+    version: v0.1.0
+    description: "JWT authentication component with HS256 signing"
+spec:
+  components:
+    - name: auth-jwt
+      type: component
+      properties:
+        image: file://../target/wasm32-wasip2/release/auth_jwt.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1
+        - type: link
+          properties:
+            target: nats-kv
+            namespace: wasi
+            package: keyvalue
+            interfaces:
+              - store
+            target_config:
+              - name: jwt-blocklist-bucket
+                properties:
+                  bucket: auth-jwt-blocklist
+
+    - name: nats-kv
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/keyvalue-nats:0.3.1
