@@ -1,0 +1,58 @@
+package wasmcloud:ratelimit@0.1.0;
+
+// Pattern 1: HTTP Middleware - export HTTP handler for proxy mode
+world rate-limiter-http {
+    export wasi:http/incoming-handler@0.2.0;
+    export rate-limiter;
+    import wasi:keyvalue/store@0.2.0-draft;
+}
+
+// Pattern 2: Library Import - other components import this
+world rate-limiter-component {
+    export rate-limiter;
+}
+
+// Pattern 3: Consumer that imports rate limiter
+world consumer-with-ratelimit {
+    import rate-limiter;
+    export wasi:http/incoming-handler@0.2.0;
+}
+
+interface types {
+    record rate-limit-config {
+        capacity: u64,
+        refill-rate: u64,
+        window-size-ms: u64,
+    }
+
+    record rate-limit-request {
+        user-id: string,
+        tokens-requested: u64,
+        timestamp-ms: u64,
+    }
+
+    record rate-limit-response {
+        allowed: bool,
+        tokens-remaining: u64,
+        retry-after-ms: option<u64>,
+    }
+
+    enum rate-limit-error {
+        invalid-config,
+        invalid-request,
+        storage-error,
+    }
+}
+
+interface rate-limiter {
+    use types.{rate-limit-config, rate-limit-request, rate-limit-response, rate-limit-error};
+
+    /// Initialize the rate limiter with configuration
+    init: func(config: rate-limit-config) -> result<_, rate-limit-error>;
+
+    /// Check if a request should be allowed
+    check-rate-limit: func(request: rate-limit-request) -> result<rate-limit-response, rate-limit-error>;
+
+    /// Reset rate limit for a specific user
+    reset: func(user-id: string) -> result<_, rate-limit-error>;
+}

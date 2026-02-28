@@ -1,0 +1,104 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: app-with-sidecar-ratelimit
+  annotations:
+    version: v0.1.0
+    description: "Pattern 3: Sidecar - App + Rate limiter communicate via NATS messaging"
+spec:
+  components:
+    # Your main application component
+    - name: my-app
+      type: component
+      properties:
+        # Replace with your app's wasm
+        image: file://../target/wasm32-wasip1/release/consumer_app.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 2  # Can scale independently
+        - type: link
+          properties:
+            target: httpserver
+            namespace: wasi
+            package: http
+            interfaces:
+              - incoming-handler
+            source_config:
+              - name: default-http
+                properties:
+                  address: 0.0.0.0:8082
+        # Link to NATS for messaging to rate limiter
+        - type: link
+          properties:
+            target: nats-messaging
+            namespace: wasmcloud
+            package: messaging
+            interfaces:
+              - consumer
+              - producer
+
+    # Rate limiter sidecar component
+    - name: token-bucket-sidecar
+      type: component
+      properties:
+        image: file://../target/wasm32-wasip1/release/token_bucket.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1  # Single instance handles all rate limiting
+        # Link to NATS KV for state persistence
+        - type: link
+          properties:
+            target: nats-kv
+            namespace: wasi
+            package: keyvalue
+            interfaces:
+              - store
+            target_config:
+              - name: default-bucket
+                properties:
+                  bucket: ratelimit-sidecar
+        # Link to NATS for receiving rate limit requests
+        - type: link
+          properties:
+            target: nats-messaging
+            namespace: wasmcloud
+            package: messaging
+            interfaces:
+              - consumer
+              - producer
+            target_config:
+              - name: rate-limit-queue
+                properties:
+                  subscriptions: ratelimit.check,ratelimit.reset
+
+    # NATS KV capability provider
+    - name: nats-kv
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/keyvalue-nats:0.3.1
+
+    # NATS messaging capability provider
+    - name: nats-messaging
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/messaging-nats:0.23.1
+
+    # HTTP server capability provider
+    - name: httpserver
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/http-server:0.23.1
+
+# In this pattern:
+# 1. Your app receives HTTP request
+# 2. App sends NATS message to "ratelimit.check" subject
+# 3. Rate limiter sidecar processes request
+# 4. Sidecar sends response back via NATS
+# 5. App processes response and continues or rejects
+#
+# Benefits:
+# - Components scale independently
+# - Rate limiter can be shared across multiple apps
+# - Loose coupling via messaging

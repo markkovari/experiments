@@ -1,0 +1,54 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: ratelimit-http-proxy
+  annotations:
+    version: v0.1.0
+    description: "Pattern 1: HTTP Middleware - Rate limiter as transparent proxy"
+spec:
+  components:
+    # Rate limiter with HTTP interface
+    - name: token-bucket-http
+      type: component
+      properties:
+        image: file://../target/wasm32-wasip1/release/token_bucket_http.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1
+        # Link to NATS KV for persistence
+        - type: link
+          properties:
+            target: nats-kv
+            namespace: wasi
+            package: keyvalue
+            interfaces:
+              - store
+            target_config:
+              - name: default-bucket
+                properties:
+                  bucket: ratelimit-http
+        # Expose HTTP interface
+        - type: link
+          properties:
+            target: httpserver
+            namespace: wasi
+            package: http
+            interfaces:
+              - incoming-handler
+            source_config:
+              - name: default-http
+                properties:
+                  address: 0.0.0.0:8080
+
+    # NATS KV capability provider
+    - name: nats-kv
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/keyvalue-nats:0.3.1
+
+    # HTTP server capability provider
+    - name: httpserver
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/http-server:0.23.1
