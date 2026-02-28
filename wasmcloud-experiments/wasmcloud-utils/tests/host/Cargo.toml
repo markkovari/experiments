@@ -1,0 +1,13 @@
+[package]
+name = "host-tests"
+version = "0.1.0"
+edition = "2021"
+
+# No lib target — only the integration test binary.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+anyhow = { workspace = true }

@@ -1,0 +1,17 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: tenant-context
+  annotations:
+    version: v0.1.0
+    description: "Tenant context and key scoping component"
+spec:
+  components:
+    - name: tenant-context-component
+      type: component
+      properties:
+        image: file://../target/wasm32-wasip2/release/tenant_context_component.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1

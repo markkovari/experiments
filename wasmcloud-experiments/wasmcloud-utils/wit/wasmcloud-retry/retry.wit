@@ -1,0 +1,72 @@
+package wasmcloud:retry@0.1.0-draft;
+
+// Pattern 1: Standalone retry-policy component
+world retry-component {
+    export retryer;
+}
+
+// Pattern 2: Consumer that imports the retry policy
+world consumer-with-retry {
+    import retryer;
+    export wasi:http/incoming-handler@0.2.0;
+}
+
+interface types {
+    /// Backoff strategy for computing delay between attempts.
+    enum backoff-strategy {
+        /// Fixed delay on every attempt.
+        fixed,
+        /// Delay doubles on each attempt (base * 2^attempt).
+        exponential,
+        /// Exponential with random ±25 % jitter to spread thundering herds.
+        exponential-jitter,
+    }
+
+    /// Configuration for a retry policy.
+    record retry-config {
+        /// Maximum number of retry attempts (not counting the first call).
+        max-attempts: u32,
+        /// Base delay in milliseconds between attempts.
+        base-delay-ms: u64,
+        /// Maximum delay cap in milliseconds (prevents runaway waits).
+        max-delay-ms: u64,
+        /// Which backoff strategy to use.
+        strategy: backoff-strategy,
+    }
+
+    /// Per-attempt schedule returned by `next-delay`.
+    record retry-schedule {
+        /// Attempt number (1 = first retry, 2 = second retry, …).
+        attempt: u32,
+        /// How long the caller should wait before making this attempt (ms).
+        delay-ms: u64,
+        /// True when this is the last allowed attempt.
+        is-last: bool,
+    }
+
+    enum retry-error {
+        /// `init` has not been called yet.
+        not-initialized,
+        /// All attempts exhausted — the operation should be failed.
+        exhausted,
+        /// The supplied config is invalid.
+        invalid-config,
+    }
+}
+
+interface retryer {
+    use types.{retry-config, retry-schedule, retry-error};
+
+    /// Initialise the retry policy. Must be called before any other function.
+    init: func(config: retry-config) -> result<_, retry-error>;
+
+    /// Given the attempt number (1-based), return the delay schedule.
+    /// Returns `exhausted` when attempt > max-attempts.
+    next-delay: func(attempt: u32) -> result<retry-schedule, retry-error>;
+
+    /// Convenience: return the full schedule for all attempts as a list.
+    schedule: func() -> result<list<retry-schedule>, retry-error>;
+
+    /// True when attempt <= max-attempts.
+    should-retry: func(attempt: u32) -> result<bool, retry-error>;
+}

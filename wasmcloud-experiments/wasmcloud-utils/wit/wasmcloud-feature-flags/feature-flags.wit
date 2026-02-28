@@ -1,0 +1,63 @@
+package wasmcloud:feature-flags@0.1.0-draft;
+
+// Pattern 1: Standalone feature-flag component backed by NATS KV
+world feature-flags-component {
+    export feature-flags-api;
+    import wasi:keyvalue/store@0.2.0-draft;
+}
+
+// Pattern 2: Consumer that imports the feature-flag service
+world consumer-with-flags {
+    import feature-flags-api;
+    export wasi:http/incoming-handler@0.2.0;
+}
+
+interface types {
+    /// The value stored under a flag key.
+    variant flag-value {
+        /// Boolean on/off toggle.
+        boolean(bool),
+        /// Arbitrary string (JSON, semver, enum variant, …).
+        text(string),
+        /// Integer (rollout percentage, limits, …).
+        integer(s64),
+    }
+
+    /// A complete flag definition including metadata.
+    record flag {
+        key: string,
+        value: flag-value,
+        /// Optional description shown in dashboards.
+        description: option<string>,
+        /// Unix-ms timestamp of the last update (0 = unknown).
+        updated-at-ms: u64,
+    }
+
+    enum flag-error {
+        not-initialized,
+        not-found,
+        invalid-key,
+        storage-error,
+        type-mismatch,
+    }
+}
+
+interface feature-flags-api {
+    use types.{flag, flag-value, flag-error};
+
+    /// Check whether a boolean flag is enabled.
+    /// Returns false (not an error) when the flag does not exist.
+    is-enabled: func(key: string) -> result<bool, flag-error>;
+
+    /// Retrieve the full flag record.
+    get: func(key: string) -> result<flag, flag-error>;
+
+    /// Create or overwrite a flag.
+    set: func(key: string, value: flag-value, description: option<string>) -> result<_, flag-error>;
+
+    /// Delete a flag. Succeeds even if the key did not exist.
+    delete: func(key: string) -> result<_, flag-error>;
+
+    /// Return all flags currently stored.
+    list-all: func() -> result<list<flag>, flag-error>;
+}

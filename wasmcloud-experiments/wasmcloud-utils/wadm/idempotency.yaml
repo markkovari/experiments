@@ -1,0 +1,33 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: idempotency
+  annotations:
+    version: v0.1.0
+    description: "Idempotency key store backed by NATS KV (bucket: idempotency)"
+spec:
+  components:
+    - name: idempotency-component
+      type: component
+      properties:
+        image: file://../target/wasm32-wasip2/release/idempotency_component.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1
+        - type: link
+          properties:
+            target: nats-kv
+            namespace: wasi
+            package: keyvalue
+            interfaces:
+              - store
+            target_config:
+              - name: idempotency-bucket
+                properties:
+                  bucket: idempotency
+
+    - name: nats-kv
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/keyvalue-nats:0.3.1

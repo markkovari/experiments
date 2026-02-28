@@ -1,0 +1,27 @@
+package wasmcloud:config-loader@0.1.0-draft;
+
+world config-loader-component {
+    export config-api;
+    import wasi:keyvalue/store@0.2.0-draft;
+}
+world consumer-with-config { import config-api; export wasi:http/incoming-handler@0.2.0; }
+
+interface types {
+    record config-entry {
+        key: string,
+        value: string,
+        is-secret: bool,
+        loaded-at-ms: u64,
+    }
+    enum config-error { invalid-key, not-found, storage-error }
+}
+
+interface config-api {
+    use types.{config-entry, config-error};
+    set: func(key: string, value: string, is-secret: bool) -> result<_, config-error>;
+    get: func(key: string) -> result<option<string>, config-error>;
+    get-or-default: func(key: string, default: string) -> result<string, config-error>;
+    contains: func(key: string) -> result<bool, config-error>;
+    list-keys: func() -> result<list<string>, config-error>;
+    delete: func(key: string) -> result<_, config-error>;
+}

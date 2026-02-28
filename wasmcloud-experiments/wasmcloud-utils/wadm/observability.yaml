@@ -1,0 +1,17 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: observability
+  annotations:
+    version: v0.1.0
+    description: "Structured logging + in-process counters/gauges observability component"
+spec:
+  components:
+    - name: observability-component
+      type: component
+      properties:
+        image: file://../target/wasm32-wasip2/release/observability_component.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1

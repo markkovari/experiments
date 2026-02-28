@@ -1,0 +1,26 @@
+package wasmcloud:tracing@0.1.0-draft;
+
+world tracing-component { export tracing-api; }
+world consumer-with-tracing { import tracing-api; export wasi:http/incoming-handler@0.2.0; }
+
+interface types {
+    record span {
+        id: string,
+        parent-id: option<string>,
+        name: string,
+        started-ms: u64,
+        ended-ms: option<u64>,
+        tags: list<tuple<string, string>>,
+    }
+    enum tracing-error { invalid-span-id, not-found, invalid-name }
+}
+
+interface tracing-api {
+    use types.{span, tracing-error};
+    start-span: func(name: string, parent-id: option<string>) -> result<string, tracing-error>;
+    end-span: func(span-id: string) -> result<_, tracing-error>;
+    current-span: func() -> result<option<string>, tracing-error>;
+    add-tag: func(span-id: string, key: string, value: string) -> result<_, tracing-error>;
+    get-span: func(span-id: string) -> result<span, tracing-error>;
+    active-spans: func() -> result<list<span>, tracing-error>;
+}

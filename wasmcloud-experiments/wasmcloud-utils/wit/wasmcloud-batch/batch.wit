@@ -1,0 +1,82 @@
+package wasmcloud:batch@0.1.0-draft;
+
+world batch-component { export batch-api; }
+world consumer-with-batch { import batch-api; export wasi:http/incoming-handler@0.2.0; }
+
+interface types {
+    /// A single item submitted to a batch window.
+    record batch-item {
+        /// Caller-assigned correlation id (for matching results).
+        id: string,
+        /// Opaque payload bytes — semantics are up to the consumer.
+        payload: list<u8>,
+        /// Unix-ms at which this item was enqueued (0 = unknown).
+        enqueued-at-ms: u64,
+    }
+
+    /// Outcome of processing one item inside a flush.
+    record item-result {
+        id: string,
+        /// true = processed successfully; false = failed
+        ok: bool,
+        /// Optional detail (error message or ack token).
+        detail: option<string>,
+    }
+
+    /// Summary returned after a flush.
+    record flush-summary {
+        total: u32,
+        succeeded: u32,
+        failed: u32,
+        /// Unix-ms when the flush completed.
+        flushed-at-ms: u64,
+    }
+
+    enum batch-error {
+        /// Batch is already closed / flushing.
+        batch-closed,
+        /// No items to flush.
+        empty-batch,
+        /// Item id is empty or otherwise invalid.
+        invalid-id,
+        /// Named batch not found.
+        not-found,
+        /// A batch with that name already exists.
+        duplicate-batch,
+    }
+}
+
+interface batch-api {
+    use types.{batch-item, item-result, flush-summary, batch-error};
+
+    /// Create a named batch window.
+    /// max-size: flush automatically when this many items are pending (0 = no auto-flush).
+    /// max-age-ms: flush automatically after this many ms since first enqueue (0 = no timeout).
+    open: func(name: string, max-size: u32, max-age-ms: u64) -> result<_, batch-error>;
+
+    /// Enqueue an item into the named batch.
+    /// Returns batch-closed if the window has already been flushed.
+    enqueue: func(name: string, item: batch-item) -> result<_, batch-error>;
+
+    /// Manually flush a batch: returns all pending items and marks the window closed.
+    /// The caller is responsible for actually processing the items.
+    flush: func(name: string, now-ms: u64) -> result<list<batch-item>, batch-error>;
+
+    /// Mark individual item outcomes after the caller has processed a flushed batch.
+    record-results: func(name: string, results: list<item-result>) -> result<flush-summary, batch-error>;
+
+    /// Check if a batch is due for auto-flush (max-size reached or max-age elapsed).
+    is-due: func(name: string, now-ms: u64) -> result<bool, batch-error>;
+
+    /// Return the number of items currently pending in the batch.
+    pending-count: func(name: string) -> result<u32, batch-error>;
+
+    /// Return all batches that are due for flushing at now-ms.
+    due-batches: func(now-ms: u64) -> result<list<string>, batch-error>;
+
+    /// Discard all pending items and close the window.
+    discard: func(name: string) -> result<_, batch-error>;
+
+    /// Remove the batch entirely (whether open or closed).
+    close: func(name: string) -> result<_, batch-error>;
+}

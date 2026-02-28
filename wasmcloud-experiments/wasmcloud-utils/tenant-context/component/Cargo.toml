@@ -1,0 +1,17 @@
+[package]
+name = "tenant-context-component"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { workspace = true }
+tenant-context-core = { path = "../core" }
+
+[package.metadata.component]
+package = "wasmcloud:tenant-context"
+
+[package.metadata.component.target]
+path = "../../wit/wasmcloud-tenant-context"

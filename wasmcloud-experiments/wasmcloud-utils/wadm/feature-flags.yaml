@@ -1,0 +1,33 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: feature-flags
+  annotations:
+    version: v0.1.0
+    description: "Feature-flag component backed by NATS KV store (bucket: feature-flags)"
+spec:
+  components:
+    - name: feature-flags-component
+      type: component
+      properties:
+        image: file://../target/wasm32-wasip2/release/feature_flags_component.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1
+        - type: link
+          properties:
+            target: nats-kv
+            namespace: wasi
+            package: keyvalue
+            interfaces:
+              - store
+            target_config:
+              - name: feature-flags-bucket
+                properties:
+                  bucket: feature-flags
+
+    - name: nats-kv
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/keyvalue-nats:0.3.1

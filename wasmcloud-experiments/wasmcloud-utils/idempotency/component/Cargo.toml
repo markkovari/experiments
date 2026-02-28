@@ -1,0 +1,17 @@
+[package]
+name = "idempotency-component"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { workspace = true }
+idempotency-core = { path = "../core" }
+
+[package.metadata.component]
+package = "wasmcloud:idempotency"
+
+[package.metadata.component.target]
+path = "../../wit/wasmcloud-idempotency"

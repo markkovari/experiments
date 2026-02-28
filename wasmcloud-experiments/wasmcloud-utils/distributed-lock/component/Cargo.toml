@@ -1,0 +1,17 @@
+[package]
+name = "distributed-lock-component"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { workspace = true }
+distributed-lock-core = { path = "../core" }
+
+[package.metadata.component]
+package = "wasmcloud:distributed-lock"
+
+[package.metadata.component.target]
+path = "../../wit/wasmcloud-distributed-lock"

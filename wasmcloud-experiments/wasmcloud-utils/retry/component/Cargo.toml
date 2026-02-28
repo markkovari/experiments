@@ -1,0 +1,17 @@
+[package]
+name = "retry-component"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { workspace = true }
+retry-core = { path = "../core" }
+
+[package.metadata.component]
+package = "wasmcloud:retry"
+
+[package.metadata.component.target]
+path = "../../wit/wasmcloud-retry"
