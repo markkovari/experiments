@@ -1,0 +1,27 @@
+name: fan-out-report
+description: Fetch data from multiple sources in parallel then aggregate
+steps:
+  - name: fetch-sales
+    depends_on: []
+    max_attempts: 3
+    base_delay_ms: 500
+  - name: fetch-inventory
+    depends_on: []
+    max_attempts: 3
+    base_delay_ms: 500
+  - name: fetch-users
+    depends_on: []
+    max_attempts: 3
+    base_delay_ms: 500
+  - name: aggregate
+    depends_on: [fetch-sales, fetch-inventory, fetch-users]
+    max_attempts: 2
+    base_delay_ms: 1000
+  - name: render-pdf
+    depends_on: [aggregate]
+    max_attempts: 2
+    base_delay_ms: 2000
+  - name: send-email
+    depends_on: [render-pdf]
+    max_attempts: 3
+    base_delay_ms: 500

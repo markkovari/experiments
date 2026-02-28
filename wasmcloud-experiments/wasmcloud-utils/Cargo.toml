@@ -49,6 +49,7 @@ members = [
     "examples/consumer-app",
     "tests/e2e",
     "tests/host",
+    "tests/cucumber",
 ]
 
 [workspace.dependencies]

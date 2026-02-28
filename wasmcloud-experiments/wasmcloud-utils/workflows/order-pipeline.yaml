@@ -1,0 +1,22 @@
+name: order-pipeline
+description: Process an incoming order end-to-end
+timeout_ms: 300000
+triggers:
+  - event: order.placed
+steps:
+  - name: validate
+    depends_on: []
+    max_attempts: 3
+    base_delay_ms: 500
+  - name: charge
+    depends_on: [validate]
+    max_attempts: 5
+    base_delay_ms: 1000
+  - name: fulfill
+    depends_on: [charge]
+    max_attempts: 3
+    base_delay_ms: 2000
+  - name: notify
+    depends_on: [fulfill]
+    max_attempts: 2
+    base_delay_ms: 500

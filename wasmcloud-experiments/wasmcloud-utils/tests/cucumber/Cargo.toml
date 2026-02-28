@@ -1,0 +1,17 @@
+[package]
+name = "workflow-api-cucumber"
+version = "0.1.0"
+edition = "2021"
+
+[[test]]
+name = "workflow_api"
+harness = false
+
+[dev-dependencies]
+cucumber = "0.21"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde_json = "1.0"
+anyhow = "1.0"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }

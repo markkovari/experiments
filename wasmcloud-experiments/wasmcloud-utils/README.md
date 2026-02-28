@@ -261,3 +261,48 @@ MIT
 - [NATS Documentation](https://docs.nats.io)
 - [Component Model](https://component-model.bytecodealliance.org)
 - [Rate Limiting Algorithms](https://en.wikipedia.org/wiki/Rate_limiting)
+
+---
+
+## Workflow API
+
+A stateful HTTP workflow engine running as a wasmCloud WASM component. It stores all state in NATS JetStream KV and exposes a REST API for defining, running, and monitoring multi-step workflows with retry, branching, sub-workflow delegation, and event subscription.
+
+### Quick Start
+
+```bash
+# 1. Register a workflow
+curl -s -X POST http://localhost:8080/workflows \
+  -H 'content-type: application/json' \
+  -d '{"name":"simple-job","steps":[{"name":"run","depends_on":[]}]}'
+
+# 2. Start a run
+curl -s -X POST http://localhost:8080/runs \
+  -H 'content-type: application/json' \
+  -d '{"wf_name":"simple-job"}'
+
+# 3. Poll run status (replace RUN_ID with the id from step 2)
+curl -s http://localhost:8080/runs/RUN_ID
+```
+
+Full API reference: [docs/workflow-api/API.md](docs/workflow-api/API.md)
+
+Architecture overview: [docs/workflow-api/ARCHITECTURE.md](docs/workflow-api/ARCHITECTURE.md)
+
+### Running Cucumber (BDD) Tests
+
+The cucumber test suite exercises the live API against a deployed wasmCloud host.
+
+```bash
+# Start wasmCloud and NATS
+wash up -d
+
+# Build and deploy the workflow-api component
+wash build -p workflow-api
+wash app deploy wadm/workflow-api.yaml
+
+# Run the BDD tests
+cargo test -p workflow-api-cucumber
+```
+
+Feature files are in `tests/cucumber/features/`. Step definitions are in `tests/cucumber/tests/steps/`.

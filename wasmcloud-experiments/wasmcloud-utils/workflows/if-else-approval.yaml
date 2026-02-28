@@ -1,0 +1,42 @@
+name: if-else-approval
+description: Demonstrate conditional branching with the condition field
+steps:
+  - name: submit
+    depends_on: []
+    max_attempts: 3
+    base_delay_ms: 500
+
+  - name: review
+    depends_on: [submit]
+    max_attempts: 1
+
+  # Approved branch: runs only when review output equals "approved"
+  - name: provision
+    depends_on: [review]
+    condition:
+      on_step: review
+      equals: "approved"
+    max_attempts: 3
+    base_delay_ms: 1000
+
+  - name: notify-approved
+    depends_on: [provision]
+    optional: true
+    max_attempts: 2
+    base_delay_ms: 500
+
+  # Rejected branch: runs only when review output equals "rejected"
+  - name: notify-rejected
+    depends_on: [review]
+    condition:
+      on_step: review
+      equals: "rejected"
+    optional: true
+    max_attempts: 2
+    base_delay_ms: 500
+
+  # Final step: runs after either branch (depends on both conditional steps)
+  - name: audit-log
+    depends_on: [notify-approved, notify-rejected]
+    optional: true
+    max_attempts: 1
