@@ -45,6 +45,7 @@ members = [
     "job-queue/component",
     "workflow/core",
     "workflow/component",
+    "workflow-api",
     "examples/consumer-app",
     "tests/e2e",
     "tests/host",
@@ -57,6 +58,7 @@ wit-bindgen = "0.39.0"
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9"
 hmac = { version = "0.12", features = ["std"] }
 sha2 = "0.10"
 
