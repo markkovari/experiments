@@ -1,0 +1,4 @@
+name: simple-job
+steps:
+  - name: run
+    depends_on: []
