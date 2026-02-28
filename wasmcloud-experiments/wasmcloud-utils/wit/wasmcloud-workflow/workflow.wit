@@ -1,0 +1,88 @@
+package wasmcloud:workflow@0.1.0-draft;
+
+world workflow-component {
+    export workflow-api;
+}
+
+world consumer-with-workflow {
+    import workflow-api;
+    export wasi:http/incoming-handler@0.2.0;
+}
+
+interface types {
+    enum wf-state {
+        running,
+        succeeded,
+        failed,
+        cancelled,
+    }
+
+    enum step-state {
+        pending,
+        running,
+        succeeded,
+        failed,
+        cancelled,
+    }
+
+    record step-def {
+        name: string,
+        depends-on: list<string>,
+        max-attempts: u32,
+        base-delay-ms: u64,
+    }
+
+    record step-run {
+        name: string,
+        state: step-state,
+        attempt: u32,
+        scheduled-at-ms: u64,
+        output: option<list<u8>>,
+        error: option<string>,
+    }
+
+    record workflow-run {
+        run-id: string,
+        wf-name: string,
+        state: wf-state,
+        idem-key: option<string>,
+        created-at-ms: u64,
+    }
+
+    enum workflow-error {
+        not-found,
+        already-defined,
+        duplicate-run,
+        invalid-step,
+        storage-error,
+        cycle-detected,
+    }
+}
+
+interface workflow-api {
+    use types.{step-def, step-run, workflow-run, workflow-error};
+
+    /// Define a workflow by name with its steps.
+    define: func(name: string, steps: list<step-def>) -> result<_, workflow-error>;
+
+    /// Start a new run of a workflow. Returns the run-id.
+    run: func(wf-name: string, input: list<u8>, idem-key: option<string>) -> result<string, workflow-error>;
+
+    /// Mark a step as succeeded (idempotent — no-op if already succeeded).
+    step-done: func(run-id: string, step: string, output: list<u8>, now-ms: u64) -> result<_, workflow-error>;
+
+    /// Mark a step as failed; schedules retry or fails the whole run if exhausted.
+    step-failed: func(run-id: string, step: string, error: string, now-ms: u64) -> result<_, workflow-error>;
+
+    /// Return steps that are ready to run (all deps succeeded, step is Pending and due).
+    ready-steps: func(run-id: string, now-ms: u64) -> result<list<step-run>, workflow-error>;
+
+    /// Retrieve the memoised output of a completed step.
+    step-output: func(run-id: string, step: string) -> result<option<list<u8>>, workflow-error>;
+
+    /// Get current run state.
+    get-run: func(run-id: string) -> result<workflow-run, workflow-error>;
+
+    /// Cancel a running workflow.
+    cancel-run: func(run-id: string) -> result<_, workflow-error>;
+}

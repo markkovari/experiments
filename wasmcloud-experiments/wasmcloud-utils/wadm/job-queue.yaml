@@ -1,0 +1,17 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: job-queue
+  annotations:
+    version: v0.1.0
+    description: "Job run lifecycle manager with retry scheduling and dead-letter support"
+spec:
+  components:
+    - name: job-queue-component
+      type: component
+      properties:
+        image: file://../target/wasm32-wasip2/release/job_queue_component.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1

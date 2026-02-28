@@ -1,0 +1,77 @@
+package wasmcloud:job-queue@0.1.0-draft;
+
+world job-queue-component {
+    export job-api;
+}
+
+world consumer-with-job-queue {
+    import job-api;
+    export wasi:http/incoming-handler@0.2.0;
+}
+
+interface types {
+    enum run-state {
+        pending,
+        running,
+        succeeded,
+        failed,
+        cancelled,
+        paused,
+        dead-letter,
+    }
+
+    record run-info {
+        run-id: string,
+        fn-name: string,
+        state: run-state,
+        attempt: u32,
+        max-attempts: u32,
+        scheduled-at-ms: u64,
+        idem-key: option<string>,
+        output: option<list<u8>>,
+        error: option<string>,
+    }
+
+    enum job-error {
+        not-found,
+        invalid-fn,
+        already-done,
+        storage-error,
+        dispatch-error,
+        duplicate-run,
+    }
+}
+
+interface job-api {
+    use types.{run-info, run-state, job-error};
+
+    /// Enqueue a new job run. Returns the run-id.
+    enqueue: func(fn-name: string, payload: list<u8>, idem-key: option<string>, max-attempts: u32, base-delay-ms: u64) -> result<string, job-error>;
+
+    /// Mark a run as started (Pending → Running).
+    start: func(run-id: string, now-ms: u64) -> result<_, job-error>;
+
+    /// Mark a run as succeeded with output.
+    succeed: func(run-id: string, output: list<u8>, now-ms: u64) -> result<_, job-error>;
+
+    /// Mark a run as failed. Schedules retry or transitions to dead-letter.
+    fail: func(run-id: string, error: string, now-ms: u64) -> result<_, job-error>;
+
+    /// Cancel a run.
+    cancel: func(run-id: string) -> result<_, job-error>;
+
+    /// Pause a run.
+    pause: func(run-id: string) -> result<_, job-error>;
+
+    /// Resume a paused run.
+    resume: func(run-id: string, now-ms: u64) -> result<_, job-error>;
+
+    /// Get run info by run-id.
+    get: func(run-id: string) -> result<run-info, job-error>;
+
+    /// Return run-ids whose scheduled-at-ms <= now-ms and state is Pending.
+    due: func(now-ms: u64) -> result<list<string>, job-error>;
+
+    /// Return all dead-letter run-ids.
+    dead-letters: func() -> result<list<string>, job-error>;
+}

@@ -1,0 +1,17 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: event-trigger
+  annotations:
+    version: v0.1.0
+    description: "Event fan-out trigger: maps named events to function subscriptions"
+spec:
+  components:
+    - name: event-trigger-component
+      type: component
+      properties:
+        image: file://../target/wasm32-wasip2/release/event_trigger_component.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1

@@ -6,6 +6,9 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1.42", features = ["full"] }
 idempotency-core = { path = "../../idempotency/core" }
+event-trigger-core = { path = "../../event-trigger/core" }
+job-queue-core = { path = "../../job-queue/core" }
+workflow-core = { path = "../../workflow/core" }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

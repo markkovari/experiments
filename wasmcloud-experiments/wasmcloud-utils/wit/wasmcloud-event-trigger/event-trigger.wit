@@ -1,0 +1,38 @@
+package wasmcloud:event-trigger@0.1.0-draft;
+
+world event-trigger-component {
+    export event-api;
+}
+
+world consumer-with-event-trigger {
+    import event-api;
+    export wasi:http/incoming-handler@0.2.0;
+}
+
+interface types {
+    enum event-error {
+        invalid-name,
+        not-found,
+        already-subscribed,
+        storage-error,
+    }
+}
+
+interface event-api {
+    use types.{event-error};
+
+    /// Subscribe a function name to an event. Returns already-subscribed if duplicate.
+    subscribe: func(event-name: string, fn-name: string) -> result<_, event-error>;
+
+    /// Unsubscribe a function name from an event.
+    unsubscribe: func(event-name: string, fn-name: string) -> result<_, event-error>;
+
+    /// Emit an event with a payload. Returns the list of function names that should be enqueued.
+    emit: func(event-name: string, payload: list<u8>) -> result<list<string>, event-error>;
+
+    /// List all function names subscribed to an event.
+    subscribers: func(event-name: string) -> result<list<string>, event-error>;
+
+    /// List all registered event names.
+    all-events: func() -> result<list<string>, event-error>;
+}
