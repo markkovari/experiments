@@ -2,6 +2,7 @@ package wasmcloud:workflow@0.1.0-draft;
 
 world workflow-component {
     export workflow-api;
+    import wasmcloud:secrets/secret-store@0.1.0-draft;
 }
 
 world consumer-with-workflow {
@@ -85,4 +86,8 @@ interface workflow-api {
 
     /// Cancel a running workflow.
     cancel-run: func(run-id: string) -> result<_, workflow-error>;
+
+    /// Retrieve a secret by name from the linked secrets-component.
+    /// Returns the plaintext bytes. Never log or persist the result.
+    get-secret: func(name: string) -> result<list<u8>, string>;
 }
