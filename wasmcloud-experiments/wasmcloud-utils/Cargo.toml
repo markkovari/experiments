@@ -46,6 +46,7 @@ members = [
     "workflow/core",
     "workflow/component",
     "workflow-api",
+    "workflow-store-nats",
     "examples/consumer-app",
     "tests/e2e",
     "tests/host",

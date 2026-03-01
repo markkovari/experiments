@@ -1,0 +1,36 @@
+package wasmcloud:workflow-store@0.1.0;
+
+interface store {
+    // --- Error type ---
+    variant store-error {
+        not-found(string),
+        conflict(string),
+        io-error(string),
+    }
+
+    // --- Workflow definitions ---
+    put-workflow-def:    func(name: string, json: list<u8>) -> result<_, store-error>;
+    get-workflow-def:    func(name: string)                 -> result<option<list<u8>>, store-error>;
+    delete-workflow-def: func(name: string)                 -> result<_, store-error>;
+    list-workflow-names: func(page: u32, limit: u32)        -> result<list<string>, store-error>;
+
+    // --- Runs ---
+    put-run:   func(run-id: string, json: list<u8>)   -> result<_, store-error>;
+    get-run:   func(run-id: string)                   -> result<option<list<u8>>, store-error>;
+    list-runs: func(wf-name: string, state-filter: option<string>, page: u32, limit: u32)
+                                                       -> result<list<list<u8>>, store-error>;
+
+    // --- Steps ---
+    put-step:        func(run-id: string, step-name: string, json: list<u8>) -> result<_, store-error>;
+    get-step:        func(run-id: string, step-name: string)                  -> result<option<list<u8>>, store-error>;
+    list-step-names: func(run-id: string)                                     -> result<list<string>, store-error>;
+
+    // --- Event subscriptions ---
+    put-event-subs: func(event-name: string, subs: list<string>) -> result<_, store-error>;
+    get-event-subs: func(event-name: string)                     -> result<list<string>, store-error>;
+    list-event-names: func()                                     -> result<list<string>, store-error>;
+
+    // --- Sub-run links ---
+    put-sub-run-link: func(parent-run-id: string, step-name: string, child-run-id: string) -> result<_, store-error>;
+    get-sub-run-link: func(parent-run-id: string, step-name: string)                        -> result<option<string>, store-error>;
+}

@@ -20,7 +20,7 @@ path = "../wit/wasmcloud-workflow-api"
 world = "workflow-api-component"
 
 [package.metadata.component.target.dependencies]
-"wasi:keyvalue" = { path = "../wit/wasmcloud-workflow-api/deps/wasi-keyvalue-0.2.0-draft" }
+"wasmcloud:workflow-store" = { path = "../../wit/wasmcloud-workflow-store" }
 "wasi:http" = { path = "../wit/wasmcloud-workflow-api/deps/wasi-http-0.2.0" }
 "wasi:clocks" = { path = "../wit/wasmcloud-workflow-api/deps/wasi-clocks-0.2.0" }
 "wasi:io" = { path = "../wit/wasmcloud-workflow-api/deps/wasi-io-0.2.0" }

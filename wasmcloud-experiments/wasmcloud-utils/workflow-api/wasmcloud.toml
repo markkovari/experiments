@@ -15,9 +15,7 @@ interfaces = ["incoming-handler"]
 source_config = [{ name = "default-http", properties = { address = "0.0.0.0:8080" } }]
 
 [[component.link]]
-target.name = "nats-kv"
-target.image = "ghcr.io/wasmcloud/keyvalue-nats:0.3.1"
-namespace = "wasi"
-package = "keyvalue"
+target.name = "workflow-store-nats"
+namespace = "wasmcloud"
+package = "workflow-store"
 interfaces = ["store"]
-target_config = [{ name = "bucket", properties = { bucket = "workflow" } }]
