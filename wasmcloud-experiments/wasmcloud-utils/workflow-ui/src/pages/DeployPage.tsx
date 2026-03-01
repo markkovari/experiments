@@ -71,15 +71,15 @@ export function DeployPage() {
       )}
 
       {isLoading ? (
-        <p className="text-gray-500 text-sm">Loading workflows…</p>
+        <p className="text-gray-500 dark:text-gray-400 text-sm">Loading workflows…</p>
       ) : (
-        <div className="overflow-x-auto rounded border border-gray-200">
+        <div className="overflow-x-auto rounded border border-gray-200 dark:border-gray-700">
           <table className="min-w-full text-sm">
-            <thead className="bg-gray-100 text-left">
+            <thead className="bg-gray-100 dark:bg-gray-800 text-left">
               <tr>
-                <th className="px-4 py-2 font-medium text-gray-700">Workflow</th>
-                <th className="px-4 py-2 font-medium text-gray-700">Steps with components</th>
-                <th className="px-4 py-2 font-medium text-gray-700">Action</th>
+                <th className="px-4 py-2 font-medium text-gray-700 dark:text-gray-300">Workflow</th>
+                <th className="px-4 py-2 font-medium text-gray-700 dark:text-gray-300">Steps with components</th>
+                <th className="px-4 py-2 font-medium text-gray-700 dark:text-gray-300">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -90,27 +90,27 @@ export function DeployPage() {
                 const hasComponents = stepsWithComponents.length > 0
 
                 return (
-                  <tr key={name} className="border-t border-gray-100 hover:bg-gray-50">
+                  <tr key={name} className="border-t border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800">
                     <td className="px-4 py-2 font-mono font-medium">{name}</td>
-                    <td className="px-4 py-2 text-gray-600">
+                    <td className="px-4 py-2 text-gray-600 dark:text-gray-400">
                       {wfQuery?.isLoading ? (
-                        <span className="text-gray-400 italic">loading…</span>
+                        <span className="text-gray-400 dark:text-gray-500 italic">loading…</span>
                       ) : hasComponents ? (
                         stepsWithComponents.map(s => (
                           <span key={s.name} className="inline-block mr-2">
                             <span className="font-mono">{s.name}</span>
-                            <span className="text-gray-400 ml-1">({s.component})</span>
+                            <span className="text-gray-400 dark:text-gray-500 ml-1">({s.component})</span>
                           </span>
                         ))
                       ) : (
-                        <span className="text-gray-400 italic">no components</span>
+                        <span className="text-gray-400 dark:text-gray-500 italic">no components</span>
                       )}
                     </td>
                     <td className="px-4 py-2 space-x-2">
                       {def && (
                         <button
                           onClick={() => openEditCanvas(def)}
-                          className="px-3 py-1 bg-purple-100 text-purple-800 rounded text-xs hover:bg-purple-200"
+                          className="px-3 py-1 bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-300 rounded text-xs hover:bg-purple-200 dark:hover:bg-purple-800"
                         >
                           Edit (Visual)
                         </button>
@@ -126,7 +126,7 @@ export function DeployPage() {
                           {selectedWorkflow === name && manifest && (
                             <button
                               onClick={() => copyToClipboard(manifest)}
-                              className="px-3 py-1 bg-gray-200 text-gray-800 rounded text-xs hover:bg-gray-300"
+                              className="px-3 py-1 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded text-xs hover:bg-gray-300 dark:hover:bg-gray-600"
                             >
                               Copy
                             </button>
@@ -139,7 +139,7 @@ export function DeployPage() {
               })}
               {names.length === 0 && (
                 <tr>
-                  <td colSpan={3} className="px-4 py-6 text-center text-gray-400 italic">
+                  <td colSpan={3} className="px-4 py-6 text-center text-gray-400 dark:text-gray-500 italic">
                     No workflows found.
                   </td>
                 </tr>
@@ -150,32 +150,32 @@ export function DeployPage() {
       )}
 
       {selectedWorkflow && (
-        <div className="mt-4 border border-gray-200 rounded p-4 bg-white space-y-3">
+        <div className="mt-4 border border-gray-200 dark:border-gray-700 rounded p-4 bg-white dark:bg-gray-900 space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="font-semibold text-gray-800">
+            <h2 className="font-semibold text-gray-800 dark:text-gray-200">
               WADM Manifest — <span className="font-mono">{selectedWorkflow}</span>
             </h2>
             <div className="flex gap-2">
               {manifest && (
                 <button
                   onClick={() => copyToClipboard(manifest)}
-                  className="px-3 py-1 bg-gray-200 text-gray-800 rounded text-xs hover:bg-gray-300"
+                  className="px-3 py-1 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded text-xs hover:bg-gray-300 dark:hover:bg-gray-600"
                 >
                   Copy to clipboard
                 </button>
               )}
               <button
                 onClick={() => setSelectedWorkflow(null)}
-                className="px-3 py-1 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200"
+                className="px-3 py-1 bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 rounded text-xs hover:bg-red-200 dark:hover:bg-red-800"
               >
                 Close
               </button>
             </div>
           </div>
 
-          {manifestLoading && <p className="text-gray-500 text-sm">Loading manifest…</p>}
+          {manifestLoading && <p className="text-gray-500 dark:text-gray-400 text-sm">Loading manifest…</p>}
           {manifestError && (
-            <p className="text-red-600 text-sm">
+            <p className="text-red-600 dark:text-red-400 text-sm">
               {(manifestError as Error).message}
             </p>
           )}

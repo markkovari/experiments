@@ -33,7 +33,6 @@ export function RunsPage() {
   })
   const wfNames = wfData?.items ?? []
 
-  // Single-workflow mode
   const { data: singleData, isLoading: singleLoading } = useQuery({
     queryKey: ['runs', selectedWf, stateFilter],
     queryFn: () => listRuns(selectedWf!, stateFilter || undefined, 1, 200),
@@ -41,7 +40,6 @@ export function RunsPage() {
     refetchInterval: 5_000,
   })
 
-  // All-workflows fan-out
   const allRunsQueries = useQueries({
     queries: wfNames.map(name => ({
       queryKey: ['runs', name, stateFilter],
@@ -74,7 +72,7 @@ export function RunsPage() {
 
       <div className="flex gap-4 flex-wrap items-center">
         <select
-          className="border rounded px-2 py-1 text-sm"
+          className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-800 dark:text-gray-100"
           value={selectedWf ?? ''}
           onChange={(e) => setSelectedWf(e.target.value || null)}
         >
@@ -87,7 +85,7 @@ export function RunsPage() {
           placeholder="Search run ID or workflow…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="border rounded px-2 py-1 text-sm w-56"
+          className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm w-56 bg-white dark:bg-gray-800 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500"
         />
 
         <div className="flex gap-1">
@@ -95,7 +93,11 @@ export function RunsPage() {
             <button
               key={s}
               onClick={() => setStateFilter(s)}
-              className={`px-3 py-1 rounded text-xs border ${stateFilter === s ? 'bg-blue-600 text-white border-blue-600' : 'hover:bg-gray-50'}`}
+              className={`px-3 py-1 rounded text-xs border ${
+                stateFilter === s
+                  ? 'bg-blue-600 text-white border-blue-600'
+                  : 'border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800'
+              }`}
             >
               {s || 'All'}
             </button>
@@ -103,10 +105,10 @@ export function RunsPage() {
         </div>
       </div>
 
-      {isLoading && <p className="text-gray-500">Loading…</p>}
+      {isLoading && <p className="text-gray-500 dark:text-gray-400">Loading…</p>}
 
-      <table className="w-full text-sm border rounded overflow-hidden">
-        <thead className="bg-gray-50 text-left">
+      <table className="w-full text-sm border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
+        <thead className="bg-gray-50 dark:bg-gray-800 text-left">
           <tr>
             <th className="px-4 py-2 font-medium w-6"></th>
             <th className="px-4 py-2 font-medium">Run ID</th>
@@ -121,14 +123,14 @@ export function RunsPage() {
             return (
               <React.Fragment key={run.run_id}>
                 <tr
-                  className="border-t hover:bg-gray-50 cursor-pointer"
+                  className="border-t border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
                   onClick={() => setExpandedRunId(isExpanded ? null : run.run_id)}
                 >
                   <td className="px-4 py-2 text-gray-400 text-xs">{isExpanded ? '▼' : '▶'}</td>
                   <td className="px-4 py-2 font-mono text-xs">{run.run_id}</td>
-                  <td className="px-4 py-2 text-gray-600">{run.wf_name}</td>
+                  <td className="px-4 py-2 text-gray-600 dark:text-gray-400">{run.wf_name}</td>
                   <td className="px-4 py-2"><StateBadge state={run.state} /></td>
-                  <td className="px-4 py-2 text-gray-500">{fmtMs(run.created_at_ms)}</td>
+                  <td className="px-4 py-2 text-gray-500 dark:text-gray-400">{fmtMs(run.created_at_ms)}</td>
                 </tr>
                 {isExpanded && (
                   <tr>
@@ -147,7 +149,7 @@ export function RunsPage() {
           })}
           {!isLoading && !runs.length && (
             <tr>
-              <td colSpan={5} className="px-4 py-6 text-center text-gray-400">
+              <td colSpan={5} className="px-4 py-6 text-center text-gray-400 dark:text-gray-500">
                 No runs found.
               </td>
             </tr>
