@@ -1,9 +1,19 @@
 import { useState } from 'react'
-import { useQuery, useQueries } from '@tanstack/react-query'
-import { listWorkflows, getWorkflow, getWorkflowManifest } from '../api'
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
+import { listWorkflows, getWorkflow, getWorkflowManifest, createWorkflow } from '../api'
+import type { WorkflowDef } from '../api'
+import { WorkflowCanvas } from '../components/WorkflowCanvas'
 
 export function DeployPage() {
+  const qc = useQueryClient()
   const [selectedWorkflow, setSelectedWorkflow] = useState<string | null>(null)
+  const [canvasDef, setCanvasDef] = useState<WorkflowDef | undefined>(undefined)
+  const [showCanvas, setShowCanvas] = useState(false)
+
+  const create = useMutation({
+    mutationFn: (def: WorkflowDef) => createWorkflow(def),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['workflows'] }),
+  })
 
   const { data: workflowsPage, isLoading } = useQuery({
     queryKey: ['workflows'],
@@ -30,9 +40,35 @@ export function DeployPage() {
     navigator.clipboard.writeText(text)
   }
 
+  const openNewCanvas = () => {
+    setCanvasDef(undefined)
+    setShowCanvas(true)
+  }
+
+  const openEditCanvas = (def: WorkflowDef) => {
+    setCanvasDef(def)
+    setShowCanvas(true)
+  }
+
   return (
     <div className="p-6 space-y-4">
-      <h1 className="text-2xl font-bold">Deploy</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Deploy</h1>
+        <button
+          onClick={openNewCanvas}
+          className="px-4 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700"
+        >
+          + New Workflow (Visual)
+        </button>
+      </div>
+
+      {showCanvas && (
+        <WorkflowCanvas
+          initialDef={canvasDef}
+          onSave={(def) => create.mutateAsync(def).then(() => {})}
+          onClose={() => setShowCanvas(false)}
+        />
+      )}
 
       {isLoading ? (
         <p className="text-gray-500 text-sm">Loading workflows…</p>
@@ -71,6 +107,14 @@ export function DeployPage() {
                       )}
                     </td>
                     <td className="px-4 py-2 space-x-2">
+                      {def && (
+                        <button
+                          onClick={() => openEditCanvas(def)}
+                          className="px-3 py-1 bg-purple-100 text-purple-800 rounded text-xs hover:bg-purple-200"
+                        >
+                          Edit (Visual)
+                        </button>
+                      )}
                       {hasComponents && (
                         <>
                           <button

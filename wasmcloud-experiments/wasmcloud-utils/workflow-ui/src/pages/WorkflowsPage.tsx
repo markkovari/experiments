@@ -3,10 +3,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { listWorkflows, createWorkflow, deleteWorkflow, startRun } from '../api'
 import type { WorkflowDef } from '../api'
 import { WorkflowEditor } from '../components/WorkflowEditor'
+import { WorkflowCanvas } from '../components/WorkflowCanvas'
 
 export function WorkflowsPage() {
   const qc = useQueryClient()
   const [showEditor, setShowEditor] = useState(false)
+  const [showCanvas, setShowCanvas] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['workflows'],
@@ -33,18 +35,33 @@ export function WorkflowsPage() {
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Workflows</h1>
-        <button
-          onClick={() => setShowEditor(true)}
-          className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
-        >
-          + New Workflow
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowCanvas(true)}
+            className="px-4 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700"
+          >
+            + Visual Editor
+          </button>
+          <button
+            onClick={() => setShowEditor(true)}
+            className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+          >
+            + New Workflow
+          </button>
+        </div>
       </div>
 
       {showEditor && (
         <WorkflowEditor
           onSave={(def) => create.mutateAsync(def).then(() => {})}
           onClose={() => setShowEditor(false)}
+        />
+      )}
+
+      {showCanvas && (
+        <WorkflowCanvas
+          onSave={(def) => create.mutateAsync(def).then(() => {})}
+          onClose={() => setShowCanvas(false)}
         />
       )}
 
