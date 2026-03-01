@@ -12,6 +12,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+ts-rs = { version = "10", features = ["serde-json-impl"] }
+
 [package.metadata.component]
 package = "wasmcloud:workflow-api"
 
