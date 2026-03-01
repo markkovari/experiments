@@ -4,8 +4,9 @@ import { useWorkflowEvents } from './sse'
 import { WorkflowsPage } from './pages/WorkflowsPage'
 import { RunsPage } from './pages/RunsPage'
 import { EventsPage } from './pages/EventsPage'
+import { DeployPage } from './pages/DeployPage'
 
-type Tab = 'runs' | 'workflows' | 'events'
+type Tab = 'runs' | 'workflows' | 'events' | 'deploy'
 
 export function App() {
   const qc = useQueryClient()
@@ -35,6 +36,7 @@ export function App() {
             {navItem('Runs', 'runs')}
             {navItem('Workflows', 'workflows')}
             {navItem('Events', 'events')}
+            {navItem('Deploy', 'deploy')}
           </nav>
         </div>
       </header>
@@ -43,6 +45,7 @@ export function App() {
         {tab === 'runs' && <RunsPage />}
         {tab === 'workflows' && <WorkflowsPage />}
         {tab === 'events' && <EventsPage />}
+        {tab === 'deploy' && <DeployPage />}
       </main>
     </div>
   )

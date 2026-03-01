@@ -86,6 +86,19 @@ export const retryStep = (runId: string, step: string) =>
 export const getStepOutput = (runId: string, step: string) =>
   request<{ output: unknown; state: string }>('GET', `/runs/${runId}/steps/${step}`)
 
+// Triggers
+export const fireTrigger = (wfName: string, triggerIndex: number, idemKey?: string) =>
+  request<{ run_id: string }>('POST', '/triggers/fire', {
+    wf_name: wfName,
+    trigger_index: triggerIndex,
+    ...(idemKey ? { idem_key: idemKey } : {}),
+  })
+
+// Manifests
+export const getWorkflowManifest = (name: string) =>
+  request<{ manifest: string }>('GET', `/workflows/${encodeURIComponent(name)}/manifest`)
+    .then(r => r.manifest)
+
 // Events
 export const listEvents = () =>
   request<string[]>('GET', '/events')

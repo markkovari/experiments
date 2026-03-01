@@ -172,6 +172,9 @@ pub struct StepDef {
     /// If present, step only runs when the condition is satisfied.
     #[serde(default)]
     pub condition: Option<Condition>,
+    /// Optional OCI WASM image for this step, e.g. "ghcr.io/org/my-step:v1"
+    #[serde(default)]
+    pub component: Option<String>,
 }
 
 fn default_max_attempts() -> u32 {
@@ -181,8 +184,35 @@ fn default_max_attempts() -> u32 {
 #[cfg_attr(all(test, not(target_arch = "wasm32")), derive(ts_rs::TS))]
 #[cfg_attr(all(test, not(target_arch = "wasm32")), ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TriggerDef {
-    pub event: String,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TriggerDef {
+    Event  { event: String },
+    Cron   { schedule: String },
+    Http   { path: String, #[serde(skip_serializing_if = "Option::is_none")] method: Option<String> },
+    Pubsub { topic: String },
+}
+
+/// Newtype for backward-compat deserialization: accepts both tagged enum and
+/// legacy `{"event": "..."}` (no `kind` field).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum TriggerDefRaw {
+    Tagged(TriggerDef),
+    LegacyEvent { event: String },
+}
+impl From<TriggerDefRaw> for TriggerDef {
+    fn from(r: TriggerDefRaw) -> Self {
+        match r {
+            TriggerDefRaw::Tagged(t) => t,
+            TriggerDefRaw::LegacyEvent { event } => TriggerDef::Event { event },
+        }
+    }
+}
+
+fn deser_triggers<'de, D>(d: D) -> Result<Vec<TriggerDef>, D::Error>
+where D: serde::Deserializer<'de> {
+    let raw: Vec<TriggerDefRaw> = Vec::deserialize(d)?;
+    Ok(raw.into_iter().map(TriggerDef::from).collect())
 }
 
 #[cfg_attr(all(test, not(target_arch = "wasm32")), derive(ts_rs::TS))]
@@ -195,7 +225,7 @@ pub struct WorkflowDef {
     #[serde(default)]
     #[cfg_attr(all(test, not(target_arch = "wasm32")), ts(type = "number | null"))]
     pub timeout_ms: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deser_triggers")]
     pub triggers: Vec<TriggerDef>,
     pub steps: Vec<StepDef>,
 }
@@ -515,6 +545,30 @@ pub fn handle_get_workflow(name: &str, store: &dyn StoreBackend) -> (u16, String
 pub fn handle_delete_workflow(name: &str, store: &dyn StoreBackend) -> (u16, String) {
     store.delete_workflow_def(name);
     (204, String::new())
+}
+
+pub fn handle_trigger_fire(body: &[u8], content_type: &str, store: &dyn StoreBackend) -> (u16, String) {
+    #[derive(Deserialize)]
+    struct Req { wf_name: String, trigger_index: usize, idem_key: Option<String> }
+    let req: Req = match parse_body(body, content_type) {
+        Ok(r) => r,
+        Err(e) => return (400, format!(r#"{{"error":"{}"}}"#, e)),
+    };
+    // Validate workflow exists and trigger index is in bounds
+    let def_bytes = match store.get_workflow_def(&req.wf_name) {
+        Some(b) => b,
+        None => return (404, format!(r#"{{"error":"workflow '{}' not found"}}"#, req.wf_name)),
+    };
+    let def: WorkflowDef = match serde_json::from_slice(&def_bytes) {
+        Ok(d) => d,
+        Err(_) => return (500, r#"{"error":"corrupt workflow definition"}"#.into()),
+    };
+    if req.trigger_index >= def.triggers.len() {
+        return (400, format!(r#"{{"error":"trigger_index {} out of bounds (workflow has {} triggers)"}}"#,
+            req.trigger_index, def.triggers.len()));
+    }
+    let inner = serde_json::json!({"idem_key": req.idem_key}).to_string().into_bytes();
+    handle_start_run(&req.wf_name, &inner, "application/json", store)
 }
 
 pub fn handle_start_run(
@@ -1393,6 +1447,39 @@ pub fn handle_sse(since_seq: u64) -> (u16, String) {
     (200, body)
 }
 
+fn build_manifest(wf_name: &str, steps: &[StepDef]) -> String {
+    let mut out = format!(
+        "apiVersion: core.oam.dev/v1beta1\nkind: Application\nmetadata:\n  name: {}\n  annotations:\n    version: v0.1.0\n    description: \"Workflow: {}\"\nspec:\n  components:\n",
+        wf_name, wf_name
+    );
+    for step in steps.iter().filter(|s| s.component.as_deref().map(|c| !c.is_empty()).unwrap_or(false)) {
+        let image = step.component.as_deref().unwrap();
+        out.push_str(&format!(
+            "    - name: {}\n      type: component\n      properties:\n        image: {}\n      traits:\n        - type: spreadscaler\n          properties:\n            replicas: 1\n",
+            step.name, image
+        ));
+    }
+    out
+}
+
+pub fn handle_get_manifest(name: &str, store: &dyn StoreBackend) -> (u16, String) {
+    let def_bytes = match store.get_workflow_def(name) {
+        Some(b) => b,
+        None => return (404, format!(r#"{{"error":"workflow '{}' not found"}}"#, name)),
+    };
+    let def: WorkflowDef = match serde_json::from_slice(&def_bytes) {
+        Ok(d) => d,
+        Err(_) => return (500, r#"{"error":"corrupt workflow definition"}"#.into()),
+    };
+    let has_components = def.steps.iter().any(|s| s.component.as_deref().map(|c| !c.is_empty()).unwrap_or(false));
+    if !has_components {
+        return (400, r#"{"error":"no steps with component image references"}"#.into());
+    }
+    let yaml = build_manifest(&def.name, &def.steps);
+    let manifest_json = serde_json::json!({ "manifest": yaml });
+    (200, manifest_json.to_string())
+}
+
 fn parse_query(full_path: &str) -> std::collections::HashMap<String, String> {
     let qs = full_path.splitn(2, '?').nth(1).unwrap_or("");
     qs.split('&')
@@ -1424,6 +1511,7 @@ pub fn route(
             handle_sse(since)
         }
         ("POST", "/workflows") => handle_register_workflow(body, content_type, store),
+        ("POST", "/triggers/fire") => handle_trigger_fire(body, content_type, store),
         ("GET", "/workflows") => handle_list_workflows(page, limit, store),
         ("GET", "/events") => handle_list_events(store),
         ("DELETE", "/_reset") => handle_reset(store),
@@ -1441,6 +1529,11 @@ pub fn route(
                 }
                 Err(e) => (400, format!(r#"{{"error":"{}"}}"#, e)),
             }
+        }
+
+        _ if path.starts_with("/workflows/") && path.ends_with("/manifest") && method == "GET" => {
+            let name = &path["/workflows/".len()..path.len() - "/manifest".len()];
+            handle_get_manifest(name, store)
         }
 
         _ if path.starts_with("/workflows/") => {

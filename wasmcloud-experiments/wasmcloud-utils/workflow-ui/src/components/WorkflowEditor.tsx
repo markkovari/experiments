@@ -9,7 +9,7 @@ interface Props {
 const TEMPLATE = JSON.stringify(
   {
     name: 'my-workflow',
-    steps: [{ name: 'step-1', depends_on: [] }],
+    steps: [{ name: 'step-1', depends_on: [], component: 'ghcr.io/org/my-step:v1' }],
   },
   null,
   2,
