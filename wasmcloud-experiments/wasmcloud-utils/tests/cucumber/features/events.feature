@@ -8,8 +8,7 @@ Feature: Event Subscription and Emission
       """
       {"fn_name":"handle-order"}
       """
-    Then the response status is 200
-    And the response body contains "subscribed"
+    Then the response status is 204
 
   Scenario: Emit an event to subscribers
     Given I have subscribed "handle-invoice" to event "invoice.created"
@@ -18,7 +17,7 @@ Feature: Event Subscription and Emission
       {"payload":"eyJhbW91bnQiOjEwMH0="}
       """
     Then the response status is 200
-    And the response body contains "emitted"
+    And the response body contains "handle-invoice"
 
   Scenario: Unsubscribe from an event
     Given I have subscribed "handle-order" to event "order.placed"
@@ -26,8 +25,7 @@ Feature: Event Subscription and Emission
       """
       {"fn_name":"handle-order"}
       """
-    Then the response status is 200
-    And the response body contains "unsubscribed"
+    Then the response status is 204
 
   Scenario: List event subscribers
     Given I have subscribed "handler-a" to event "my.event"

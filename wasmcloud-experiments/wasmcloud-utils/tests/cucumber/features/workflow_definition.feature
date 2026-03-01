@@ -26,8 +26,7 @@ Feature: Workflow Definition Management
   Scenario: Delete a workflow
     Given I have registered a workflow named "delete-test"
     When I DELETE "/workflows/delete-test"
-    Then the response status is 200
-    And the response body contains "deleted"
+    Then the response status is 204
 
   Scenario: Get returns 404 for unknown workflow
     When I GET "/workflows/nonexistent-workflow"

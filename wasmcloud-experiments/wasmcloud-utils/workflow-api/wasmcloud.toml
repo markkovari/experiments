@@ -1,0 +1,23 @@
+name = "workflow-api"
+language = "rust"
+type = "component"
+version = "0.1.0"
+
+[component]
+wit_world = "workflow-api-component"
+
+[[component.link]]
+target.name = "httpserver"
+target.image = "ghcr.io/wasmcloud/http-server:0.27.0"
+namespace = "wasi"
+package = "http"
+interfaces = ["incoming-handler"]
+source_config = [{ name = "default-http", properties = { address = "0.0.0.0:8080" } }]
+
+[[component.link]]
+target.name = "nats-kv"
+target.image = "ghcr.io/wasmcloud/keyvalue-nats:0.3.1"
+namespace = "wasi"
+package = "keyvalue"
+interfaces = ["store"]
+target_config = [{ name = "bucket", properties = { bucket = "workflow" } }]

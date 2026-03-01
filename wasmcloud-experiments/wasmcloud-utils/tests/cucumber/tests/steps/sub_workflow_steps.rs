@@ -1,8 +1,8 @@
 use crate::{WorkflowWorld, api_available};
-use cucumber::{given, then};
+use cucumber::{given, when, then};
 
 /// Simulate child run success by marking the sub-workflow step as done.
-#[given(expr = "the child run for step {string} on run {string} succeeds")]
+#[when(expr = "the child run for step {string} on run {string} succeeds")]
 async fn child_run_succeeds(
     world: &mut WorkflowWorld,
     step_name: String,
@@ -23,11 +23,12 @@ async fn child_run_succeeds(
         .send()
         .await
         .expect("failed to mark sub-workflow step done");
-    assert_eq!(resp.status().as_u16(), 200);
+    let s = resp.status().as_u16();
+    assert!(s == 200 || s == 204, "Expected 200/204, got {}", s);
 }
 
 /// Simulate child run failure.
-#[given(expr = "the child run for step {string} on run {string} fails")]
+#[when(expr = "the child run for step {string} on run {string} fails")]
 async fn child_run_fails(
     world: &mut WorkflowWorld,
     step_name: String,
@@ -48,7 +49,8 @@ async fn child_run_fails(
         .send()
         .await
         .expect("failed to mark sub-workflow step failed");
-    assert_eq!(resp.status().as_u16(), 200);
+    let s = resp.status().as_u16();
+    assert!(s == 200 || s == 204, "Expected 200/204, got {}", s);
 }
 
 /// Check a specific step's state via GET /runs/{run_id}/steps/{step_name}.

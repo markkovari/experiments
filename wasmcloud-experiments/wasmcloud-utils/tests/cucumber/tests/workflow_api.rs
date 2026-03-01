@@ -68,5 +68,23 @@ async fn main() {
     // Feature files live at <manifest_dir>/features/
     let features_dir = format!("{}/features", env!("CARGO_MANIFEST_DIR"));
 
-    WorkflowWorld::run(features_dir).await;
+    WorkflowWorld::cucumber()
+        .before(|_feature, _rule, _scenario, world| {
+            Box::pin(async move {
+                // Reset KV state before each scenario for test isolation
+                if api_available().await {
+                    let _ = reqwest::Client::new()
+                        .delete("http://localhost:8080/_reset")
+                        .send()
+                        .await;
+                }
+                world.base_url = "http://localhost:8080".to_string();
+                world.last_status = 0;
+                world.last_body = String::new();
+                world.run_id = None;
+                world.saved_run_id = None;
+            })
+        })
+        .run(features_dir)
+        .await;
 }

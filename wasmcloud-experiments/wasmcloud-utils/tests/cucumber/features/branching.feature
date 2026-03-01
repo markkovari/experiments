@@ -8,12 +8,12 @@ Feature: Conditional Branching
       """
       [
         {"name":"check","depends_on":[]},
-        {"name":"on-true","depends_on":["check"],"condition":{"on_step":"check","equals":true}},
-        {"name":"on-false","depends_on":["check"],"condition":{"on_step":"check","equals":false}}
+        {"name":"on-true","depends_on":["check"],"condition":{"on_step":"check","equals":"yes"}},
+        {"name":"on-false","depends_on":["check"],"condition":{"on_step":"check","equals":"no"}}
       ]
       """
     And I have started a run of "branch-true"
-    And I mark step "check" as done with output "dHJ1ZQ==" on run "{run_id}"
+    And I mark step "check" as done with output "InllcyI=" on run "{run_id}"
     When I GET "/runs/{run_id}/ready"
     Then the response status is 200
     And the response body contains "on-true"
@@ -24,12 +24,12 @@ Feature: Conditional Branching
       """
       [
         {"name":"check","depends_on":[]},
-        {"name":"on-true","depends_on":["check"],"condition":{"on_step":"check","equals":true}},
-        {"name":"on-false","depends_on":["check"],"condition":{"on_step":"check","equals":false}}
+        {"name":"on-true","depends_on":["check"],"condition":{"on_step":"check","equals":"yes"}},
+        {"name":"on-false","depends_on":["check"],"condition":{"on_step":"check","equals":"no"}}
       ]
       """
     And I have started a run of "branch-false"
-    And I mark step "check" as done with output "ZmFsc2U=" on run "{run_id}"
+    And I mark step "check" as done with output "Im5vIg==" on run "{run_id}"
     When I GET "/runs/{run_id}/ready"
     Then the response status is 200
     And the response body contains "on-false"
@@ -44,7 +44,7 @@ Feature: Conditional Branching
       ]
       """
     And I have started a run of "optional-wf"
-    And I mark step "main" as done with output "c2tpcA==" on run "{run_id}"
+    And I mark step "main" as done with output "InNraXAi" on run "{run_id}"
     When I GET "/runs/{run_id}"
     Then the response status is 200
     And the response body contains "succeeded"
@@ -54,12 +54,12 @@ Feature: Conditional Branching
       """
       [
         {"name":"gate","depends_on":[]},
-        {"name":"mid","depends_on":["gate"],"condition":{"on_step":"gate","equals":true}},
+        {"name":"mid","depends_on":["gate"],"condition":{"on_step":"gate","equals":"go"}},
         {"name":"leaf","depends_on":["mid"]}
       ]
       """
     And I have started a run of "transitive-skip"
-    And I mark step "gate" as done with output "ZmFsc2U=" on run "{run_id}"
+    And I mark step "gate" as done with output "InN0b3Ai" on run "{run_id}"
     When I GET "/runs/{run_id}"
     Then the response status is 200
     And the response body contains "succeeded"
