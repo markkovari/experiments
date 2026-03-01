@@ -6,10 +6,10 @@
 // Imports:  wasi:keyvalue/store
 //
 // KV schema (bucket: "workflow"):
-//   wf-def:<name>             → JSON WorkflowDef
-//   wf-run:<run-id>           → JSON RunRecord
-//   step:<run-id>:<step-name> → JSON StepRecord
-//   evt:<event-name>          → JSON list<string>  (subscriber fn-names)
+//   wf-def.<name>             → JSON WorkflowDef
+//   wf-run.<run-id>           → JSON RunRecord
+//   step.<run-id>.<step-name> → JSON StepRecord
+//   evt.<event-name>          → JSON list<string>  (subscriber fn-names)
 
 #[cfg(target_arch = "wasm32")]
 wit_bindgen::generate!({
@@ -82,6 +82,9 @@ pub struct StepDef {
     pub max_attempts: u32,
     #[serde(default)]
     pub base_delay_ms: u64,
+    /// Optional: per-step deadline in milliseconds.
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
     /// Optional: name of a child workflow to delegate to.
     #[serde(default)]
     pub sub_workflow: Option<String>,
@@ -128,6 +131,9 @@ pub struct StepRecord {
     pub state: String,
     pub attempt: u32,
     pub scheduled_at_ms: u64,
+    /// When the step transitioned to "running" (set in handle_ready_steps).
+    #[serde(default)]
+    pub started_at_ms: Option<u64>,
     pub output: Option<Vec<u8>>,
     pub error: Option<String>,
 }
@@ -188,6 +194,21 @@ pub fn validate_workflow(def: &WorkflowDef) -> Result<(), String> {
                 step.name
             ));
         }
+    }
+
+    // 5b. step timeout_ms must be > 0 if set
+    for step in &def.steps {
+        if step.timeout_ms == Some(0) {
+            return Err(format!(
+                "step '{}' timeout_ms must be > 0",
+                step.name
+            ));
+        }
+    }
+
+    // 5c. run-level timeout_ms must be > 0 if set
+    if def.timeout_ms == Some(0) {
+        return Err("timeout_ms must be > 0".into());
     }
 
     // 6. Validate sub_workflow names (alphanumeric + `-_`)
@@ -268,9 +289,27 @@ fn detect_cycle(steps: &[StepDef]) -> Result<(), String> {
 // Simple time stub
 // ---------------------------------------------------------------------------
 
+#[cfg(target_arch = "wasm32")]
 pub fn now_ms() -> u64 {
-    // In WASM: use wasi:clocks/wall-clock. For tests, return 0.
+    wasi::clocks::monotonic_clock::now() / 1_000_000
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn now_ms() -> u64 {
     0
+}
+
+/// Generate a unique u64 for run IDs (random, not time-based).
+#[cfg(target_arch = "wasm32")]
+pub fn unique_id() -> u64 {
+    wasi::random::random::get_random_u64()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
 // ---------------------------------------------------------------------------
@@ -301,23 +340,71 @@ pub fn handle_register_workflow(
     if let Err(msg) = validate_workflow(&def) {
         return (400, format!(r#"{{"error":"{}"}}"#, msg));
     }
-    let key = format!("wf-def:{}", def.name);
+    let key = format!("wf-def.{}", def.name);
     let json = serde_json::to_vec(&def).unwrap();
     kv.kv_set(&key, json);
     (201, format!(r#"{{"name":"{}","created":true}}"#, def.name))
 }
 
-pub fn handle_list_workflows(kv: &dyn KvStore) -> (u16, String) {
-    let keys = kv.kv_list_prefix("wf-def:");
+pub fn handle_list_workflows(page: usize, limit: usize, kv: &dyn KvStore) -> (u16, String) {
+    let mut keys = kv.kv_list_prefix("wf-def.");
+    keys.sort();
+    let total = keys.len();
+    let page = page.max(1);
+    let limit = if limit == 0 { 50 } else { limit };
+    let start = (page - 1) * limit;
     let names: Vec<String> = keys
         .iter()
-        .filter_map(|k| k.strip_prefix("wf-def:").map(|s| format!(r#""{}""#, s)))
+        .skip(start)
+        .take(limit)
+        .filter_map(|k| k.strip_prefix("wf-def.").map(|s| format!(r#""{}""#, s)))
         .collect();
-    (200, format!("[{}]", names.join(",")))
+    (200, format!(
+        r#"{{"items":[{}],"total":{},"page":{},"limit":{}}}"#,
+        names.join(","),
+        total,
+        page,
+        limit
+    ))
+}
+
+pub fn handle_list_steps_for_run(run_id: &str, page: usize, limit: usize, kv: &dyn KvStore) -> (u16, String) {
+    // Verify run exists
+    if kv.kv_get(&format!("wf-run.{}", run_id)).is_none() {
+        return (404, format!(r#"{{"error":"run '{}' not found"}}"#, run_id));
+    }
+    let prefix = format!("step.{}.", run_id);
+    let mut keys = kv.kv_list_prefix(&prefix);
+    keys.sort();
+    let total = keys.len();
+    let page = page.max(1);
+    let limit = if limit == 0 { 50 } else { limit };
+    let start = (page - 1) * limit;
+    let items: Vec<String> = keys
+        .iter()
+        .skip(start)
+        .take(limit)
+        .filter_map(|k| {
+            let step_name = k.strip_prefix(&prefix)?;
+            let v = kv.kv_get(k)?;
+            let sr: StepRecord = serde_json::from_slice(&v).ok()?;
+            Some(format!(
+                r#"{{"name":"{}","state":"{}","attempt":{}}}"#,
+                step_name, sr.state, sr.attempt
+            ))
+        })
+        .collect();
+    (200, format!(
+        r#"{{"items":[{}],"total":{},"page":{},"limit":{}}}"#,
+        items.join(","),
+        total,
+        page,
+        limit
+    ))
 }
 
 pub fn handle_get_workflow(name: &str, kv: &dyn KvStore) -> (u16, String) {
-    let key = format!("wf-def:{}", name);
+    let key = format!("wf-def.{}", name);
     match kv.kv_get(&key) {
         Some(v) => (200, String::from_utf8_lossy(&v).into_owned()),
         None => (404, format!(r#"{{"error":"workflow '{}' not found"}}"#, name)),
@@ -325,7 +412,7 @@ pub fn handle_get_workflow(name: &str, kv: &dyn KvStore) -> (u16, String) {
 }
 
 pub fn handle_delete_workflow(name: &str, kv: &dyn KvStore) -> (u16, String) {
-    let key = format!("wf-def:{}", name);
+    let key = format!("wf-def.{}", name);
     kv.kv_delete(&key);
     (204, String::new())
 }
@@ -337,7 +424,7 @@ pub fn handle_start_run(
     kv: &dyn KvStore,
 ) -> (u16, String) {
     // Check workflow exists
-    let def_key = format!("wf-def:{}", wf_name);
+    let def_key = format!("wf-def.{}", wf_name);
     let def_bytes = match kv.kv_get(&def_key) {
         Some(b) => b,
         None => {
@@ -368,9 +455,10 @@ pub fn handle_start_run(
     };
 
     let ts = now_ms();
+    let uid = unique_id();
     let run_id = if let Some(ref ik) = req.idem_key {
         // Check for existing run with same idem_key
-        let existing_keys = kv.kv_list_prefix("wf-run:");
+        let existing_keys = kv.kv_list_prefix("wf-run.");
         for k in &existing_keys {
             if let Some(v) = kv.kv_get(k) {
                 if let Ok(r) = serde_json::from_slice::<RunRecord>(&v) {
@@ -385,9 +473,9 @@ pub fn handle_start_run(
                 }
             }
         }
-        format!("wfrun-{}-{}-{}", wf_name, ik, ts)
+        format!("wfrun-{}-{}-{}", wf_name, ik, uid)
     } else {
-        format!("wfrun-{}-{}", wf_name, ts)
+        format!("wfrun-{}-{}", wf_name, uid)
     };
 
     let run = RunRecord {
@@ -398,7 +486,7 @@ pub fn handle_start_run(
         created_at_ms: ts,
     };
     kv.kv_set(
-        &format!("wf-run:{}", run_id),
+        &format!("wf-run.{}", run_id),
         serde_json::to_vec(&run).unwrap(),
     );
 
@@ -407,12 +495,13 @@ pub fn handle_start_run(
         let sr = StepRecord {
             state: "pending".to_string(),
             attempt: 0,
-            scheduled_at_ms: ts,
+            scheduled_at_ms: 0,  // immediately scheduleable
+            started_at_ms: None,
             output: None,
             error: None,
         };
         kv.kv_set(
-            &format!("step:{}:{}", run_id, step.name),
+            &format!("step.{}.{}", run_id, step.name),
             serde_json::to_vec(&sr).unwrap(),
         );
     }
@@ -421,7 +510,7 @@ pub fn handle_start_run(
 }
 
 pub fn handle_get_run(run_id: &str, kv: &dyn KvStore) -> (u16, String) {
-    let key = format!("wf-run:{}", run_id);
+    let key = format!("wf-run.{}", run_id);
     match kv.kv_get(&key) {
         Some(v) => (200, String::from_utf8_lossy(&v).into_owned()),
         None => (404, format!(r#"{{"error":"run '{}' not found"}}"#, run_id)),
@@ -429,7 +518,7 @@ pub fn handle_get_run(run_id: &str, kv: &dyn KvStore) -> (u16, String) {
 }
 
 pub fn handle_cancel_run(run_id: &str, kv: &dyn KvStore) -> (u16, String) {
-    let key = format!("wf-run:{}", run_id);
+    let key = format!("wf-run.{}", run_id);
     match kv.kv_get(&key) {
         None => (404, format!(r#"{{"error":"run '{}' not found"}}"#, run_id)),
         Some(v) => {
@@ -446,7 +535,7 @@ pub fn handle_cancel_run(run_id: &str, kv: &dyn KvStore) -> (u16, String) {
 
 /// GET /runs/:run_id/steps/:step/output
 pub fn handle_get_step_output(run_id: &str, step_name: &str, kv: &dyn KvStore) -> (u16, String) {
-    let step_key = format!("step:{}:{}", run_id, step_name);
+    let step_key = format!("step.{}.{}", run_id, step_name);
     match kv.kv_get(&step_key) {
         None => (
             404,
@@ -495,7 +584,7 @@ pub fn handle_link_sub_run(
     };
 
     // Ensure the parent step exists
-    let step_key = format!("step:{}:{}", run_id, step_name);
+    let step_key = format!("step.{}.{}", run_id, step_name);
     if kv.kv_get(&step_key).is_none() {
         return (
             404,
@@ -504,7 +593,7 @@ pub fn handle_link_sub_run(
     }
 
     // Store the sub-run link
-    let link_key = format!("sub-run:{}:{}", run_id, step_name);
+    let link_key = format!("sub-run.{}.{}", run_id, step_name);
     kv.kv_set(&link_key, req.sub_run_id.as_bytes().to_vec());
 
     // Auto-advance: if child run already succeeded/failed, reflect it now.
@@ -521,7 +610,7 @@ fn advance_sub_workflow_step(
     child_run_id: &str,
     kv: &dyn KvStore,
 ) {
-    let child_run_key = format!("wf-run:{}", child_run_id);
+    let child_run_key = format!("wf-run.{}", child_run_id);
     let child_run: RunRecord = match kv
         .kv_get(&child_run_key)
         .and_then(|v| serde_json::from_slice(&v).ok())
@@ -530,7 +619,7 @@ fn advance_sub_workflow_step(
         None => return,
     };
 
-    let step_key = format!("step:{}:{}", parent_run_id, step_name);
+    let step_key = format!("step.{}.{}", parent_run_id, step_name);
     let sr: StepRecord = match kv
         .kv_get(&step_key)
         .and_then(|v| serde_json::from_slice(&v).ok())
@@ -567,7 +656,7 @@ fn advance_sub_workflow_step(
             };
             kv.kv_set(&step_key, serde_json::to_vec(&updated).unwrap());
             // Fail the parent run too
-            let run_key = format!("wf-run:{}", parent_run_id);
+            let run_key = format!("wf-run.{}", parent_run_id);
             if let Some(v) = kv.kv_get(&run_key) {
                 if let Ok(mut run) = serde_json::from_slice::<RunRecord>(&v) {
                     if run.state == "running" {
@@ -583,7 +672,7 @@ fn advance_sub_workflow_step(
 
 pub fn handle_ready_steps(run_id: &str, kv: &dyn KvStore) -> (u16, String) {
     // Load the run
-    let run_key = format!("wf-run:{}", run_id);
+    let run_key = format!("wf-run.{}", run_id);
     let run_bytes = match kv.kv_get(&run_key) {
         Some(b) => b,
         None => return (404, format!(r#"{{"error":"run '{}' not found"}}"#, run_id)),
@@ -594,7 +683,7 @@ pub fn handle_ready_steps(run_id: &str, kv: &dyn KvStore) -> (u16, String) {
     };
 
     // Load workflow definition
-    let def_key = format!("wf-def:{}", run.wf_name);
+    let def_key = format!("wf-def.{}", run.wf_name);
     let def_bytes = match kv.kv_get(&def_key) {
         Some(b) => b,
         None => return (500, r#"{"error":"workflow definition missing"}"#.into()),
@@ -604,16 +693,25 @@ pub fn handle_ready_steps(run_id: &str, kv: &dyn KvStore) -> (u16, String) {
         Err(_) => return (500, r#"{"error":"corrupt workflow definition"}"#.into()),
     };
 
+    // Check run-level timeout
+    if check_run_timeout(run_id, &run, &def, kv) {
+        return (200, "[]".to_string());
+    }
+
+    // Check step-level timeouts
+    check_step_timeouts(run_id, &def, kv);
+
     let ts = now_ms();
     let mut ready = Vec::new();
 
     for step in &def.steps {
-        let step_key = format!("step:{}:{}", run_id, step.name);
+        let step_key = format!("step.{}.{}", run_id, step.name);
         let sr: StepRecord = match kv.kv_get(&step_key) {
             Some(v) => serde_json::from_slice(&v).unwrap_or(StepRecord {
                 state: "pending".to_string(),
                 attempt: 0,
                 scheduled_at_ms: 0,
+                started_at_ms: None,
                 output: None,
                 error: None,
             }),
@@ -623,7 +721,7 @@ pub fn handle_ready_steps(run_id: &str, kv: &dyn KvStore) -> (u16, String) {
         if sr.state != "pending" {
             // Sub-workflow auto-advance: check if a linked child run finished.
             if sr.state == "pending" || sr.state == "running" {
-                let link_key = format!("sub-run:{}:{}", run_id, step.name);
+                let link_key = format!("sub-run.{}.{}", run_id, step.name);
                 if let Some(child_id_bytes) = kv.kv_get(&link_key) {
                     let child_id = String::from_utf8_lossy(&child_id_bytes).into_owned();
                     advance_sub_workflow_step(run_id, &step.name, &child_id, kv);
@@ -637,7 +735,7 @@ pub fn handle_ready_steps(run_id: &str, kv: &dyn KvStore) -> (u16, String) {
 
         // Check all deps are succeeded (or skipped-optional)
         let deps_ok = step.depends_on.iter().all(|dep| {
-            let dep_key = format!("step:{}:{}", run_id, dep);
+            let dep_key = format!("step.{}.{}", run_id, dep);
             kv.kv_get(&dep_key)
                 .and_then(|v| serde_json::from_slice::<StepRecord>(&v).ok())
                 .map(|dr| dr.state == "succeeded" || dr.state == "skipped")
@@ -650,7 +748,7 @@ pub fn handle_ready_steps(run_id: &str, kv: &dyn KvStore) -> (u16, String) {
 
         // Evaluate condition for if-else branching
         if let Some(ref cond) = step.condition {
-            let on_step_key = format!("step:{}:{}", run_id, cond.on_step);
+            let on_step_key = format!("step.{}.{}", run_id, cond.on_step);
             let on_step_output: Option<Vec<u8>> = kv
                 .kv_get(&on_step_key)
                 .and_then(|v| serde_json::from_slice::<StepRecord>(&v).ok())
@@ -677,6 +775,18 @@ pub fn handle_ready_steps(run_id: &str, kv: &dyn KvStore) -> (u16, String) {
             }
         }
 
+        // Mark step as started by recording started_at_ms
+        let sr = if sr.started_at_ms.is_none() {
+            let updated = StepRecord {
+                started_at_ms: Some(ts),
+                ..sr
+            };
+            kv.kv_set(&step_key, serde_json::to_vec(&updated).unwrap());
+            updated
+        } else {
+            sr
+        };
+
         // Build ready-step JSON
         let sw_field = if let Some(ref sw) = step.sub_workflow {
             format!(r#","sub_workflow":"{}""#, sw)
@@ -700,7 +810,7 @@ pub fn handle_step_done(
     content_type: &str,
     kv: &dyn KvStore,
 ) -> (u16, String) {
-    let step_key = format!("step:{}:{}", run_id, step_name);
+    let step_key = format!("step.{}.{}", run_id, step_name);
     let sr = match kv.kv_get(&step_key) {
         Some(v) => serde_json::from_slice::<StepRecord>(&v).unwrap_or_default_step(),
         None => return (404, format!(r#"{{"error":"step '{}' not found for run '{}'"  }}"#, step_name, run_id)),
@@ -708,7 +818,7 @@ pub fn handle_step_done(
 
     #[derive(Deserialize, Default)]
     struct DoneReq {
-        output: Option<Vec<u8>>,
+        output: Option<serde_json::Value>,
     }
     let req: DoneReq = if body.is_empty() {
         DoneReq::default()
@@ -716,13 +826,39 @@ pub fn handle_step_done(
         parse_body(body, content_type).unwrap_or_default()
     };
 
+    // Store output bytes. If the JSON value is an array of u8 numbers (legacy format),
+    // convert it to raw bytes directly. If it's a string/other, store as JSON.
+    let output_bytes: Option<Vec<u8>> = req.output.map(|v| {
+        match &v {
+            serde_json::Value::Array(arr) => {
+                // Try to interpret as Vec<u8>
+                let bytes: Option<Vec<u8>> = arr.iter()
+                    .map(|n| n.as_u64().and_then(|b| u8::try_from(b).ok()))
+                    .collect();
+                bytes.unwrap_or_else(|| serde_json::to_vec(&v).unwrap_or_default())
+            }
+            _ => serde_json::to_vec(&v).unwrap_or_default(),
+        }
+    });
+
     let updated = StepRecord {
         state: "succeeded".to_string(),
         attempt: sr.attempt + 1,
-        output: req.output,
+        output: output_bytes,
         ..sr
     };
     kv.kv_set(&step_key, serde_json::to_vec(&updated).unwrap());
+    // Evaluate conditions for newly-unblocked steps, then propagate transitive skips.
+    // Pass the just-completed step name and output to avoid KV read-after-write race.
+    if let Some(run_bytes) = kv.kv_get(&format!("wf-run.{}", run_id)) {
+        if let Ok(run) = serde_json::from_slice::<RunRecord>(&run_bytes) {
+            let def_key = format!("wf-def.{}", run.wf_name);
+            if let Some(def) = kv.kv_get(&def_key).and_then(|v| serde_json::from_slice::<WorkflowDef>(&v).ok()) {
+                evaluate_conditions_for_unblocked(run_id, &def, kv, (step_name, &updated.output));
+                apply_transitive_skips(run_id, &def, kv);
+            }
+        }
+    }
     maybe_complete_run(run_id, kv);
     (204, String::new())
 }
@@ -734,7 +870,7 @@ pub fn handle_step_failed(
     content_type: &str,
     kv: &dyn KvStore,
 ) -> (u16, String) {
-    let run_key = format!("wf-run:{}", run_id);
+    let run_key = format!("wf-run.{}", run_id);
     let run_bytes = match kv.kv_get(&run_key) {
         Some(b) => b,
         None => return (404, format!(r#"{{"error":"run '{}' not found"}}"#, run_id)),
@@ -744,7 +880,7 @@ pub fn handle_step_failed(
         Err(_) => return (500, r#"{"error":"corrupt run record"}"#.into()),
     };
 
-    let def_key = format!("wf-def:{}", run.wf_name);
+    let def_key = format!("wf-def.{}", run.wf_name);
     let def_bytes = match kv.kv_get(&def_key) {
         Some(b) => b,
         None => return (500, r#"{"error":"workflow definition missing"}"#.into()),
@@ -754,7 +890,7 @@ pub fn handle_step_failed(
         Err(_) => return (500, r#"{"error":"corrupt workflow definition"}"#.into()),
     };
 
-    let step_key = format!("step:{}:{}", run_id, step_name);
+    let step_key = format!("step.{}.{}", run_id, step_name);
     let sr = match kv.kv_get(&step_key) {
         Some(v) => serde_json::from_slice::<StepRecord>(&v).unwrap_or_default_step(),
         None => return (404, format!(r#"{{"error":"step '{}' not found"}}"#, step_name)),
@@ -802,7 +938,7 @@ pub fn handle_step_failed(
 }
 
 fn maybe_complete_run(run_id: &str, kv: &dyn KvStore) {
-    let run_key = format!("wf-run:{}", run_id);
+    let run_key = format!("wf-run.{}", run_id);
     let run_bytes = match kv.kv_get(&run_key) {
         Some(b) => b,
         None => return,
@@ -816,8 +952,8 @@ fn maybe_complete_run(run_id: &str, kv: &dyn KvStore) {
     }
 
     // Load workflow def to know which steps are optional
-    let def_key = format!("wf-def:{}", run.wf_name);
-    let def: WorkflowDef = match kv
+    let def_key = format!("wf-def.{}", run.wf_name);
+    let _def: WorkflowDef = match kv
         .kv_get(&def_key)
         .and_then(|v| serde_json::from_slice(&v).ok())
     {
@@ -825,13 +961,12 @@ fn maybe_complete_run(run_id: &str, kv: &dyn KvStore) {
         None => return,
     };
 
-    let step_keys = kv.kv_list_prefix(&format!("step:{}:", run_id));
+    let step_keys = kv.kv_list_prefix(&format!("step.{}.", run_id));
     if step_keys.is_empty() {
         return;
     }
 
     let mut all_terminal = true;
-    let mut any_required_skipped = false;
 
     for k in &step_keys {
         let sr: StepRecord = match kv
@@ -842,33 +977,73 @@ fn maybe_complete_run(run_id: &str, kv: &dyn KvStore) {
             None => { all_terminal = false; break; }
         };
         match sr.state.as_str() {
-            "succeeded" => {}
-            "skipped" => {
-                // Find step def to check optional flag
-                let step_name = k
-                    .strip_prefix(&format!("step:{}:", run_id))
-                    .unwrap_or("");
-                let is_optional = def
-                    .steps
-                    .iter()
-                    .find(|s| s.name == step_name)
-                    .map(|s| s.optional)
-                    .unwrap_or(false);
-                if !is_optional {
-                    any_required_skipped = true;
-                }
-            }
+            "succeeded" | "skipped" => {}
             _ => { all_terminal = false; break; }
         }
     }
 
     if all_terminal {
-        run.state = if any_required_skipped {
-            "failed".to_string()
-        } else {
-            "succeeded".to_string()
-        };
+        run.state = "succeeded".to_string();
         kv.kv_set(&run_key, serde_json::to_vec(&run).unwrap());
+    }
+}
+
+/// Evaluate conditions for all pending steps whose deps are all satisfied,
+/// skipping any whose condition is not met. Called after any step completes.
+/// `completed_step`: name and output of the step that just completed (to avoid KV re-read race).
+fn evaluate_conditions_for_unblocked(
+    run_id: &str,
+    def: &WorkflowDef,
+    kv: &dyn KvStore,
+    completed_step: (&str, &Option<Vec<u8>>),
+) {
+    let (completed_name, completed_output) = completed_step;
+    for step in &def.steps {
+        let step_key = format!("step.{}.{}", run_id, step.name);
+        let sr: StepRecord = match kv.kv_get(&step_key).and_then(|v| serde_json::from_slice(&v).ok()) {
+            Some(r) => r,
+            None => continue,
+        };
+        if sr.state != "pending" {
+            continue;
+        }
+        // Check all deps are terminal (succeeded or skipped)
+        let deps_all_terminal = step.depends_on.iter().all(|dep| {
+            if dep == completed_name {
+                return true; // just completed = succeeded
+            }
+            let dk = format!("step.{}.{}", run_id, dep);
+            kv.kv_get(&dk)
+                .and_then(|v| serde_json::from_slice::<StepRecord>(&v).ok())
+                .map(|dr| dr.state == "succeeded" || dr.state == "skipped")
+                .unwrap_or(false)
+        });
+        // Only evaluate when there are actual deps that could have just become satisfied
+        if step.depends_on.is_empty() || !deps_all_terminal {
+            continue;
+        }
+        // If step has a condition and deps are all done, evaluate it
+        if let Some(ref cond) = step.condition {
+            // Use the in-memory output if the condition references the step we just completed
+            let on_step_output: Option<Vec<u8>> = if cond.on_step == completed_name {
+                completed_output.clone()
+            } else {
+                let on_step_key = format!("step.{}.{}", run_id, cond.on_step);
+                kv.kv_get(&on_step_key)
+                    .and_then(|v| serde_json::from_slice::<StepRecord>(&v).ok())
+                    .and_then(|sr| sr.output)
+            };
+            let condition_met = match on_step_output {
+                Some(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
+                    .map(|val| val == cond.equals)
+                    .unwrap_or(false),
+                None => serde_json::Value::Null == cond.equals,
+            };
+            if !condition_met {
+                let skipped = StepRecord { state: "skipped".to_string(), ..sr };
+                kv.kv_set(&step_key, serde_json::to_vec(&skipped).unwrap());
+            }
+        }
     }
 }
 
@@ -889,7 +1064,7 @@ fn apply_transitive_skips(run_id: &str, def: &WorkflowDef, kv: &dyn KvStore) {
     // Collect currently-skipped steps as seeds
     let mut to_visit: std::collections::VecDeque<String> = std::collections::VecDeque::new();
     for step in &def.steps {
-        let sk = format!("step:{}:{}", run_id, step.name);
+        let sk = format!("step.{}.{}", run_id, step.name);
         if let Some(v) = kv.kv_get(&sk) {
             if let Ok(sr) = serde_json::from_slice::<StepRecord>(&v) {
                 if sr.state == "skipped" {
@@ -901,7 +1076,7 @@ fn apply_transitive_skips(run_id: &str, def: &WorkflowDef, kv: &dyn KvStore) {
 
     while let Some(skipped_name) = to_visit.pop_front() {
         for &dependent in dependents.get(skipped_name.as_str()).unwrap_or(&vec![]) {
-            let dep_key = format!("step:{}:{}", run_id, dependent);
+            let dep_key = format!("step.{}.{}", run_id, dependent);
             let sr: StepRecord = match kv
                 .kv_get(&dep_key)
                 .and_then(|v| serde_json::from_slice(&v).ok())
@@ -917,7 +1092,7 @@ fn apply_transitive_skips(run_id: &str, def: &WorkflowDef, kv: &dyn KvStore) {
             let step_def = def.steps.iter().find(|s| s.name == dependent);
             let all_deps_resolved = step_def.map(|sd| {
                 sd.depends_on.iter().all(|dep| {
-                    let dk = format!("step:{}:{}", run_id, dep);
+                    let dk = format!("step.{}.{}", run_id, dep);
                     kv.kv_get(&dk)
                         .and_then(|v| serde_json::from_slice::<StepRecord>(&v).ok())
                         .map(|dr| dr.state == "succeeded" || dr.state == "skipped")
@@ -929,7 +1104,7 @@ fn apply_transitive_skips(run_id: &str, def: &WorkflowDef, kv: &dyn KvStore) {
                 // If any dep is skipped and there is no condition overriding, skip this too
                 let has_skipped_dep = step_def.map(|sd| {
                     sd.depends_on.iter().any(|dep| {
-                        let dk = format!("step:{}:{}", run_id, dep);
+                        let dk = format!("step.{}.{}", run_id, dep);
                         kv.kv_get(&dk)
                             .and_then(|v| serde_json::from_slice::<StepRecord>(&v).ok())
                             .map(|dr| dr.state == "skipped")
@@ -954,6 +1129,128 @@ fn apply_transitive_skips(run_id: &str, def: &WorkflowDef, kv: &dyn KvStore) {
 }
 
 // ---------------------------------------------------------------------------
+// Timeout enforcement
+// ---------------------------------------------------------------------------
+
+/// Check all running/pending steps for timeout expiry. Called at the start of
+/// handle_ready_steps and handle_step_done. Marks timed-out steps as failed.
+fn check_step_timeouts(run_id: &str, def: &WorkflowDef, kv: &dyn KvStore) {
+    let ts = now_ms();
+    for step_def in &def.steps {
+        let timeout_ms = match step_def.timeout_ms {
+            Some(t) => t,
+            None => continue,
+        };
+        let step_key = format!("step.{}.{}", run_id, step_def.name);
+        let sr: StepRecord = match kv.kv_get(&step_key).and_then(|v| serde_json::from_slice(&v).ok()) {
+            Some(r) => r,
+            None => continue,
+        };
+        // Only check steps that have started
+        if sr.state != "running" && sr.state != "pending" {
+            continue;
+        }
+        let started = match sr.started_at_ms {
+            Some(t) => t,
+            None => continue,
+        };
+        if ts.saturating_sub(started) > timeout_ms {
+            // Expire: treat as failure
+            let new_attempt = sr.attempt + 1;
+            let run_key = format!("wf-run.{}", run_id);
+            let updated = if new_attempt >= step_def.max_attempts {
+                // Fail the whole run
+                if let Some(v) = kv.kv_get(&run_key) {
+                    if let Ok(mut run) = serde_json::from_slice::<RunRecord>(&v) {
+                        if run.state == "running" {
+                            run.state = "failed".to_string();
+                            kv.kv_set(&run_key, serde_json::to_vec(&run).unwrap());
+                        }
+                    }
+                }
+                StepRecord {
+                    state: "failed".to_string(),
+                    attempt: new_attempt,
+                    error: Some("step timeout".to_string()),
+                    started_at_ms: None,
+                    ..sr
+                }
+            } else {
+                let delay = (step_def.base_delay_ms * (1u64 << new_attempt.min(6))).min(60_000);
+                StepRecord {
+                    state: "pending".to_string(),
+                    attempt: new_attempt,
+                    scheduled_at_ms: ts + delay,
+                    started_at_ms: None,
+                    error: Some("step timeout".to_string()),
+                    ..sr
+                }
+            };
+            kv.kv_set(&step_key, serde_json::to_vec(&updated).unwrap());
+        }
+    }
+}
+
+/// Check run-level timeout. Returns true if the run was timed out (now failed).
+fn check_run_timeout(run_id: &str, run: &RunRecord, def: &WorkflowDef, kv: &dyn KvStore) -> bool {
+    let timeout_ms = match def.timeout_ms {
+        Some(t) => t,
+        None => return false,
+    };
+    let ts = now_ms();
+    if run.state == "running" && ts.saturating_sub(run.created_at_ms) > timeout_ms {
+        let run_key = format!("wf-run.{}", run_id);
+        let mut updated = run.clone();
+        updated.state = "failed".to_string();
+        kv.kv_set(&run_key, serde_json::to_vec(&updated).unwrap());
+        return true;
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
+// Run history
+// ---------------------------------------------------------------------------
+
+pub fn handle_list_runs(
+    wf_name: &str,
+    state_filter: Option<&str>,
+    page: usize,
+    limit: usize,
+    kv: &dyn KvStore,
+) -> (u16, String) {
+    let keys = kv.kv_list_prefix("wf-run.");
+    let mut runs: Vec<RunRecord> = keys
+        .iter()
+        .filter_map(|k| kv.kv_get(k).and_then(|v| serde_json::from_slice(&v).ok()))
+        .filter(|r: &RunRecord| r.wf_name == wf_name)
+        .filter(|r| state_filter.map(|s| r.state == s).unwrap_or(true))
+        .collect();
+
+    // Sort by created_at_ms descending
+    runs.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
+
+    let total = runs.len();
+    let page = page.max(1);
+    let limit = if limit == 0 { 50 } else { limit };
+    let start = (page - 1) * limit;
+    let items: Vec<String> = runs
+        .iter()
+        .skip(start)
+        .take(limit)
+        .map(|r| serde_json::to_string(r).unwrap_or_default())
+        .collect();
+
+    (200, format!(
+        r#"{{"items":[{}],"total":{},"page":{},"limit":{}}}"#,
+        items.join(","),
+        total,
+        page,
+        limit
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // Event handlers
 // ---------------------------------------------------------------------------
 
@@ -966,7 +1263,7 @@ pub fn handle_event_subscribe(event_name: &str, body: &[u8], content_type: &str,
         Ok(r) => r,
         Err(e) => return (400, format!(r#"{{"error":"{}"}}"#, e)),
     };
-    let key = format!("evt:{}", event_name);
+    let key = format!("evt.{}", event_name);
     let mut subs: Vec<String> = kv
         .kv_get(&key)
         .and_then(|v| serde_json::from_slice(&v).ok())
@@ -983,7 +1280,7 @@ pub fn handle_event_unsubscribe(
     fn_name: &str,
     kv: &dyn KvStore,
 ) -> (u16, String) {
-    let key = format!("evt:{}", event_name);
+    let key = format!("evt.{}", event_name);
     let mut subs: Vec<String> = kv
         .kv_get(&key)
         .and_then(|v| serde_json::from_slice(&v).ok())
@@ -995,7 +1292,7 @@ pub fn handle_event_unsubscribe(
 
 pub fn handle_event_emit(event_name: &str, body: &[u8], _content_type: &str, kv: &dyn KvStore) -> (u16, String) {
     let _ = body; // payload stored but not processed further in this component
-    let key = format!("evt:{}", event_name);
+    let key = format!("evt.{}", event_name);
     let subs: Vec<String> = kv
         .kv_get(&key)
         .and_then(|v| serde_json::from_slice(&v).ok())
@@ -1005,10 +1302,10 @@ pub fn handle_event_emit(event_name: &str, body: &[u8], _content_type: &str, kv:
 }
 
 pub fn handle_list_events(kv: &dyn KvStore) -> (u16, String) {
-    let keys = kv.kv_list_prefix("evt:");
+    let keys = kv.kv_list_prefix("evt.");
     let names: Vec<String> = keys
         .iter()
-        .filter_map(|k| k.strip_prefix("evt:").map(|s| format!(r#""{}""#, s)))
+        .filter_map(|k| k.strip_prefix("evt.").map(|s| format!(r#""{}""#, s)))
         .collect();
     (200, format!("[{}]", names.join(",")))
 }
@@ -1027,6 +1324,7 @@ impl DeserOrDefault for Result<StepRecord, serde_json::Error> {
             state: "pending".to_string(),
             attempt: 0,
             scheduled_at_ms: 0,
+            started_at_ms: None,
             output: None,
             error: None,
         })
@@ -1037,20 +1335,86 @@ impl DeserOrDefault for Result<StepRecord, serde_json::Error> {
 // HTTP router (pure, called from both native tests and WASM handler)
 // ---------------------------------------------------------------------------
 
+/// Manually retry a failed step: reset it to `pending` state.
+pub fn handle_step_retry(run_id: &str, step_name: &str, kv: &dyn KvStore) -> (u16, String) {
+    let step_key = format!("step.{}.{}", run_id, step_name);
+    match kv.kv_get(&step_key) {
+        None => return (404, format!(r#"{{"error":"step '{}' not found"}}"#, step_name)),
+        Some(v) => {
+            let mut sr: StepRecord = match serde_json::from_slice(&v) {
+                Ok(r) => r,
+                Err(_) => return (500, r#"{"error":"corrupt step record"}"#.into()),
+            };
+            sr.state = "pending".to_string();
+            kv.kv_set(&step_key, serde_json::to_vec(&sr).unwrap());
+        }
+    }
+    (204, String::new())
+}
+
+/// Delete all KV keys matching a prefix (test helper).
+pub fn handle_reset(kv: &dyn KvStore) -> (u16, String) {
+    for prefix in &["wf-def.", "wf-run.", "step.", "evt.", "sub-run."] {
+        for key in kv.kv_list_prefix(prefix) {
+            kv.kv_delete(&key);
+        }
+    }
+    (204, String::new())
+}
+
+/// Parse query string into key=value pairs.
+fn parse_query(full_path: &str) -> std::collections::HashMap<String, String> {
+    let qs = full_path.splitn(2, '?').nth(1).unwrap_or("");
+    qs.split('&')
+        .filter_map(|pair| {
+            let mut parts = pair.splitn(2, '=');
+            let k = parts.next()?.to_string();
+            let v = parts.next().unwrap_or("").to_string();
+            if k.is_empty() { None } else { Some((k, v)) }
+        })
+        .collect()
+}
+
 pub fn route(method: &str, path: &str, body: &[u8], content_type: &str, kv: &dyn KvStore) -> (u16, String) {
+    let query = parse_query(path);
+    let page: usize = query.get("page").and_then(|v| v.parse().ok()).unwrap_or(1);
+    let limit: usize = query.get("limit").and_then(|v| v.parse().ok()).unwrap_or(0);
+
     // Strip query string
     let path = path.split('?').next().unwrap_or(path);
 
     match (method, path) {
         ("POST", "/workflows") => handle_register_workflow(body, content_type, kv),
-        ("GET", "/workflows") => handle_list_workflows(kv),
+        ("GET", "/workflows") => handle_list_workflows(page, limit, kv),
         ("GET", "/events") => handle_list_events(kv),
+        ("DELETE", "/_reset") => handle_reset(kv),
+        // POST /runs — start a run, workflow name from body {"wf_name":"..."}
+        ("POST", "/runs") => {
+            #[derive(serde::Deserialize)]
+            struct StartReq { wf_name: String, idem_key: Option<String> }
+            match serde_json::from_slice::<StartReq>(body) {
+                Ok(req) => {
+                    // Build a body that handle_start_run understands (with idem_key)
+                    let inner_body = if let Some(ik) = req.idem_key {
+                        serde_json::json!({"idem_key": ik}).to_string().into_bytes()
+                    } else {
+                        b"{}".to_vec()
+                    };
+                    handle_start_run(&req.wf_name, &inner_body, content_type, kv)
+                }
+                Err(e) => (400, format!(r#"{{"error":"{}"}}"#, e)),
+            }
+        }
 
         _ if path.starts_with("/workflows/") => {
             let rest = &path["/workflows/".len()..];
             if rest.ends_with("/run") && method == "POST" {
                 let name = &rest[..rest.len() - "/run".len()];
                 handle_start_run(name, body, content_type, kv)
+            } else if rest.ends_with("/runs") && method == "GET" {
+                let name = &rest[..rest.len() - "/runs".len()];
+                let state_filter = query.get("state").map(|s| s.as_str());
+                handle_list_runs(name, state_filter, page, limit, kv)
             } else if method == "GET" && !rest.contains('/') {
                 handle_get_workflow(rest, kv)
             } else if method == "DELETE" && !rest.contains('/') {
@@ -1075,10 +1439,19 @@ pub fn route(method: &str, path: &str, body: &[u8], content_type: &str, kv: &dyn
                 let run_id = &rest[..rest.len() - "/cancel".len()];
                 handle_cancel_run(run_id, kv)
             }
-            // /runs/:run_id/ready-steps
-            else if rest.ends_with("/ready-steps") && method == "GET" {
-                let run_id = &rest[..rest.len() - "/ready-steps".len()];
+            // /runs/:run_id/ready or /runs/:run_id/ready-steps
+            else if (rest.ends_with("/ready-steps") || rest.ends_with("/ready")) && method == "GET" {
+                let run_id = if rest.ends_with("/ready-steps") {
+                    &rest[..rest.len() - "/ready-steps".len()]
+                } else {
+                    &rest[..rest.len() - "/ready".len()]
+                };
                 handle_ready_steps(run_id, kv)
+            }
+            // /runs/:run_id/steps  (list all steps, paginated)
+            else if rest.ends_with("/steps") && method == "GET" {
+                let run_id = &rest[..rest.len() - "/steps".len()];
+                handle_list_steps_for_run(run_id, page, limit, kv)
             }
             // /runs/:run_id/steps/:step/{done|failed|output|sub-run}
             else if let Some(steps_rest) = rest.find("/steps/").map(|i| &rest[i + "/steps/".len()..]) {
@@ -1089,9 +1462,15 @@ pub fn route(method: &str, path: &str, body: &[u8], content_type: &str, kv: &dyn
                 } else if steps_rest.ends_with("/failed") && method == "POST" {
                     let step_name = &steps_rest[..steps_rest.len() - "/failed".len()];
                     handle_step_failed(run_id, step_name, body, content_type, kv)
+                } else if steps_rest.ends_with("/retry") && method == "POST" {
+                    let step_name = &steps_rest[..steps_rest.len() - "/retry".len()];
+                    handle_step_retry(run_id, step_name, kv)
                 } else if steps_rest.ends_with("/output") && method == "GET" {
                     let step_name = &steps_rest[..steps_rest.len() - "/output".len()];
                     handle_get_step_output(run_id, step_name, kv)
+                } else if !steps_rest.contains('/') && method == "GET" {
+                    // GET /runs/:run_id/steps/:step_name — return step state
+                    handle_get_step_output(run_id, steps_rest, kv)
                 } else if steps_rest.ends_with("/sub-run") && method == "POST" {
                     let step_name = &steps_rest[..steps_rest.len() - "/sub-run".len()];
                     handle_link_sub_run(run_id, step_name, body, content_type, kv)
@@ -1110,10 +1489,31 @@ pub fn route(method: &str, path: &str, body: &[u8], content_type: &str, kv: &dyn
                 let name = &rest[..rest.len() - "/subscribe".len()];
                 handle_event_subscribe(name, body, content_type, kv)
             }
+            // /events/:name/unsubscribe  (POST with body)
+            else if rest.ends_with("/unsubscribe") && method == "POST" {
+                let name = &rest[..rest.len() - "/unsubscribe".len()];
+                #[derive(serde::Deserialize)]
+                struct UnsubReq { fn_name: String }
+                match parse_body::<UnsubReq>(body, content_type) {
+                    Ok(req) => handle_event_unsubscribe(name, &req.fn_name, kv),
+                    Err(e) => (400, format!(r#"{{"error":"{}"}}"#, e)),
+                }
+            }
             // /events/:name/emit  (POST)
             else if rest.ends_with("/emit") && method == "POST" {
                 let name = &rest[..rest.len() - "/emit".len()];
                 handle_event_emit(name, body, content_type, kv)
+            }
+            // /events/:name/subscribers  (GET)
+            else if rest.ends_with("/subscribers") && method == "GET" {
+                let name = &rest[..rest.len() - "/subscribers".len()];
+                let key = format!("evt.{}", name);
+                let subs: Vec<String> = kv
+                    .kv_get(&key)
+                    .and_then(|v| serde_json::from_slice(&v).ok())
+                    .unwrap_or_default();
+                let names: Vec<String> = subs.iter().map(|s| format!(r#""{}""#, s)).collect();
+                (200, format!("[{}]", names.join(",")))
             }
             // /events/:name/subscribe/:fn_name  (DELETE)
             else if rest.contains("/subscribe/") && method == "DELETE" {
@@ -1145,10 +1545,10 @@ struct WasiKv {
 
 #[cfg(target_arch = "wasm32")]
 impl WasiKv {
-    fn open() -> Self {
-        let bucket = wasi::keyvalue::store::open("workflow")
-            .expect("failed to open workflow KV bucket");
-        WasiKv { bucket }
+    fn open() -> Result<Self, String> {
+        let bucket = wasi::keyvalue::store::open("default")
+            .map_err(|e| format!("failed to open workflow KV bucket: {:?}", e))?;
+        Ok(WasiKv { bucket })
     }
 }
 
@@ -1185,7 +1585,19 @@ impl exports::wasi::http::incoming_handler::Guest for WorkflowApi {
     ) {
         use wasi::http::types::{Headers, OutgoingBody, OutgoingResponse};
 
-        let method = format!("{:?}", request.method());
+        let method = {
+            use wasi::http::types::Method;
+            match request.method() {
+                Method::Get => "GET",
+                Method::Post => "POST",
+                Method::Put => "PUT",
+                Method::Delete => "DELETE",
+                Method::Patch => "PATCH",
+                Method::Head => "HEAD",
+                Method::Options => "OPTIONS",
+                _ => "UNKNOWN",
+            }.to_string()
+        };
         let path = request.path_with_query().unwrap_or_default();
 
         let body: Vec<u8> = request
@@ -1195,7 +1607,7 @@ impl exports::wasi::http::incoming_handler::Guest for WorkflowApi {
                 let stream = b.stream().ok()?;
                 let mut buf = Vec::new();
                 loop {
-                    match stream.read(4096) {
+                    match stream.blocking_read(4096) {
                         Ok(chunk) if chunk.is_empty() => break,
                         Ok(chunk) => buf.extend_from_slice(&chunk),
                         Err(_) => break,
@@ -1213,7 +1625,24 @@ impl exports::wasi::http::incoming_handler::Guest for WorkflowApi {
             .and_then(|v| String::from_utf8(v).ok())
             .unwrap_or_default();
 
-        let kv = WasiKv::open();
+        let kv = match WasiKv::open() {
+            Ok(k) => k,
+            Err(e) => {
+                let headers = Headers::new();
+                let resp = OutgoingResponse::new(headers);
+                resp.set_status_code(503).ok();
+                if let Ok(ob) = resp.body() {
+                    if let Ok(stream) = ob.write() {
+                        let _ = stream.blocking_write_and_flush(
+                            format!("{{\"error\":\"{}\"}}", e).as_bytes(),
+                        );
+                    }
+                    OutgoingBody::finish(ob, None).ok();
+                }
+                wasi::http::types::ResponseOutparam::set(response_out, Ok(resp));
+                return;
+            }
+        };
         let (status, resp_body) = route(&method, &path, &body, &content_type, &kv);
 
         let headers = Headers::new();
@@ -1224,13 +1653,13 @@ impl exports::wasi::http::incoming_handler::Guest for WorkflowApi {
         let resp = OutgoingResponse::new(headers);
         resp.set_status_code(status).ok();
 
-        if !resp_body.is_empty() {
-            if let Ok(ob) = resp.body() {
+        if let Ok(ob) = resp.body() {
+            if !resp_body.is_empty() {
                 if let Ok(stream) = ob.write() {
                     let _ = stream.blocking_write_and_flush(resp_body.as_bytes());
                 }
-                OutgoingBody::finish(ob, None).ok();
             }
+            OutgoingBody::finish(ob, None).ok();
         }
 
         wasi::http::types::ResponseOutparam::set(response_out, Ok(resp));
@@ -1903,7 +2332,7 @@ mod tests {
         assert!(ready.contains("yes-branch"), "ready: {}", ready);
         // no-branch should be skipped
         let sk = kv.0.borrow();
-        let nb_key = format!("step:{}:no-branch", id);
+        let nb_key = format!("step.{}.no-branch", id);
         let nb_state: StepRecord = serde_json::from_slice(sk.get(&nb_key).unwrap()).unwrap();
         assert_eq!(nb_state.state, "skipped");
     }
@@ -1954,8 +2383,9 @@ mod tests {
         // Trigger evaluation
         rj("GET", &format!("/runs/{}/ready-steps", id), &[], &kv);
 
+        // Skipped steps (condition not met) do not fail the run — branching is by design.
         let (_, status) = rj("GET", &format!("/runs/{}", id), &[], &kv);
-        assert!(status.contains("failed"), "run status: {}", status);
+        assert!(status.contains("succeeded"), "run status: {}", status);
     }
 
     #[test]
@@ -1986,7 +2416,7 @@ mod tests {
         rj("GET", &format!("/runs/{}/ready-steps", id), &[], &kv);
 
         let sk = kv.0.borrow();
-        let end_key = format!("step:{}:end", id);
+        let end_key = format!("step.{}.end", id);
         let end_sr: StepRecord = serde_json::from_slice(sk.get(&end_key).unwrap()).unwrap();
         assert_eq!(end_sr.state, "skipped");
         drop(sk);
@@ -1994,5 +2424,163 @@ mod tests {
         // Run should succeed because all skipped steps are optional
         let (_, status) = rj("GET", &format!("/runs/{}", id), &[], &kv);
         assert!(status.contains("succeeded"), "run status: {}", status);
+    }
+
+    // -----------------------------------------------------------------------
+    // Part B: Timeout tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn timeout_zero_rejected() {
+        let kv = MemKv::new();
+        // run-level timeout_ms: 0
+        let (status, body) = rj(
+            "POST",
+            "/workflows",
+            br#"{"name":"bad-timeout","steps":[{"name":"s","depends_on":[]}],"timeout_ms":0}"#,
+            &kv,
+        );
+        assert_eq!(status, 400);
+        assert!(body.contains("timeout_ms must be > 0"), "body: {}", body);
+    }
+
+    #[test]
+    fn step_timeout_zero_rejected() {
+        let kv = MemKv::new();
+        let (status, body) = rj(
+            "POST",
+            "/workflows",
+            br#"{"name":"bad-step-timeout","steps":[{"name":"s","depends_on":[],"timeout_ms":0}]}"#,
+            &kv,
+        );
+        assert_eq!(status, 400);
+        assert!(body.contains("timeout_ms must be > 0"), "body: {}", body);
+    }
+
+    #[test]
+    fn step_timeout_accepted() {
+        let kv = MemKv::new();
+        let (status, _) = rj(
+            "POST",
+            "/workflows",
+            br#"{"name":"timeout-wf","steps":[{"name":"s","depends_on":[],"timeout_ms":5000}]}"#,
+            &kv,
+        );
+        assert_eq!(status, 201);
+    }
+
+    #[test]
+    fn run_level_timeout_accepted() {
+        let kv = MemKv::new();
+        let (status, _) = rj(
+            "POST",
+            "/workflows",
+            br#"{"name":"run-timeout-wf","timeout_ms":10000,"steps":[{"name":"s","depends_on":[]}]}"#,
+            &kv,
+        );
+        assert_eq!(status, 201);
+    }
+
+    // -----------------------------------------------------------------------
+    // Part C: Run history tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn list_runs_for_workflow() {
+        let kv = MemKv::new();
+        rj("POST", "/workflows", br#"{"name":"history-wf","steps":[{"name":"s","depends_on":[]}]}"#, &kv);
+        rj("POST", "/workflows/history-wf/run", b"{}", &kv);
+        rj("POST", "/workflows/history-wf/run", b"{}", &kv);
+
+        let (status, body) = rj("GET", "/workflows/history-wf/runs", &[], &kv);
+        assert_eq!(status, 200);
+        assert!(body.contains("\"items\""), "body: {}", body);
+        assert!(body.contains("\"total\":2"), "body: {}", body);
+    }
+
+    #[test]
+    fn list_runs_returns_empty_for_fresh_workflow() {
+        let kv = MemKv::new();
+        rj("POST", "/workflows", br#"{"name":"fresh-wf","steps":[{"name":"s","depends_on":[]}]}"#, &kv);
+
+        let (status, body) = rj("GET", "/workflows/fresh-wf/runs", &[], &kv);
+        assert_eq!(status, 200);
+        assert!(body.contains("\"total\":0"), "body: {}", body);
+    }
+
+    #[test]
+    fn list_runs_filter_by_state() {
+        let kv = MemKv::new();
+        rj("POST", "/workflows", br#"{"name":"filter-wf","steps":[{"name":"s","depends_on":[]}]}"#, &kv);
+        let (_, b) = rj("POST", "/workflows/filter-wf/run", b"{}", &kv);
+        let v: serde_json::Value = serde_json::from_str(&b).unwrap();
+        let run_id = v["run_id"].as_str().unwrap();
+        rj("POST", &format!("/runs/{}/cancel", run_id), &[], &kv);
+
+        let (status, body) = route("GET", "/workflows/filter-wf/runs?state=cancelled", &[], "application/json", &kv);
+        assert_eq!(status, 200);
+        assert!(body.contains("cancelled"), "body: {}", body);
+
+        let (_, body_running) = route("GET", "/workflows/filter-wf/runs?state=running", &[], "application/json", &kv);
+        assert!(body_running.contains("\"total\":0"), "body: {}", body_running);
+    }
+
+    #[test]
+    fn list_runs_pagination() {
+        let kv = MemKv::new();
+        rj("POST", "/workflows", br#"{"name":"page-runs-wf","steps":[{"name":"s","depends_on":[]}]}"#, &kv);
+        for _ in 0..5 {
+            rj("POST", "/workflows/page-runs-wf/run", b"{}", &kv);
+        }
+
+        let (status, body) = route("GET", "/workflows/page-runs-wf/runs?page=1&limit=2", &[], "application/json", &kv);
+        assert_eq!(status, 200);
+        assert!(body.contains("\"total\":5"), "body: {}", body);
+        // items array should have 2 entries
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["items"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn list_runs_unknown_workflow() {
+        let kv = MemKv::new();
+        let (status, body) = rj("GET", "/workflows/no-such-wf/runs", &[], &kv);
+        assert_eq!(status, 200);
+        assert!(body.contains("\"total\":0"), "body: {}", body);
+    }
+
+    // -----------------------------------------------------------------------
+    // Part D: Pagination tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn list_workflows_paginated() {
+        let kv = MemKv::new();
+        for i in 1..=5 {
+            rj("POST", "/workflows", format!(r#"{{"name":"pag-wf-{}","steps":[{{"name":"s","depends_on":[]}}]}}"#, i).as_bytes(), &kv);
+        }
+
+        let (status, body) = route("GET", "/workflows?page=1&limit=2", &[], "application/json", &kv);
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["total"].as_u64().unwrap(), 5);
+        assert_eq!(v["items"].as_array().unwrap().len(), 2);
+        assert!(body.contains("\"page\":1"));
+        assert!(body.contains("\"limit\":2"));
+    }
+
+    #[test]
+    fn list_steps_for_run() {
+        let kv = MemKv::new();
+        rj("POST", "/workflows", br#"{"name":"steps-list-wf","steps":[{"name":"a","depends_on":[]},{"name":"b","depends_on":[]}]}"#, &kv);
+        let (_, b) = rj("POST", "/workflows/steps-list-wf/run", b"{}", &kv);
+        let v: serde_json::Value = serde_json::from_str(&b).unwrap();
+        let run_id = v["run_id"].as_str().unwrap();
+
+        let (status, body) = rj("GET", &format!("/runs/{}/steps", run_id), &[], &kv);
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["total"].as_u64().unwrap(), 2);
+        assert_eq!(v["items"].as_array().unwrap().len(), 2);
     }
 }

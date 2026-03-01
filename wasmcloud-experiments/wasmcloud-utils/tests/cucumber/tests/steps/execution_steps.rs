@@ -47,10 +47,13 @@ async fn step_has_failed(world: &mut WorkflowWorld, step_name: String, _placehol
         .send()
         .await
         .expect("failed to mark step as failed");
-    assert_eq!(resp.status().as_u16(), 200);
+    let s = resp.status().as_u16();
+    assert!(s == 200 || s == 204, "Expected 200/204 from step failed, got {}", s);
 }
 
 /// Mark a step as done with the given base64 output.
+/// The output_b64 string is decoded from base64 to get the raw bytes,
+/// then sent as a JSON array of byte numbers (matching the legacy Vec<u8> format).
 #[given(expr = "I mark step {string} as done with output {string} on run {string}")]
 async fn mark_step_done(
     world: &mut WorkflowWorld,
@@ -61,12 +64,19 @@ async fn mark_step_done(
     if !api_available().await {
         return;
     }
+    use base64::Engine;
     let run_id = world.run_id.clone().expect("no run_id set");
     let url = format!(
         "{}/runs/{}/steps/{}/done",
         world.base_url, run_id, step_name
     );
-    let body = format!(r#"{{"output":"{}"}}"#, output_b64);
+    // Decode base64 to bytes, then encode as JSON number array for Vec<u8> compat
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&output_b64)
+        .unwrap_or_else(|_| output_b64.as_bytes().to_vec());
+    let nums: Vec<u8> = bytes;
+    let arr = serde_json::to_string(&nums).unwrap();
+    let body = format!(r#"{{"output":{}}}"#, arr);
     let resp = reqwest::Client::new()
         .post(&url)
         .header("content-type", "application/json")
@@ -74,5 +84,6 @@ async fn mark_step_done(
         .send()
         .await
         .expect("failed to mark step as done");
-    assert_eq!(resp.status().as_u16(), 200);
+    let s = resp.status().as_u16();
+    assert!(s == 200 || s == 204, "Expected 200/204 from step done, got {}", s);
 }

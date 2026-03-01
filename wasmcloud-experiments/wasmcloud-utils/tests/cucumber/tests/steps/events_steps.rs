@@ -17,5 +17,5 @@ async fn subscribe_to_event(world: &mut WorkflowWorld, fn_name: String, event: S
         .await
         .expect("failed to subscribe to event");
     let status = resp.status().as_u16();
-    assert_eq!(status, 200, "Expected 200 from subscribe endpoint");
+    assert!(status == 200 || status == 204, "Expected 200/204 from subscribe endpoint, got {}", status);
 }

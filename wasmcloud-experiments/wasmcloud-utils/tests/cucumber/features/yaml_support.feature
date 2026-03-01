@@ -30,8 +30,7 @@ Feature: YAML Content-Type Support
       """
       fn_name: yaml-handler
       """
-    Then the response status is 200
-    And the response body contains "subscribed"
+    Then the response status is 204
 
   Scenario: Invalid YAML returns 400
     When I POST to "/workflows" with content-type "application/yaml" and body:

@@ -28,8 +28,7 @@ Feature: Workflow Execution Lifecycle
       """
       {}
       """
-    Then the response status is 200
-    And the response body contains "cancelled"
+    Then the response status is 204
 
   Scenario: Idempotency key prevents duplicate runs
     When I POST to "/runs" with body:
@@ -57,8 +56,7 @@ Feature: Workflow Execution Lifecycle
       """
       {"output":"c3VjY2Vzcw=="}
       """
-    Then the response status is 200
-    And the response body contains "succeeded"
+    Then the response status is 204
 
   Scenario: Mark a step as failed
     Given I have started a run of "exec-wf"
@@ -66,8 +64,7 @@ Feature: Workflow Execution Lifecycle
       """
       {"error":"something went wrong"}
       """
-    Then the response status is 200
-    And the response body contains "failed"
+    Then the response status is 204
 
   Scenario: Retry after failure resets attempt count
     Given I have started a run of "exec-wf"
@@ -76,17 +73,16 @@ Feature: Workflow Execution Lifecycle
       """
       {}
       """
-    Then the response status is 200
-    And the response body contains "pending"
+    Then the response status is 204
 
   Scenario: Get unknown run returns 404
     When I GET "/runs/nonexistent-run-id"
     Then the response status is 404
 
-  Scenario: Start run for unknown workflow returns 400
+  Scenario: Start run for unknown workflow returns 404
     When I POST to "/runs" with body:
       """
       {"wf_name":"workflow-that-does-not-exist"}
       """
-    Then the response status is 400
+    Then the response status is 404
     And the response body contains "not found"
