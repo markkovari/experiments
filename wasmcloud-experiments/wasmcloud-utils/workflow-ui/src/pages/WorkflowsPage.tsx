@@ -65,10 +65,10 @@ export function WorkflowsPage() {
         />
       )}
 
-      {isLoading && <p className="text-gray-500">Loading…</p>}
+      {isLoading && <p className="text-gray-500 dark:text-gray-400">Loading…</p>}
 
-      <table className="w-full text-sm border rounded overflow-hidden">
-        <thead className="bg-gray-50 text-left">
+      <table className="w-full text-sm border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
+        <thead className="bg-gray-50 dark:bg-gray-800 text-left">
           <tr>
             <th className="px-4 py-2 font-medium">Name</th>
             <th className="px-4 py-2 font-medium text-right">Actions</th>
@@ -76,12 +76,12 @@ export function WorkflowsPage() {
         </thead>
         <tbody>
           {(data?.items ?? []).map((name) => (
-            <tr key={name} className="border-t hover:bg-gray-50">
+            <tr key={name} className="border-t border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800">
               <td className="px-4 py-2 font-mono">{name}</td>
               <td className="px-4 py-2 flex justify-end gap-2">
                 <button
                   onClick={() => start.mutate(name)}
-                  className="px-3 py-1 bg-green-100 text-green-800 rounded text-xs hover:bg-green-200"
+                  className="px-3 py-1 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-300 rounded text-xs hover:bg-green-200 dark:hover:bg-green-800"
                 >
                   ▶ Start Run
                 </button>
@@ -89,7 +89,7 @@ export function WorkflowsPage() {
                   onClick={() => {
                     if (confirm(`Delete workflow "${name}"?`)) del.mutate(name)
                   }}
-                  className="px-3 py-1 bg-red-100 text-red-800 rounded text-xs hover:bg-red-200"
+                  className="px-3 py-1 bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-300 rounded text-xs hover:bg-red-200 dark:hover:bg-red-800"
                 >
                   Delete
                 </button>
@@ -98,7 +98,7 @@ export function WorkflowsPage() {
           ))}
           {!isLoading && data?.items.length === 0 && (
             <tr>
-              <td colSpan={2} className="px-4 py-6 text-center text-gray-400">
+              <td colSpan={2} className="px-4 py-6 text-center text-gray-400 dark:text-gray-500">
                 No workflows yet. Create one above.
               </td>
             </tr>

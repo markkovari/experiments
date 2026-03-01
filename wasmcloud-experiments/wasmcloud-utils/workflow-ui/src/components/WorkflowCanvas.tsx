@@ -1,5 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { YamlEditor } from './YamlEditor'
+import { useWitInference } from '../hooks/useWitInference'
+import type { ProviderSuggestion } from '../lib/providerCatalog'
 import {
   ReactFlow,
   addEdge,
@@ -27,6 +29,7 @@ interface StepNodeData extends Record<string, unknown> {
   max_attempts: number
   timeout_ms: number | null
   optional: boolean
+  suggestedProviders: ProviderSuggestion[]
 }
 
 // ── Stable callback context ───────────────────────────────────────────────────
@@ -42,10 +45,36 @@ const NodeCbsCtx = createContext<NodeCbs>({
 
 // ── StepNode card ─────────────────────────────────────────────────────────────
 
+const CHIP_COLORS: Record<string, string> = {
+  'keyvalue-nats': 'bg-violet-100 text-violet-700 border-violet-300',
+  'http-client': 'bg-sky-100 text-sky-700 border-sky-300',
+  'messaging-nats': 'bg-amber-100 text-amber-700 border-amber-300',
+  'secrets-component': 'bg-rose-100 text-rose-700 border-rose-300',
+}
+
 function StepNode({ id, data }: { id: string; data: StepNodeData }) {
   const { onDelete, onChange } = useContext(NodeCbsCtx)
+  const { suggestions, isLoading } = useWitInference(data.component)
+  const active = (data.suggestedProviders ?? []) as ProviderSuggestion[]
+
+  // When new suggestions arrive, merge without removing already-toggled ones
+  const prevSuggestionsRef = useRef<string[]>([])
+  useEffect(() => {
+    const ids = suggestions.map(s => s.id).sort().join(',')
+    if (ids !== prevSuggestionsRef.current.sort().join(',')) {
+      prevSuggestionsRef.current = suggestions.map(s => s.id)
+      // Keep previously active that are still suggested; add new suggestions as inactive
+      // (no auto-toggle — user must click)
+    }
+  }, [suggestions])
+
+  function toggleChip(s: ProviderSuggestion) {
+    const already = active.some(a => a.id === s.id)
+    onChange(id, 'suggestedProviders', already ? active.filter(a => a.id !== s.id) : [...active, s])
+  }
+
   return (
-    <div className="bg-white border border-gray-300 rounded shadow-md w-56 text-xs font-sans select-none">
+    <div className="bg-white border border-gray-300 rounded shadow-md w-64 text-xs font-sans select-none">
       <Handle type="target" position={Position.Left} className="!bg-blue-400 !w-3 !h-3" />
       <div className="flex items-center justify-between bg-gray-100 px-2 py-1 rounded-t border-b border-gray-200">
         <input
@@ -72,6 +101,31 @@ function StepNode({ id, data }: { id: string; data: StepNodeData }) {
             placeholder="ghcr.io/org/step:v1"
           />
         </div>
+        {isLoading && (
+          <div className="text-gray-400 text-[10px] flex items-center gap-1 pt-0.5">
+            <span className="inline-block w-2 h-2 border border-gray-400 border-t-transparent rounded-full animate-spin" />
+            Inferring WIT imports…
+          </div>
+        )}
+        {suggestions.length > 0 && (
+          <div className="flex flex-wrap gap-1 pt-0.5">
+            {suggestions.map(s => {
+              const isOn = active.some(a => a.id === s.id)
+              const color = CHIP_COLORS[s.id] ?? 'bg-gray-100 text-gray-700 border-gray-300'
+              return (
+                <button
+                  key={s.id}
+                  onMouseDown={e => e.stopPropagation()}
+                  onClick={() => toggleChip(s)}
+                  className={`border rounded px-1.5 py-0.5 text-[10px] font-medium transition-opacity ${color} ${isOn ? 'opacity-100 ring-1 ring-current' : 'opacity-60'}`}
+                  title={`Image: ${s.image}`}
+                >
+                  {isOn ? '✓ ' : '+ '}{s.label}
+                </button>
+              )
+            })}
+          </div>
+        )}
         <div className="flex gap-2 items-center pt-0.5">
           <label className="text-gray-400 flex items-center gap-1 cursor-pointer">
             <input
@@ -145,6 +199,7 @@ function fromDefToFlow(def: WorkflowDef) {
       max_attempts: s.max_attempts,
       timeout_ms: s.timeout_ms,
       optional: s.optional,
+      suggestedProviders: [],
     } satisfies StepNodeData,
   }))
   const edges: Edge[] = def.steps.flatMap(s =>
@@ -186,7 +241,20 @@ function toWorkflowDef(wfName: string, nodes: Node[], edges: Edge[]): WorkflowDe
 
 // ── WADM YAML generation ──────────────────────────────────────────────────────
 
-function toWadmYaml(def: WorkflowDef): string {
+function toWadmYaml(def: WorkflowDef, nodes: Node[] = []): string {
+  // Collect active provider suggestions across all nodes (deduplicated by id)
+  const providerMap = new Map<string, ProviderSuggestion>()
+  // Map stepName → active provider ids
+  const stepProviders: Record<string, ProviderSuggestion[]> = {}
+  for (const node of nodes) {
+    const d = node.data as StepNodeData
+    const active = (d.suggestedProviders ?? []) as ProviderSuggestion[]
+    if (active.length > 0) {
+      stepProviders[d.label || node.id] = active
+      for (const p of active) providerMap.set(p.id, p)
+    }
+  }
+
   const lines: string[] = [
     `apiVersion: core.oam.dev/v1beta1`,
     `kind: Application`,
@@ -221,6 +289,32 @@ function toWadmYaml(def: WorkflowDef): string {
         `              name: workflow-engine`,
       )
     }
+    // Provider link traits inferred from WIT imports
+    const activeProviders = stepProviders[step.name] ?? []
+    for (const p of activeProviders) {
+      lines.push(
+        `        - type: link`,
+        `          properties:`,
+        `            namespace: ${p.namespace}`,
+        `            package: ${p.pkg}`,
+        `            interfaces: [${p.interfaces.join(', ')}]`,
+        `            target:`,
+        `              name: ${p.id}`,
+      )
+    }
+  }
+  // Capability provider entries for all active providers
+  for (const p of providerMap.values()) {
+    lines.push(
+      `    - name: ${p.id}`,
+      `      type: capability`,
+      `      properties:`,
+      `        image: ${p.image}`,
+      `      traits:`,
+      `        - type: spreadscaler`,
+      `          properties:`,
+      `            replicas: 1`,
+    )
   }
   if (!def.steps.some(s => s.component)) {
     lines.push(`    # No OCI components set — add images to steps to generate component entries`)
@@ -321,7 +415,7 @@ export function WorkflowCanvas({ initialDef, onSave, onClose }: Props) {
     setNodes(ns)
     setEdges(es)
     setWfName(def.name)
-    setWadmYaml(toWadmYaml(def))
+    setWadmYaml(toWadmYaml(def, ns))
   }, [initialDef])
 
   // ── Canvas → YAML sync ─────────────────────────────────────────────────────
@@ -329,7 +423,7 @@ export function WorkflowCanvas({ initialDef, onSave, onClose }: Props) {
   useEffect(() => {
     if (suppressCanvasSync.current) return
     const def = toWorkflowDef(wfName, nodes, edges)
-    setWadmYaml(toWadmYaml(def))
+    setWadmYaml(toWadmYaml(def, nodes))
     setYamlError(null)
   }, [nodes, edges, wfName])
 
@@ -378,7 +472,7 @@ export function WorkflowCanvas({ initialDef, onSave, onClose }: Props) {
         id,
         type: 'stepNode',
         position: { x: ns.length * 280 + 40, y: 40 },
-        data: { label: id, component: '', max_attempts: 1, timeout_ms: null, optional: false } satisfies StepNodeData,
+        data: { label: id, component: '', max_attempts: 1, timeout_ms: null, optional: false, suggestedProviders: [] } satisfies StepNodeData,
       },
     ])
   }

@@ -22,10 +22,10 @@ function describeTrigger(t: TriggerDef): string {
 
 function TriggerKindBadge({ kind }: { kind: TriggerDef['kind'] }) {
   const colours: Record<TriggerDef['kind'], string> = {
-    event:  'bg-blue-100 text-blue-700',
-    cron:   'bg-purple-100 text-purple-700',
-    http:   'bg-green-100 text-green-700',
-    pubsub: 'bg-orange-100 text-orange-700',
+    event:  'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300',
+    cron:   'bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300',
+    http:   'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300',
+    pubsub: 'bg-orange-100 dark:bg-orange-900 text-orange-700 dark:text-orange-300',
   }
   return (
     <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${colours[kind]}`}>
@@ -71,20 +71,20 @@ function TriggersPanel() {
   })
 
   if (rows.length === 0) {
-    return <p className="text-gray-400 text-sm">No triggers defined across any workflow.</p>
+    return <p className="text-gray-400 dark:text-gray-500 text-sm">No triggers defined across any workflow.</p>
   }
 
   return (
-    <div className="border rounded overflow-hidden">
+    <div className="border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
       <table className="w-full text-sm">
-        <thead className="bg-gray-50 text-left">
+        <thead className="bg-gray-50 dark:bg-gray-800 text-left">
           <tr>
-            <th className="px-4 py-2 font-medium text-gray-600">Workflow</th>
-            <th className="px-4 py-2 font-medium text-gray-600">Trigger</th>
-            <th className="px-4 py-2 font-medium text-gray-600">Action</th>
+            <th className="px-4 py-2 font-medium text-gray-600 dark:text-gray-400">Workflow</th>
+            <th className="px-4 py-2 font-medium text-gray-600 dark:text-gray-400">Trigger</th>
+            <th className="px-4 py-2 font-medium text-gray-600 dark:text-gray-400">Action</th>
           </tr>
         </thead>
-        <tbody className="divide-y">
+        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
           {rows.map(({ wfName, triggerIndex, trigger }) => {
             const key = `${wfName}:${triggerIndex}`
             const runId = firedRuns[key]
@@ -92,11 +92,11 @@ function TriggersPanel() {
               fireMutation.variables?.wfName === wfName &&
               fireMutation.variables?.triggerIndex === triggerIndex
             return (
-              <tr key={key} className="hover:bg-gray-50">
+              <tr key={key} className="hover:bg-gray-50 dark:hover:bg-gray-800">
                 <td className="px-4 py-2 font-mono">{wfName}</td>
                 <td className="px-4 py-2 space-x-2">
                   <TriggerKindBadge kind={trigger.kind} />
-                  <span className="text-gray-700">{describeTrigger(trigger)}</span>
+                  <span className="text-gray-700 dark:text-gray-300">{describeTrigger(trigger)}</span>
                 </td>
                 <td className="px-4 py-2">
                   <div className="flex items-center gap-3">
@@ -108,7 +108,7 @@ function TriggersPanel() {
                       {isFiring ? 'Firing…' : 'Fire ▶'}
                     </button>
                     {runId && (
-                      <span className="text-xs text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded font-mono">
+                      <span className="text-xs text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-900/40 border border-green-200 dark:border-green-700 px-2 py-0.5 rounded font-mono">
                         {runId}
                       </span>
                     )}
@@ -143,15 +143,15 @@ export function EventsPage() {
     <div className="p-6 space-y-4">
       <h1 className="text-2xl font-bold">Events</h1>
 
-      <div className="flex gap-2 border-b pb-2">
+      <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700 pb-2">
         {(['events', 'triggers'] as ActiveTab[]).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
             className={`px-4 py-1.5 rounded-t text-sm font-medium capitalize ${
               activeTab === tab
-                ? 'bg-white border border-b-white -mb-px text-blue-700'
-                : 'text-gray-500 hover:text-gray-700'
+                ? 'bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 border-b-white dark:border-b-gray-900 -mb-px text-blue-700 dark:text-blue-400'
+                : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
             }`}
           >
             {tab}
@@ -161,30 +161,34 @@ export function EventsPage() {
 
       {activeTab === 'events' && (
         <>
-          {isLoading && <p className="text-gray-500">Loading…</p>}
+          {isLoading && <p className="text-gray-500 dark:text-gray-400">Loading…</p>}
           <div className="flex gap-6">
             <div className="w-64 space-y-1">
               {(events ?? []).map((name) => (
                 <button
                   key={name}
                   onClick={() => setSelected(name)}
-                  className={`w-full text-left px-3 py-2 rounded text-sm ${selected === name ? 'bg-blue-100 text-blue-800' : 'hover:bg-gray-50'}`}
+                  className={`w-full text-left px-3 py-2 rounded text-sm ${
+                    selected === name
+                      ? 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200'
+                      : 'hover:bg-gray-100 dark:hover:bg-gray-800'
+                  }`}
                 >
                   {name}
                 </button>
               ))}
               {!isLoading && !events?.length && (
-                <p className="text-gray-400 text-sm px-3">No events registered.</p>
+                <p className="text-gray-400 dark:text-gray-500 text-sm px-3">No events registered.</p>
               )}
             </div>
 
             {selected && (
-              <div className="flex-1 border rounded p-4 space-y-2">
+              <div className="flex-1 border border-gray-200 dark:border-gray-700 rounded p-4 space-y-2">
                 <h2 className="font-semibold">{selected} — Subscribers</h2>
                 {(subs ?? []).length === 0
-                  ? <p className="text-gray-400 text-sm">No subscribers.</p>
+                  ? <p className="text-gray-400 dark:text-gray-500 text-sm">No subscribers.</p>
                   : (subs ?? []).map((s) => (
-                    <div key={s} className="font-mono text-sm bg-gray-50 px-3 py-1 rounded">{s}</div>
+                    <div key={s} className="font-mono text-sm bg-gray-50 dark:bg-gray-800 px-3 py-1 rounded">{s}</div>
                   ))
                 }
               </div>
