@@ -1,9 +1,18 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useQuery, useQueries } from '@tanstack/react-query'
 import { listWorkflows, listRuns } from '../api'
 import type { RunRecord } from '../api'
 import { StateBadge } from '../components/StateBadge'
 import { RunDetail } from '../components/RunDetail'
+
+function useDebounce<T>(value: T, delay = 300): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delay)
+    return () => clearTimeout(id)
+  }, [value, delay])
+  return debounced
+}
 
 const STATES = ['', 'running', 'succeeded', 'failed', 'cancelled']
 
@@ -16,6 +25,7 @@ export function RunsPage() {
   const [selectedWf, setSelectedWf] = useState<string | null>(null)
   const [stateFilter, setStateFilter] = useState('')
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
 
   const { data: wfData } = useQuery({
     queryKey: ['workflows'],
@@ -43,11 +53,20 @@ export function RunsPage() {
 
   const isLoading = selectedWf !== null ? singleLoading : allRunsQueries.some(q => q.isLoading)
 
-  const runs: RunRecord[] = selectedWf !== null
+  const rawRuns: RunRecord[] = selectedWf !== null
     ? (singleData?.items ?? [])
     : allRunsQueries
         .flatMap(q => q.data?.items ?? [])
         .sort((a, b) => b.created_at_ms - a.created_at_ms)
+
+  const debouncedSearch = useDebounce(search)
+  const needle = debouncedSearch.trim().toLowerCase()
+  const runs = needle
+    ? rawRuns.filter(r =>
+        r.run_id.toLowerCase().includes(needle) ||
+        r.wf_name.toLowerCase().includes(needle)
+      )
+    : rawRuns
 
   return (
     <div className="p-6 space-y-4">
@@ -62,6 +81,14 @@ export function RunsPage() {
           <option value="">All workflows</option>
           {wfNames.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
+
+        <input
+          type="search"
+          placeholder="Search run ID or workflow…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="border rounded px-2 py-1 text-sm w-56"
+        />
 
         <div className="flex gap-1">
           {STATES.map((s) => (
