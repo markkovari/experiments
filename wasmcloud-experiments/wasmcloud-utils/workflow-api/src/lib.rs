@@ -18,6 +18,83 @@ wit_bindgen::generate!({
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
+// SSE ring buffer — stateless, single-threaded (WASM-compatible)
+// ---------------------------------------------------------------------------
+
+/// An event pushed to SSE clients.
+#[derive(Debug, Clone, Serialize)]
+pub struct SseEvent {
+    /// `"run.state"` or `"step.state"`
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wf_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
+    pub state: String,
+    pub ts_ms: u64,
+    /// Monotonically increasing sequence used for `Last-Event-ID` reconnect.
+    pub seq: u64,
+}
+
+/// Maximum number of events kept in the ring buffer.
+const SSE_RING_CAPACITY: usize = 200;
+
+use std::cell::RefCell;
+use std::collections::VecDeque;
+
+thread_local! {
+    static SSE_RING: RefCell<VecDeque<SseEvent>> = RefCell::new(VecDeque::new());
+    static SSE_SEQ: RefCell<u64> = const { RefCell::new(0) };
+}
+
+/// Push an event to the ring buffer (drops oldest when at capacity).
+pub fn sse_push(kind: &str, run_id: &str, wf_name: Option<&str>, step: Option<&str>, state: &str) {
+    SSE_SEQ.with(|seq| {
+        let mut s = seq.borrow_mut();
+        *s += 1;
+        let ev = SseEvent {
+            kind: kind.to_string(),
+            run_id: run_id.to_string(),
+            wf_name: wf_name.map(|s| s.to_string()),
+            step: step.map(|s| s.to_string()),
+            state: state.to_string(),
+            ts_ms: now_ms(),
+            seq: *s,
+        };
+        SSE_RING.with(|ring| {
+            let mut r = ring.borrow_mut();
+            if r.len() >= SSE_RING_CAPACITY {
+                r.pop_front();
+            }
+            r.push_back(ev);
+        });
+    });
+}
+
+/// Drain ring buffer events with seq > `since` into SSE text format.
+pub fn sse_drain_since(since: u64) -> String {
+    SSE_RING.with(|ring| {
+        let r = ring.borrow();
+        let mut out = String::new();
+        for ev in r.iter() {
+            if ev.seq > since {
+                if let Ok(json) = serde_json::to_string(ev) {
+                    out.push_str("id: ");
+                    out.push_str(&ev.seq.to_string());
+                    out.push('\n');
+                    out.push_str("data: ");
+                    out.push_str(&json);
+                    out.push_str("\n\n");
+                }
+            }
+        }
+        out
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Content-type negotiation: YAML → JSON value normalisation
 // ---------------------------------------------------------------------------
 
@@ -63,12 +140,16 @@ pub fn parse_body<T: for<'de> Deserialize<'de>>(
 
 /// Condition for if-else branching: step only runs when `on_step`'s output
 /// equals `equals` (parsed as JSON from the output bytes).
+#[cfg_attr(all(test, not(target_arch = "wasm32")), derive(ts_rs::TS))]
+#[cfg_attr(all(test, not(target_arch = "wasm32")), ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Condition {
     pub on_step: String,
     pub equals: serde_json::Value,
 }
 
+#[cfg_attr(all(test, not(target_arch = "wasm32")), derive(ts_rs::TS))]
+#[cfg_attr(all(test, not(target_arch = "wasm32")), ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StepDef {
     pub name: String,
@@ -76,9 +157,11 @@ pub struct StepDef {
     #[serde(default = "default_max_attempts")]
     pub max_attempts: u32,
     #[serde(default)]
+    #[cfg_attr(all(test, not(target_arch = "wasm32")), ts(type = "number"))]
     pub base_delay_ms: u64,
     /// Optional: per-step deadline in milliseconds.
     #[serde(default)]
+    #[cfg_attr(all(test, not(target_arch = "wasm32")), ts(type = "number | null"))]
     pub timeout_ms: Option<u64>,
     /// Optional: name of a child workflow to delegate to.
     #[serde(default)]
@@ -95,39 +178,51 @@ fn default_max_attempts() -> u32 {
     1
 }
 
+#[cfg_attr(all(test, not(target_arch = "wasm32")), derive(ts_rs::TS))]
+#[cfg_attr(all(test, not(target_arch = "wasm32")), ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TriggerDef {
     pub event: String,
 }
 
+#[cfg_attr(all(test, not(target_arch = "wasm32")), derive(ts_rs::TS))]
+#[cfg_attr(all(test, not(target_arch = "wasm32")), ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowDef {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
+    #[cfg_attr(all(test, not(target_arch = "wasm32")), ts(type = "number | null"))]
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub triggers: Vec<TriggerDef>,
     pub steps: Vec<StepDef>,
 }
 
+#[cfg_attr(all(test, not(target_arch = "wasm32")), derive(ts_rs::TS))]
+#[cfg_attr(all(test, not(target_arch = "wasm32")), ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunRecord {
     pub run_id: String,
     pub wf_name: String,
     pub state: String,
     pub idem_key: Option<String>,
+    #[cfg_attr(all(test, not(target_arch = "wasm32")), ts(type = "number"))]
     pub created_at_ms: u64,
 }
 
+#[cfg_attr(all(test, not(target_arch = "wasm32")), derive(ts_rs::TS))]
+#[cfg_attr(all(test, not(target_arch = "wasm32")), ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepRecord {
     pub state: String,
     pub attempt: u32,
+    #[cfg_attr(all(test, not(target_arch = "wasm32")), ts(type = "number"))]
     pub scheduled_at_ms: u64,
     /// When the step transitioned to "running" (set in handle_ready_steps).
     #[serde(default)]
+    #[cfg_attr(all(test, not(target_arch = "wasm32")), ts(type = "number | null"))]
     pub started_at_ms: Option<u64>,
     pub output: Option<Vec<u8>>,
     pub error: Option<String>,
@@ -485,6 +580,7 @@ pub fn handle_start_run(
         created_at_ms: ts,
     };
     let _ = store.put_run(&run_id, &serde_json::to_vec(&run).unwrap());
+    sse_push("run.state", &run_id, Some(wf_name), None, "running");
 
     for step in &def.steps {
         let sr = StepRecord {
@@ -518,6 +614,7 @@ pub fn handle_cancel_run(run_id: &str, store: &dyn StoreBackend) -> (u16, String
             };
             run.state = "cancelled".to_string();
             let _ = store.put_run(run_id, &serde_json::to_vec(&run).unwrap());
+            sse_push("run.state", run_id, None, None, "cancelled");
             (204, String::new())
         }
     }
@@ -802,6 +899,7 @@ pub fn handle_step_done(
         ..sr
     };
     let _ = store.put_step(run_id, step_name, &serde_json::to_vec(&updated).unwrap());
+    sse_push("step.state", run_id, None, Some(step_name), "succeeded");
 
     if let Some(run_bytes) = store.get_run(run_id) {
         if let Ok(run) = serde_json::from_slice::<RunRecord>(&run_bytes) {
@@ -883,6 +981,7 @@ pub fn handle_step_failed(
         }
     };
     let _ = store.put_step(run_id, step_name, &serde_json::to_vec(&updated).unwrap());
+    sse_push("step.state", run_id, None, Some(step_name), &updated.state);
     (204, String::new())
 }
 
@@ -932,6 +1031,7 @@ fn maybe_complete_run(run_id: &str, store: &dyn StoreBackend) {
     if all_terminal {
         run.state = "succeeded".to_string();
         let _ = store.put_run(run_id, &serde_json::to_vec(&run).unwrap());
+        sse_push("run.state", run_id, Some(&run.wf_name), None, "succeeded");
     }
 }
 
@@ -1265,6 +1365,7 @@ pub fn handle_step_retry(run_id: &str, step_name: &str, store: &dyn StoreBackend
             };
             sr.state = "pending".to_string();
             let _ = store.put_step(run_id, step_name, &serde_json::to_vec(&sr).unwrap());
+            sse_push("step.state", run_id, None, Some(step_name), "pending");
         }
     }
     (204, String::new())
@@ -1283,6 +1384,13 @@ pub fn handle_reset(store: &dyn StoreBackend) -> (u16, String) {
     // Note: runs/steps/sub-run-links cannot be enumerated without a full KV scan.
     // For the test reset endpoint, MemStore implements this directly.
     (204, String::new())
+}
+
+/// GET /sse?last_id=N — returns buffered SSE events since sequence N.
+/// The `Content-Type: text/event-stream` header is set by the WASM handler.
+pub fn handle_sse(since_seq: u64) -> (u16, String) {
+    let body = sse_drain_since(since_seq);
+    (200, body)
 }
 
 fn parse_query(full_path: &str) -> std::collections::HashMap<String, String> {
@@ -1311,6 +1419,10 @@ pub fn route(
     let path = path.split('?').next().unwrap_or(path);
 
     match (method, path) {
+        ("GET", "/sse") => {
+            let since: u64 = query.get("last_id").and_then(|v| v.parse().ok()).unwrap_or(0);
+            handle_sse(since)
+        }
         ("POST", "/workflows") => handle_register_workflow(body, content_type, store),
         ("GET", "/workflows") => handle_list_workflows(page, limit, store),
         ("GET", "/events") => handle_list_events(store),
@@ -1481,7 +1593,7 @@ impl StoreBackend for WasiStore {
     ) -> Vec<Vec<u8>> {
         wasmcloud::workflow_store::store::list_runs(
             wf_name,
-            state_filter.map(|s| s.to_string()),
+            state_filter,
             page,
             limit,
         )
@@ -1502,7 +1614,7 @@ impl StoreBackend for WasiStore {
     }
 
     fn put_event_subs(&self, event_name: &str, subs: Vec<String>) {
-        let _ = wasmcloud::workflow_store::store::put_event_subs(event_name, subs);
+        let _ = wasmcloud::workflow_store::store::put_event_subs(event_name, &subs);
     }
 
     fn get_event_subs(&self, event_name: &str) -> Vec<String> {
@@ -1577,13 +1689,20 @@ impl exports::wasi::http::incoming_handler::Guest for WorkflowApi {
             .unwrap_or_default();
 
         let store = WasiStore;
+        let is_sse = path.starts_with("/sse");
         let (status, resp_body) = route(&method, &path, &body, &content_type, &store);
 
         let headers = Headers::new();
-        let _ = headers.append(
-            &"content-type".to_string(),
-            &b"application/json".to_vec(),
-        );
+        let ct_value: &[u8] = if is_sse {
+            b"text/event-stream; charset=utf-8"
+        } else {
+            b"application/json"
+        };
+        let _ = headers.append(&"content-type".to_string(), &ct_value.to_vec());
+        let _ = headers.append(&"access-control-allow-origin".to_string(), &b"*".to_vec());
+        if is_sse {
+            let _ = headers.append(&"cache-control".to_string(), &b"no-cache".to_vec());
+        }
         let resp = OutgoingResponse::new(headers);
         resp.set_status_code(status).ok();
 
@@ -2601,5 +2720,33 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["total"].as_u64().unwrap(), 2);
         assert_eq!(v["items"].as_array().unwrap().len(), 2);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TypeScript type export (ts-rs) — native only, never compiled to wasm32
+// Run: cargo test export_bindings -p workflow-api
+// Output: workflow-ui/src/generated/*.ts
+// ---------------------------------------------------------------------------
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod ts_export {
+    use super::*;
+    use ts_rs::TS;
+
+    #[test]
+    fn export_bindings() {
+        // TS_RS_EXPORT_DIR is relative to the crate root (workflow-api/).
+        // Override to place files in the sibling workflow-ui project.
+        std::env::set_var(
+            "TS_RS_EXPORT_DIR",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../workflow-ui/src/generated"),
+        );
+        Condition::export_all().unwrap();
+        StepDef::export_all().unwrap();
+        TriggerDef::export_all().unwrap();
+        WorkflowDef::export_all().unwrap();
+        RunRecord::export_all().unwrap();
+        StepRecord::export_all().unwrap();
     }
 }

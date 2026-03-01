@@ -3,7 +3,7 @@ kind: Application
 metadata:
   name: workflow-api
   annotations:
-    version: v0.8.0
+    version: v0.9.0
     description: "HTTP REST API for workflow definition and execution management"
 spec:
   components:
@@ -27,6 +27,9 @@ spec:
       properties:
         image: file://../target/wasm32-wasip2/release/workflow_store_kv.wasm
       traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1
         - type: link
           properties:
             target: nats-kv
