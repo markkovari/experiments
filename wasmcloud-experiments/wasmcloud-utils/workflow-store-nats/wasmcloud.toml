@@ -1,0 +1,15 @@
+name = "workflow-store-nats"
+language = "rust"
+type = "component"
+version = "0.1.0"
+
+[component]
+wit_world = "workflow-store-nats-component"
+
+[[component.link]]
+target.name = "nats-kv"
+target.image = "ghcr.io/wasmcloud/keyvalue-nats:0.3.1"
+namespace = "wasi"
+package = "keyvalue"
+interfaces = ["store"]
+target_config = [{ name = "bucket", properties = { bucket = "workflow" } }]
