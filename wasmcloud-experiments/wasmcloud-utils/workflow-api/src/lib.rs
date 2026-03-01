@@ -6,7 +6,7 @@
 // Imports:  wasmcloud:workflow-store/store
 //
 // All persistence is delegated to the workflow-store component linked at
-// deploy time (default: workflow-store-nats, backed by NATS KV).
+// deploy time (default: workflow-store-kv, works with any wasi:keyvalue provider).
 
 #[cfg(target_arch = "wasm32")]
 wit_bindgen::generate!({

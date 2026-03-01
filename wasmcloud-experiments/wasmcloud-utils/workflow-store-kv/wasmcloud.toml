@@ -1,10 +1,10 @@
-name = "workflow-store-nats"
+name = "workflow-store-kv"
 language = "rust"
 type = "component"
 version = "0.1.0"
 
 [component]
-wit_world = "workflow-store-nats-component"
+wit_world = "workflow-store-kv-component"
 
 [[component.link]]
 target.name = "nats-kv"

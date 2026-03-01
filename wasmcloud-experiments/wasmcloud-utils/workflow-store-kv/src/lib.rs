@@ -1,4 +1,5 @@
-// workflow-store-nats: NATS KV adapter for wasmcloud:workflow-store/store.
+// workflow-store-kv: wasi:keyvalue adapter for wasmcloud:workflow-store/store.
+// Works with any wasi:keyvalue provider: NATS KV, Redis, Vault, etc.
 //
 // Exports:  wasmcloud:workflow-store/store
 // Imports:  wasi:keyvalue/store
@@ -11,7 +12,7 @@
 //   sub-run.<parent-id>.<step>→ child run-id bytes
 
 wit_bindgen::generate!({
-    world: "workflow-store-nats-component",
+    world: "workflow-store-kv-component",
     path: "wit",
     generate_all,
 });

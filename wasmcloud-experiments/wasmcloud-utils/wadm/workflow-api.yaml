@@ -17,15 +17,15 @@ spec:
             replicas: 1
         - type: link
           properties:
-            target: workflow-store-nats
+            target: workflow-store-kv
             namespace: wasmcloud
             package: workflow-store
             interfaces: [store]
 
-    - name: workflow-store-nats
+    - name: workflow-store-kv
       type: component
       properties:
-        image: file://../target/wasm32-wasip2/release/workflow_store_nats.wasm
+        image: file://../target/wasm32-wasip2/release/workflow_store_kv.wasm
       traits:
         - type: link
           properties:

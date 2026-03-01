@@ -15,7 +15,7 @@ interfaces = ["incoming-handler"]
 source_config = [{ name = "default-http", properties = { address = "0.0.0.0:8080" } }]
 
 [[component.link]]
-target.name = "workflow-store-nats"
+target.name = "workflow-store-kv"
 namespace = "wasmcloud"
 package = "workflow-store"
 interfaces = ["store"]
