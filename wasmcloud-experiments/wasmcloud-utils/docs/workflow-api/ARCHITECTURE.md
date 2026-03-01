@@ -3,29 +3,36 @@
 ## Component Diagram
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    wasmCloud Host                   │
-│                                                     │
-│  ┌──────────────────────────────────────────────┐  │
-│  │          workflow-api (WASM Component)        │  │
-│  │                                              │  │
-│  │  exports: wasi:http/incoming-handler         │  │
-│  │  imports: wasi:keyvalue/store                │  │
-│  │                                              │  │
-│  │  ┌──────────┐    ┌──────────────────────┐   │  │
-│  │  │  Router  │───▶│  Business Logic      │   │  │
-│  │  │ (HTTP)   │    │  (pure Rust fns)     │   │  │
-│  │  └──────────┘    └────────┬─────────────┘   │  │
-│  └───────────────────────────│─────────────────┘  │
-│                              │ wasi:keyvalue        │
-│  ┌───────────────────────────▼─────────────────┐  │
-│  │           NATS JetStream KV                 │  │
-│  │           bucket: "workflow"                │  │
-│  └─────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                        wasmCloud Host                        │
+│                                                              │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │           workflow-api (WASM Component)               │  │
+│  │                                                       │  │
+│  │  exports: wasi:http/incoming-handler                  │  │
+│  │  imports: wasmcloud:workflow-store/store              │  │
+│  │                                                       │  │
+│  │  ┌──────────┐    ┌──────────────────────┐            │  │
+│  │  │  Router  │───▶│  Business Logic      │            │  │
+│  │  │ (HTTP)   │    │  (pure Rust fns)     │            │  │
+│  │  └──────────┘    └────────┬─────────────┘            │  │
+│  └───────────────────────────│──────────────────────────┘  │
+│                              │ wasmcloud:workflow-store      │
+│  ┌───────────────────────────▼──────────────────────────┐  │
+│  │         workflow-store-kv (WASM Component)         │  │
+│  │                                                       │  │
+│  │  exports: wasmcloud:workflow-store/store              │  │
+│  │  imports: wasi:keyvalue/store                        │  │
+│  └───────────────────────────│──────────────────────────┘  │
+│                              │ wasi:keyvalue                 │
+│  ┌───────────────────────────▼──────────────────────────┐  │
+│  │              NATS JetStream KV                        │  │
+│  │              bucket: "workflow"                       │  │
+│  └───────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-HTTP requests arrive via the wasmCloud HTTP provider, are dispatched to the component's `wasi:http/incoming-handler` export, routed by path/method, and handled by pure Rust business-logic functions that use the `wasi:keyvalue/store` import to persist state in NATS KV.
+HTTP requests arrive via the wasmCloud HTTP provider, are dispatched to the component's `wasi:http/incoming-handler` export, routed by path/method, and handled by pure Rust business-logic functions.  Persistence is delegated to a linked **store component** through the typed `wasmcloud:workflow-store/store` WIT interface.  The default store component (`workflow-store-kv`) translates those domain calls into flat `wasi:keyvalue/store` operations against NATS KV.  Any other store component that exports the same interface can be substituted in the WADM manifest — see [PLUGGABLE_STORAGE.md](./PLUGGABLE_STORAGE.md).
 
 ---
 
@@ -134,14 +141,22 @@ The `attempt` field in `StepRecord` is incremented by the retry endpoint before 
 
 ---
 
-## KV Key Layout
+## Storage Layer
+
+The engine uses the `wasmcloud:workflow-store/store` WIT interface for all
+persistence.  The default implementation (`workflow-store-kv`) maps domain
+operations onto a NATS JetStream KV bucket with the following key schema:
 
 ```
-workflow/
-  wf-def:{name}               WorkflowDef JSON
-  wf-run:{run_id}             RunRecord JSON
-  step:{run_id}:{step_name}   StepRecord JSON
-  evt:{event_name}            JSON array of subscriber fn-names
+workflow/  (bucket name)
+  wf-def.<name>               WorkflowDef JSON
+  wf-run.<run_id>             RunRecord JSON
+  step.<run_id>.<step_name>   StepRecord JSON
+  evt.<event_name>            JSON array of subscriber fn-names
+  sub-run.<run_id>.<step>     child run-id (raw bytes)
 ```
 
-All keys are under a single `workflow` bucket in NATS JetStream KV. The component uses the `wasi:keyvalue/store` capability, fulfilled by the wasmCloud NATS KV provider.
+Alternative backends (PostgreSQL, Redis, …) can be substituted by deploying a
+different store component and updating the WADM link target — no changes to the
+engine are required.  See [PLUGGABLE_STORAGE.md](./PLUGGABLE_STORAGE.md) for a
+step-by-step guide.

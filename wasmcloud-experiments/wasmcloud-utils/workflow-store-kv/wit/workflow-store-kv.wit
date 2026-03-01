@@ -1,6 +1,6 @@
-package wasmcloud:workflow-store-nats@0.1.0;
+package wasmcloud:workflow-store-kv@0.1.0;
 
-world workflow-store-nats-component {
+world workflow-store-kv-component {
     export wasmcloud:workflow-store/store@0.1.0;
     import wasi:keyvalue/store@0.2.0-draft;
 }
