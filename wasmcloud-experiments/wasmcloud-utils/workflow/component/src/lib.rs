@@ -153,6 +153,21 @@ impl exports::wasmcloud::workflow::workflow_api::Guest for WorkflowComponent {
     fn cancel_run(run_id: String) -> Result<(), wasmcloud::workflow::types::WorkflowError> {
         core_cancel_run(&run_id).map_err(core_error)
     }
+
+    fn get_secret(name: String) -> Result<Vec<u8>, String> {
+        use wasmcloud::secrets::secret_store::{get, SecretError};
+        get(&name)
+            .map(|v| v.data)
+            .map_err(|e| match e {
+                SecretError::NotFound => format!("secret not found: {name}"),
+                SecretError::NotInitialized => "secret store not initialized".to_string(),
+                SecretError::EncryptionError => "decryption failed".to_string(),
+                SecretError::StorageError => "storage error".to_string(),
+                SecretError::PermissionDenied => "permission denied".to_string(),
+                SecretError::InvalidConfig => "invalid config".to_string(),
+                SecretError::AlreadyExists => "already exists".to_string(),
+            })
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

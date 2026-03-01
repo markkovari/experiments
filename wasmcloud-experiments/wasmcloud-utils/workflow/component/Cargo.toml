@@ -15,3 +15,6 @@ package = "wasmcloud:workflow"
 
 [package.metadata.component.target]
 path = "../../wit/wasmcloud-workflow"
+
+[package.metadata.component.target.dependencies]
+"wasmcloud:secrets" = { path = "../../wit/wasmcloud-secrets" }
