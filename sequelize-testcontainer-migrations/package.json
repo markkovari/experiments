@@ -39,7 +39,7 @@
 		"mysql2": "^3.14.0",
 		"pg": "^8.14.1",
 		"pg-hstore": "^2.3.4",
-		"sequelize": "^6.37.6",
+		"sequelize": "^6.37.8",
 		"testcontainers": "^11.11.0",
 		"ts-jest": "^29.2.6",
 		"zod": "^3.24.2"
