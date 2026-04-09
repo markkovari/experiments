@@ -13,7 +13,7 @@
 	"dependencies": {
 		"@types/node": "^22.15.21",
 		"express": "^5.1.0",
-		"nodemailer": "^8.0.4"
+		"nodemailer": "^8.0.5"
 	},
 	"devDependencies": {
 		"@types/express": "^5.0.2",
