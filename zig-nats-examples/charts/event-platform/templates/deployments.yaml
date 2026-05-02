@@ -1,0 +1,82 @@
+{{- range $service := .Values.services }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $service.name }}
+spec:
+  replicas: {{ $service.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app: {{ $service.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $service.name }}
+    spec:
+      containers:
+      - name: {{ $service.name }}
+        image: "{{ $service.image.repository }}:{{ $service.image.tag }}"
+        ports:
+        - containerPort: {{ $service.port }}
+        env:
+        - name: APP_SERVER__PORT
+          value: "{{ $service.port }}"
+        - name: APP_NATS__URL
+          value: "nats://nats:4222"
+        - name: APP_MONGODB__URL
+          value: "mongodb://mongodb:27017"
+        - name: APP_MONGODB__DB_NAME
+          value: "{{ $service.dbName }}"
+        - name: APP_AUTH__JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: auth-secrets
+              key: jwt-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $service.name }}
+spec:
+  selector:
+    app: {{ $service.name }}
+  ports:
+  - protocol: TCP
+    port: {{ $service.port }}
+    targetPort: {{ $service.port }}
+---
+{{- end }}
+
+# Frontend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+spec:
+  selector:
+    app: frontend
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+  type: LoadBalancer
