@@ -64,6 +64,21 @@ func (h *NATSHandler) SubscribeWithThrottling(subject, queue, durableName string
 	}, nats.Durable(durableName), nats.MaxAckPending(maxPending), nats.ManualAck())
 }
 
+func (h *NATSHandler) MoveToDLQ(ctx context.Context, subject string, msg *nats.Msg, err error) {
+	dlqSubject := fmt.Sprintf("dlq.%s", subject)
+	
+	// Create an error wrapper
+	errorData := map[string]interface{}{
+		"original_subject": subject,
+		"error":           err.Error(),
+		"payload":         string(msg.Data),
+	}
+	
+	data, _ := json.Marshal(errorData)
+	h.PublishWithContext(ctx, dlqSubject, data)
+	msg.Term() // Tell NATS to not redeliver this message anymore
+}
+
 func (h *NATSHandler) Close() {
 	h.nc.Close()
 }
