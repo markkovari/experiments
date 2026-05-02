@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/markkovari/events-events-events/internal/config"
 	"github.com/markkovari/events-events-events/internal/events"
 	"github.com/nats-io/nats.go"
 	"go.opentelemetry.io/otel"
@@ -24,53 +25,38 @@ type OrderCreated struct {
 }
 
 func main() {
+	cfg := config.Load()
+
+	// 1. Init Observability
 	cleanup, err := events.InitOTel("analytics-service")
 	if err != nil {
 		log.Printf("Failed to init OTel: %v", err)
-	} else {
-		defer cleanup()
 	}
 
-	natsURL := "nats://localhost:4222"
-	if url := os.Getenv("NATS_URL"); url != "" {
-		natsURL = url
-	}
-
-	handler, err := events.NewNATSHandler(natsURL)
+	// 2. Connect to NATS
+	handler, err := events.NewNATSHandler(cfg.NATSURL)
 	if err != nil {
 		log.Fatalf("Error connecting to NATS: %v", err)
 	}
-	defer handler.Close()
 
-	// Setup Meter and Counter
 	meter := otel.Meter("analytics-service")
-	counter, _ := meter.Int64Counter("analytics_processed_total",
-		metric.WithDescription("Total number of analytics events processed"),
-	)
-
+	counter, _ := meter.Int64Counter("analytics_processed_total")
 	tracer := otel.Tracer("analytics-service")
 
-	// Throttling at the NATS layer:
-	// MaxAckPending: 1 means NATS will not send message #2 until message #1 is Acknowledged.
-	// This creates "Natural Backpressure".
-	_, err = handler.SubscribeWithThrottling("orders.created", "analytics-service", "analytics-backpressure", 1, func(ctx context.Context, msg *nats.Msg) {
+	// 3. Subscribe with backpressure
+	sub, err := handler.SubscribeWithThrottling("orders.created", "analytics-service", "analytics-backpressure", 1, func(ctx context.Context, msg *nats.Msg) {
 		ctx, span := tracer.Start(ctx, "ProcessAnalytics")
 		defer span.End()
 
 		var event OrderCreated
 		if err := json.Unmarshal(msg.Data, &event); err != nil {
-			log.Printf("Error unmarshaling event: %v", err)
 			return
 		}
 
-		// Simulate "Work" that takes time. 
-		// Because MaxAckPending is 1, NATS will wait for this handler to finish and Ack 
-		// before sending the next message.
-		log.Printf("Analytics processing (Heavy Work) for order: %s", event.ID)
-		time.Sleep(200 * time.Millisecond) // This results in ~5 msgs per second
+		log.Printf("Processing: %s", event.ID)
+		time.Sleep(cfg.ProcessDelay)
 
 		counter.Add(ctx, 1, metric.WithAttributes(attribute.String("status", "success")))
-		
 		msg.Ack()
 	})
 
@@ -78,9 +64,27 @@ func main() {
 		log.Fatalf("Error subscribing: %v", err)
 	}
 
-	log.Println("Analytics Service started. Throttling via NATS MaxAckPending...")
+	log.Println("Analytics Service running. Press Ctrl+C to stop gracefully.")
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
+	// 4. GRACEFUL SHUTDOWN LOGIC
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+
+	<-stop // Wait for signal
+
+	log.Println("Shutting down gracefully...")
+
+	// Stop receiving new messages
+	sub.Unsubscribe()
+
+	// Give NATS time to process remaining acks and OTel to flush
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	handler.Close()
+	if cleanup != nil {
+		cleanup()
+	}
+
+	log.Println("Service stopped.")
 }

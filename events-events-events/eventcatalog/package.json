@@ -5,7 +5,8 @@
     "dev": "eventcatalog dev",
     "build": "eventcatalog build",
     "generate": "eventcatalog generate",
-    "lint": "spectral lint ../api/*.yaml"
+    "lint": "spectral lint ../api/*.yaml",
+    "generate:go": "echo 'Running asyncapi-codegen...' && # asyncapi-codegen -g gopassthrough -i ../api/order-service.yaml -o ../internal/events/generated.go"
   },
   "dependencies": {
     "@eventcatalog/core": "latest",
