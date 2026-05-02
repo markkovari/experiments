@@ -1,0 +1,35 @@
+services:
+  - name: auth
+    port: 3000
+    dbName: auth_db
+    image:
+      repository: my-repo/auth
+      tag: latest
+  - name: org
+    port: 3001
+    dbName: org_db
+    image:
+      repository: my-repo/org
+      tag: latest
+  - name: scheduler
+    port: 3002
+    dbName: scheduler_db
+    image:
+      repository: my-repo/scheduler
+      tag: latest
+  - name: mock-executor
+    port: 3003
+    dbName: none
+    image:
+      repository: my-repo/mock-executor
+      tag: latest
+
+frontend:
+  image:
+    repository: my-repo/frontend
+    tag: latest
+
+nats:
+  enabled: true
+mongodb:
+  enabled: true

@@ -1,0 +1,32 @@
+# Multi-stage Dockerfile for Rust Microservices
+FROM rust:1.80-slim as builder
+
+WORKDIR /usr/src/app
+
+# Pre-requisites for compilation
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+
+# Copy the entire workspace to handle local package dependencies
+COPY . .
+
+# Build the specific service passed as an argument
+ARG SERVICE_NAME
+RUN cargo build --release --bin ${SERVICE_NAME}
+
+# Final stage: minimal runtime image
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y libssl3 ca-certificates && rm -rf /var/lib/apt/lists/*
+
+ARG SERVICE_NAME
+WORKDIR /usr/local/bin
+
+# Copy the binary from the builder stage
+COPY --from=builder /usr/src/app/target/release/${SERVICE_NAME} .
+
+# Copy the config directory for the specific service
+COPY --from=builder /usr/src/app/services/${SERVICE_NAME}/config ./config
+
+# Set the binary as the entrypoint
+ENV BINARY=${SERVICE_NAME}
+CMD ./${BINARY}
