@@ -15,7 +15,7 @@ export function Auth({ onLogin }: { onLogin: (token: string) => void }) {
   const handleAuth = async (type: 'login' | 'register') => {
     setLoading(true)
     try {
-      const response = await fetch(`http://localhost:3000/${type}`, {
+      const response = await fetch(`http://localhost:8080/api/auth/${type}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),

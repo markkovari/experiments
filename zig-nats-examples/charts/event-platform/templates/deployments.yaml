@@ -44,8 +44,24 @@ spec:
   - protocol: TCP
     port: {{ $service.port }}
     targetPort: {{ $service.port }}
+  type: ClusterIP
 ---
 {{- end }}
+
+# API Gateway Service (External)
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-external
+spec:
+  selector:
+    app: gateway
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
+  type: LoadBalancer
+---
 
 # Frontend Deployment
 apiVersion: apps/v1

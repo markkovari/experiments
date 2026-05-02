@@ -20,7 +20,7 @@ export function Organizations({ token, onSelectOrg, selectedOrg }: OrgsProps) {
 
   const fetchOrgs = async () => {
     try {
-      const response = await fetch('http://localhost:3001/orgs', {
+      const response = await fetch('http://localhost:8080/api/orgs', {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       if (response.ok) {
@@ -42,7 +42,7 @@ export function Organizations({ token, onSelectOrg, selectedOrg }: OrgsProps) {
   const createOrg = async () => {
     if (!newOrgName) return
     try {
-      const response = await fetch('http://localhost:3001/orgs', {
+      const response = await fetch('http://localhost:8080/api/orgs', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',

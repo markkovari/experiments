@@ -1,0 +1,13 @@
+[server]
+port = 8080
+host = "0.0.0.0"
+
+[nats]
+url = "nats://localhost:4222"
+
+[mongodb]
+url = "mongodb://admin:password@localhost:27017"
+db_name = "gateway_db"
+
+[auth]
+jwt_secret = "super_secret_key_change_me_in_production"
