@@ -1,0 +1,34 @@
+# EDA Task Runner
+
+# Start all services and infrastructure
+up:
+    cd infra && docker-compose up -d --build
+
+# Stop all services
+down:
+    cd infra && docker-compose down
+
+# Run the 10-minute fluctuating stress test
+stress:
+    ./stress_test.sh
+
+# Start the EventCatalog documentation portal
+catalog:
+    cd eventcatalog && PROJECT_DIR=.. npm run dev
+
+# Lint all AsyncAPI specifications
+lint:
+    cd eventcatalog && npm run lint
+
+# Generate Go and TS code from Proto definitions
+proto:
+    buf generate --path proto
+    buf generate --template buf.gen.go.yaml --path proto
+
+# Clean up Go modules
+tidy:
+    go mod tidy
+
+# Follow logs for all backend services
+logs:
+    cd infra && docker-compose logs -f
