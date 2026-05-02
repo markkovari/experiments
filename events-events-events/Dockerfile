@@ -24,6 +24,9 @@ RUN go build -o /bin/rpc-server cmd/rpc-server/main.go
 # Build Analytics Service
 RUN go build -o /bin/analytics-service cmd/analytics-service/main.go
 
+# Build Notification Service
+RUN go build -o /bin/notification-service cmd/notification-service/main.go
+
 # Final stage: Order Service
 FROM alpine:latest AS order-service
 COPY --from=builder /bin/order-service /app/order-service
@@ -49,3 +52,8 @@ CMD ["/app/rpc-server"]
 FROM alpine:latest AS analytics-service
 COPY --from=builder /bin/analytics-service /app/analytics-service
 CMD ["/app/analytics-service"]
+
+# Final stage: Notification Service
+FROM alpine:latest AS notification-service
+COPY --from=builder /bin/notification-service /app/notification-service
+CMD ["/app/notification-service"]
