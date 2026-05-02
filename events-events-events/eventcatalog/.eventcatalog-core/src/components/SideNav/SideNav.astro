@@ -1,0 +1,12 @@
+---
+import type { HTMLAttributes } from 'astro/types';
+
+interface Props extends Omit<HTMLAttributes<'div'>, 'children'> {}
+import NestedSideBar from './NestedSideBar';
+import { ClientRouter } from 'astro:transitions';
+---
+
+<div {...Astro.props}>
+  <ClientRouter />
+  <NestedSideBar client:only="react" />
+</div>

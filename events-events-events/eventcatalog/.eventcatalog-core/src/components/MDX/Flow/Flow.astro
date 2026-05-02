@@ -1,0 +1,78 @@
+---
+import { getFlows } from '@utils/collections/flows';
+import { getNodesAndEdges } from '@utils/node-graphs/flows-node-graph';
+import Admonition from '@components/MDX/Admonition';
+import AstroNodeGraph from '../NodeGraph/AstroNodeGraph';
+import { getVersionFromCollection } from '@utils/collections/versions';
+import { isVisualiserEnabled, isEventCatalogChatEnabled, isDevMode } from '@utils/feature';
+import { loadSavedLayout, applyLayoutToNodes, buildResourceKey } from '@utils/node-graphs/layout-persistence';
+
+const isChatEnabled = isEventCatalogChatEnabled();
+
+const { id, version = 'latest', maxHeight, includeKey = true, mode = 'simple', walkthrough = true, search = true } = Astro.props;
+
+// Find the flow for the given id and version
+const flows = await getFlows();
+const flowCollection = getVersionFromCollection(flows, id, version) || [];
+const flow = flowCollection[0];
+
+// const flow = flows.find((flow) => flow.data.id === id && flow.data.version === version);
+
+const { nodes, edges } = await getNodesAndEdges({
+  id: id,
+  version: flow.data.version,
+  mode: mode,
+});
+
+// Load and apply saved layout if it exists
+const resourceKey = buildResourceKey('flows', id, flow.data.version);
+const savedLayout = await loadSavedLayout(resourceKey);
+const nodesWithLayout = applyLayoutToNodes(nodes, savedLayout);
+---
+
+{
+  !flow && (
+    <Admonition type="warning">
+      <div>
+        <span class="block font-bold">{`<Flow/>`} failed to load</span>
+        <span class="block">
+          Tried to load flow id: {id} with version {version}. Make sure you have this flow defined in your project.
+        </span>
+      </div>
+    </Admonition>
+  )
+}
+
+<div
+  class="h-[30em] my-6 mb-12 w-full relative border border-[rgb(var(--ec-page-border))] rounded-md"
+  id={`${id}-portal`}
+  style={{
+    maxHeight: maxHeight ? `${maxHeight}em` : `30em`,
+  }}
+>
+</div>
+
+<div>
+  <AstroNodeGraph
+    id={id}
+    nodes={nodesWithLayout}
+    edges={edges}
+    hrefLabel={'View in visualizer'}
+    href={isVisualiserEnabled() ? `/visualiser/flows/${id}/${version}` : undefined}
+    linkTo={'visualiser'}
+    includeKey={includeKey}
+    footerLabel=`Flow diagram - ${flow.data.name} - v(${flow.data.version})`
+    client:only="react"
+    showFlowWalkthrough={walkthrough}
+    showSearch={search}
+    isChatEnabled={isChatEnabled}
+    isDevMode={isDevMode()}
+    resourceKey={resourceKey}
+  />
+</div>
+
+<style is:global>
+  .react-flow__attribution {
+    display: none;
+  }
+</style>

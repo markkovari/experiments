@@ -1,0 +1,70 @@
+---
+import type { ComponentType } from 'react';
+import * as Icons from '@heroicons/react/24/solid';
+import { buildUrl } from '@utils/url-builder';
+
+interface Props {
+  href: string;
+  icon: keyof typeof Icons;
+  iconColor?: string;
+  title: string;
+  openWindow?: boolean;
+  description: string;
+}
+
+const { href, icon, title, description, openWindow, iconColor = 'text-primary' } = Astro.props;
+
+const IconComponent: ComponentType<{ className?: string }> | undefined = Icons[icon];
+
+function startsWithProtocol(str: string) {
+  // Regular expression to match common protocols (http, https, ftp, ws, etc.)
+  const regex = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//;
+  return regex.test(str);
+}
+---
+
+<div class="group">
+  <!-- Card with just the icon -->
+  <a
+    href={startsWithProtocol(href) ? href : buildUrl(href)}
+    target={openWindow ? '_blank' : '_self'}
+    class="tile-card block relative bg-[rgb(var(--ec-card-bg,var(--ec-page-bg)))] border border-[rgb(var(--ec-page-border))] rounded-xl p-8 h-48 transition-all duration-300 ease-out hover:border-[rgb(var(--ec-accent)/0.5)] focus:outline-hidden focus:ring-2 focus:ring-[rgb(var(--ec-accent))] focus:ring-offset-2 overflow-hidden"
+  >
+    <!-- Icon centered in card with grid background -->
+    <div class="relative h-full flex items-center justify-center">
+      <!-- Squared paper grid behind icon -->
+      <div class="tile-grid absolute inset-0 opacity-15"></div>
+
+      {IconComponent && <IconComponent className="tile-icon relative w-16 h-16 stroke-1" />}
+    </div>
+  </a>
+
+  <!-- Title and description outside card -->
+  <div class="mt-4 space-y-0">
+    <h2 class="text-[rgb(var(--ec-page-text))] text-lg font-semibold">
+      {title}
+    </h2>
+    <p class="text-[rgb(var(--ec-page-text-muted))] text-sm leading-relaxed">
+      {description}
+    </p>
+  </div>
+</div>
+
+<style>
+  .tile-card:hover {
+    box-shadow:
+      0 10px 15px -3px rgb(var(--ec-accent) / 0.1),
+      0 4px 6px -4px rgb(var(--ec-accent) / 0.1);
+  }
+
+  .tile-grid {
+    background-image:
+      linear-gradient(rgb(var(--ec-accent) / 0.2) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(var(--ec-accent) / 0.2) 1px, transparent 1px);
+    background-size: 16px 16px;
+  }
+
+  .tile-icon {
+    color: rgb(var(--ec-accent));
+  }
+</style>

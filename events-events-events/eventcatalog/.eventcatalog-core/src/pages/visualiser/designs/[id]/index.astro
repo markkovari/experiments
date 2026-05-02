@@ -1,0 +1,39 @@
+---
+import AstroNodeGraph from '@components/MDX/NodeGraph/AstroNodeGraph';
+import { ClientRouter } from 'astro:transitions';
+import VerticalSideBarLayout from '@layouts/VerticalSideBarLayout.astro';
+import { isEventCatalogChatEnabled } from '@utils/feature';
+
+import { Page } from './_index.data';
+
+const isChatEnabled = isEventCatalogChatEnabled();
+
+export const prerender = Page.prerender;
+export const getStaticPaths = Page.getStaticPaths;
+
+const props = Astro.props;
+
+const { data } = props;
+---
+
+<VerticalSideBarLayout title={`Visualiser | Bounded context map`}>
+  <div class="m-4">
+    <div
+      class="h-[calc(100vh-130px)] w-full relative border border-[rgb(var(--ec-page-border))] rounded-md"
+      id={`${data.id}-portal`}
+      transition:animate="fade"
+    >
+    </div>
+    <AstroNodeGraph
+      id={data.id}
+      nodes={data.nodes}
+      edges={data.edges}
+      title={data.name}
+      client:only="react"
+      mode="full"
+      linkTo="visualiser"
+      isChatEnabled={isChatEnabled}
+    />
+  </div>
+  <ClientRouter />
+</VerticalSideBarLayout>

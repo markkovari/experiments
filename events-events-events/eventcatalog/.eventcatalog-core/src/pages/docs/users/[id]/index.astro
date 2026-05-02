@@ -1,0 +1,213 @@
+---
+import components from '@components/MDX/components';
+
+// SideBars
+import { render } from 'astro:content';
+import type { CollectionEntry } from 'astro:content';
+import OwnersList from '@components/Lists/OwnersList';
+import PillListFlat from '@components/Lists/PillListFlat';
+import EnvelopeIcon from '@heroicons/react/16/solid/EnvelopeIcon';
+import { buildUrl } from '@utils/url-builder';
+import VerticalSideBarLayout from '@layouts/VerticalSideBarLayout.astro';
+import { Page } from './_index.data';
+
+export const prerender = Page.prerender;
+export const getStaticPaths = Page.getStaticPaths;
+
+// Get data
+const props = await Page.getData(Astro);
+
+const { Content } = await render(props);
+
+const domains = props.data.ownedDomains as CollectionEntry<'domains'>[];
+const services = props.data.ownedServices as CollectionEntry<'services'>[];
+const events = props.data.ownedEvents as CollectionEntry<'events'>[];
+const commands = props.data.ownedCommands as CollectionEntry<'commands'>[];
+const queries = props.data.ownedQueries as CollectionEntry<'queries'>[];
+const teams = props.data.associatedTeams as CollectionEntry<'teams'>[];
+
+const ownedDomainsList = domains.map((p) => ({
+  label: `${p.data.name}`,
+  href: buildUrl(`/docs/${p.collection}/${p.data.id}/${p.data.version}`),
+  collection: p.collection,
+  tag: `v${p.data.version}`,
+}));
+
+const ownedServicesList = services.map((p) => ({
+  label: `${p.data.name}`,
+  href: buildUrl(`/docs/${p.collection}/${p.data.id}/${p.data.version}`),
+  collection: p.collection,
+  tag: `v${p.data.version}`,
+}));
+
+const ownedMessageList = [...events, ...commands, ...queries].map((p) => ({
+  label: `${p.data.name}`,
+  badge: p.collection,
+  color: p.collection === 'events' ? 'orange' : 'blue',
+  collection: p.collection,
+  tag: `v${p.data.version}`,
+  href: buildUrl(`/docs/${p.collection}/${p.data.id}/${p.data.version}`),
+}));
+
+const associatedTeams = teams.map((o) => ({
+  label: o.data.name,
+  type: o.collection,
+  badge: 'Team',
+  href: buildUrl(`/docs/${o.collection}/${o.data.id}`),
+}));
+
+const pageTitle = `User | ${props.data.name}`;
+---
+
+<VerticalSideBarLayout title={pageTitle}>
+  <main
+    class="flex docs-layout min-h-full bg-[rgb(var(--ec-page-bg))]"
+    data-pagefind-body
+    data-pagefind-meta={`title:${pageTitle}`}
+  >
+    <div class="flex docs-layout w-full">
+      <div class="w-full lg:mr-2 pr-24 py-8 bg-[rgb(var(--ec-page-bg))]">
+        <div class="border-b border-[rgb(var(--ec-page-border))] pb-6">
+          <div class="flex justify-start gap-6">
+            {
+              props.data.avatarUrl && (
+                <img
+                  src={props.data.avatarUrl}
+                  alt={`${props.data.name}'s profile picture`}
+                  class="w-20 h-20 rounded-full object-cover border-2 border-[rgb(var(--ec-page-border))]"
+                />
+              )
+            }
+            <div class="flex flex-col justify-center space-y-2">
+              <div>
+                <h2 class="text-3xl font-bold text-[rgb(var(--ec-page-text))]">{props.data.name}</h2>
+                {
+                  props.data.role && (
+                    <span class="text-base font-medium text-[rgb(var(--ec-page-text-muted))]">{props.data.role}</span>
+                  )
+                }
+              </div>
+              <div class="flex flex-wrap gap-3">
+                {
+                  props.data.email && (
+                    <a
+                      href={`mailto:${props.data.email}`}
+                      class="inline-flex items-center gap-1.5 text-sm text-[rgb(var(--ec-page-text-muted))] hover:text-[rgb(var(--ec-page-text))] transition-colors"
+                    >
+                      <EnvelopeIcon className="w-4 h-4 text-[rgb(var(--ec-icon-color))]" />
+                      <span>Email</span>
+                    </a>
+                  )
+                }
+                {
+                  props.data.slackDirectMessageUrl && (
+                    <a
+                      href={props.data.slackDirectMessageUrl}
+                      class="inline-flex items-center gap-1.5 text-sm text-[rgb(var(--ec-page-text-muted))] hover:text-[rgb(var(--ec-page-text))] transition-colors"
+                    >
+                      <img src={buildUrl('/slack-icon.svg', true)} class="w-4 h-4" alt="Slack" />
+                      <span>Slack</span>
+                    </a>
+                  )
+                }
+                {
+                  props.data.msTeamsDirectMessageUrl && (
+                    <a
+                      href={props.data.msTeamsDirectMessageUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="inline-flex items-center gap-1.5 text-sm text-[rgb(var(--ec-page-text-muted))] hover:text-[rgb(var(--ec-page-text))] transition-colors"
+                    >
+                      <img src={buildUrl('/icons/ms-teams.svg', true)} class="w-4 h-4" alt="Teams" />
+                      <span>Teams</span>
+                    </a>
+                  )
+                }
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="border-b border-[rgb(var(--ec-page-border))] py-4" data-pagefind-ignore>
+          <dl class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div class="flex flex-col p-4 bg-[rgb(var(--ec-content-hover))] rounded-lg">
+              <dt class="text-xs font-medium text-[rgb(var(--ec-page-text-muted))]">Domains</dt>
+              <dd class="text-2xl font-semibold text-[rgb(var(--ec-page-text))] mt-1">{ownedDomainsList.length}</dd>
+            </div>
+            <div class="flex flex-col p-4 bg-[rgb(var(--ec-content-hover))] rounded-lg">
+              <dt class="text-xs font-medium text-[rgb(var(--ec-page-text-muted))]">Services</dt>
+              <dd class="text-2xl font-semibold text-[rgb(var(--ec-page-text))] mt-1">{ownedServicesList.length}</dd>
+            </div>
+            <div class="flex flex-col p-4 bg-[rgb(var(--ec-content-hover))] rounded-lg">
+              <dt class="text-xs font-medium text-[rgb(var(--ec-page-text-muted))]">Messages</dt>
+              <dd class="text-2xl font-semibold text-[rgb(var(--ec-page-text))] mt-1">{ownedMessageList.length}</dd>
+            </div>
+            <div class="flex flex-col p-4 bg-[rgb(var(--ec-content-hover))] rounded-lg">
+              <dt class="text-xs font-medium text-[rgb(var(--ec-page-text-muted))]">Teams</dt>
+              <dd class="text-2xl font-semibold text-[rgb(var(--ec-page-text))] mt-1">{associatedTeams.length}</dd>
+            </div>
+          </dl>
+        </div>
+        <div class="prose prose-md py-4 w-full">
+          <Content components={components(props)} />
+        </div>
+      </div>
+      <aside
+        class="hidden xl:block sticky top-[5.5rem] self-start w-[280px] max-h-[calc(100vh-5.5rem)] overflow-y-auto py-2 flex-shrink-0 pr-10 bg-[rgb(var(--ec-page-bg))]"
+        data-pagefind-ignore
+      >
+        <div class="py-2">
+          {
+            ownedDomainsList.length > 0 && (
+              <PillListFlat
+                color="pink"
+                title={`Owned domains (${ownedDomainsList.length})`}
+                pills={ownedDomainsList}
+                emptyMessage={`${props.data.name} does not own any domains.`}
+                client:load
+              />
+            )
+          }
+          {
+            ownedServicesList.length > 0 && (
+              <PillListFlat
+                color="pink"
+                title={`Owned services (${ownedServicesList.length})`}
+                pills={ownedServicesList}
+                emptyMessage={`${props.data.name} does not own any services.`}
+                client:load
+              />
+            )
+          }
+          {
+            ownedMessageList.length > 0 && (
+              <PillListFlat
+                color="orange"
+                title={`Owned messages (${ownedMessageList.length})`}
+                pills={ownedMessageList}
+                emptyMessage={`${props.data.name} does not own any messages.`}
+                client:load
+              />
+            )
+          }
+          {
+            associatedTeams.length > 0 && (
+              <OwnersList
+                title={`Member of team (${associatedTeams.length})`}
+                owners={associatedTeams}
+                emptyMessage={`${props.data.name} is not part of any documented team.`}
+                client:load
+              />
+            )
+          }
+        </div>
+      </aside>
+    </div>
+  </main>
+</VerticalSideBarLayout>
+
+<style>
+  .docs-layout .prose {
+    max-width: none;
+    overflow: auto;
+  }
+</style>

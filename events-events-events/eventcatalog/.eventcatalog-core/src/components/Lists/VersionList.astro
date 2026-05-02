@@ -1,0 +1,60 @@
+---
+import type { CollectionTypes } from '@types';
+import { buildUrl } from '@utils/url-builder';
+import type { CollectionEntry } from 'astro:content';
+import { HistoryIcon } from 'lucide-react';
+
+interface Props {
+  title?: string;
+  versions: string[];
+  collectionItem: CollectionEntry<CollectionTypes>;
+}
+
+const { versions, collectionItem, title } = Astro.props;
+const currentPath = Astro.url.pathname;
+---
+
+<div class="space-y-2 pb-4">
+  <span
+    class="text-xs text-[rgb(var(--ec-page-text))] font-semibold group-data-[hover]:text-[rgb(var(--ec-page-text))]/80 capitalize"
+  >
+    {title || `Versions (${collectionItem.data.versions?.length})`}
+  </span>
+  <ul role="list" class="space-y-2">
+    {
+      versions.map((version) => {
+        const isCurrent = currentPath.includes(version);
+        return (
+          <li class="version-item rounded-md px-1 group w-full hover:text-white hover:font-normal">
+            <a
+              class={`flex items-center space-x-2 cursor-pointer`}
+              href={buildUrl(`/docs/${collectionItem.collection}/${collectionItem.data.id}/${version}`)}
+            >
+              {/* {Icon && <Icon class={`h-4 w-4`} />} */}
+              <HistoryIcon className="h-4 w-4 text-[rgb(var(--ec-page-text-muted))] group-hover:text-white" strokeWidth={1} />
+              <span
+                class={`font-light text-xs text-[rgb(var(--ec-page-text))] group-hover:text-white ${isCurrent ? 'underline ' : ''}`}
+              >
+                {version === collectionItem.data.latestVersion ? `v${version} (latest)` : `v${version}`}
+              </span>
+            </a>
+          </li>
+        );
+      })
+    }
+  </ul>
+  <div class="border-b border-[rgb(var(--ec-page-border))] pt-2"></div>
+</div>
+
+<style>
+  .version-item:hover {
+    background: linear-gradient(to left, rgb(var(--ec-accent-gradient-from)), rgb(var(--ec-accent-gradient-to)));
+  }
+</style>
+
+<script>
+  document.getElementById('version')?.addEventListener('change', (e: any) => {
+    if (!e.target) return;
+    window.location.href = e.target.value;
+  });
+</script>

@@ -1,0 +1,22 @@
+---
+
+---
+
+<div
+  class="accordion-group border border-[rgb(var(--ec-page-border))] rounded-lg overflow-hidden bg-[rgb(var(--ec-card-bg,var(--ec-page-bg)))] my-3"
+>
+  <slot />
+</div>
+
+<style is:global>
+  .accordion-group .accordion {
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    margin: 0;
+    background: transparent;
+  }
+  .accordion-group .accordion + .accordion {
+    border-top: 1px solid rgb(var(--ec-page-border));
+  }
+</style>

@@ -1,0 +1,39 @@
+asyncapi: '3.0.0'
+info:
+  title: Order Service
+  version: '1.0.0'
+  description: Service for managing orders and publishing order events.
+
+channels:
+  orders.created:
+    address: orders.created
+    messages:
+      orderCreated:
+        $ref: '#/components/messages/OrderCreated'
+
+operations:
+  publishOrderCreated:
+    action: send
+    channel:
+      $ref: '#/channels/orders.created'
+
+components:
+  messages:
+    OrderCreated:
+      name: OrderCreated
+      title: Order Created Event
+      summary: Informative event when a new order is created.
+      contentType: application/json
+      payload:
+        type: object
+        properties:
+          id:
+            type: string
+            format: uuid
+          customer_id:
+            type: string
+          amount:
+            type: number
+          created_at:
+            type: string
+            format: date-time

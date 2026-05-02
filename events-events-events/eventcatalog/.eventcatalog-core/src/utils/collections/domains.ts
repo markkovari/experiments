@@ -1,0 +1,389 @@
+import { getCollection } from 'astro:content';
+import type { CollectionEntry } from 'astro:content';
+import path from 'path';
+import type { CollectionMessageTypes } from '@types';
+import type { Service } from './types';
+import { createVersionedMap, findInMap, processSpecifications } from '@utils/collections/util';
+
+const CACHE_ENABLED = process.env.DISABLE_EVENTCATALOG_CACHE !== 'true';
+
+export type Domain = CollectionEntry<'domains'>;
+export type UbiquitousLanguage = CollectionEntry<'ubiquitousLanguages'>;
+
+interface Props {
+  getAllVersions?: boolean;
+  includeServicesInSubdomains?: boolean;
+  enrichServices?: boolean;
+}
+
+// Simple in-memory cache variable
+let memoryCache: Record<string, Domain[]> = {};
+
+// Helper to hydrate services
+const hydrateServices = (
+  servicesList: any[],
+  serviceMap: Map<string, any[]>,
+  messageMap: Map<string, any[]>,
+  containerMap: Map<string, any[]>
+) => {
+  return servicesList
+    .map((service: { id: string; version: string | undefined }) => findInMap(serviceMap, service.id, service.version))
+    .filter((s) => !!s)
+    .map((service) => {
+      // Hydrate service messages and containers
+      const sends = (service.data.sends || [])
+        .map((msg: any) => findInMap(messageMap, msg.id, msg.version))
+        .filter((m: any) => !!m);
+
+      const receives = (service.data.receives || [])
+        .map((msg: any) => findInMap(messageMap, msg.id, msg.version))
+        .filter((m: any) => !!m);
+
+      const readsFrom = (service.data.readsFrom || [])
+        .map((c: any) => findInMap(containerMap, c.id, c.version))
+        .filter((c: any) => !!c);
+
+      const writesTo = (service.data.writesTo || [])
+        .map((c: any) => findInMap(containerMap, c.id, c.version))
+        .filter((c: any) => !!c);
+
+      return {
+        ...service,
+        data: {
+          ...service.data,
+          sends: sends as any,
+          receives: receives as any,
+          readsFrom: readsFrom as any,
+          writesTo: writesTo as any,
+        },
+      };
+    });
+};
+
+// --- MAIN FUNCTION ---
+
+export const getDomains = async ({
+  getAllVersions = true,
+  includeServicesInSubdomains = true,
+  enrichServices = false,
+}: Props = {}): Promise<Domain[]> => {
+  // console.time('✅ New getDomains');
+
+  const cacheKey = `${getAllVersions ? 'allVersions' : 'currentVersions'}-${includeServicesInSubdomains ? 'true' : 'false'}-${enrichServices ? 'enriched' : 'simple'}`;
+
+  // Check cache
+  if (memoryCache[cacheKey] && memoryCache[cacheKey].length > 0 && CACHE_ENABLED) {
+    // console.timeEnd('✅ New getDomains');
+    return memoryCache[cacheKey];
+  }
+
+  // 1. Fetch collections (always fetch messages to hydrate domain-level sends/receives)
+  const [allDomains, allServices, allEntities, allFlows, allEvents, allCommands, allQueries, allContainers, allDataProducts] =
+    await Promise.all([
+      getCollection('domains'),
+      getCollection('services'),
+      getCollection('entities'),
+      getCollection('flows'),
+      getCollection('events'),
+      getCollection('commands'),
+      getCollection('queries'),
+      getCollection('containers'),
+      getCollection('data-products'),
+    ]);
+
+  const allMessages = [...allEvents, ...allCommands, ...allQueries];
+  const messageMap = createVersionedMap(allMessages);
+  const containerMap = createVersionedMap(allContainers);
+
+  // 2. Build optimized maps
+  const domainMap = createVersionedMap(allDomains);
+  const serviceMap = createVersionedMap(allServices);
+  const entityMap = createVersionedMap(allEntities);
+  const flowMap = createVersionedMap(allFlows);
+  const dataProductMap = createVersionedMap(allDataProducts);
+
+  // 3. Filter the domains we actually want to process/return
+  const targetDomains = allDomains.filter((domain: Domain) => {
+    // Filter out hidden
+    if (domain.data.hidden === true) return false;
+    // Handle version filtering
+    if (!getAllVersions && domain.filePath?.includes('versioned')) return false;
+    return true;
+  });
+
+  // 4. Process domains using Map lookups (O(1))
+  const processedDomains = await Promise.all(
+    targetDomains.map(async (domain: Domain) => {
+      // Get version info from the map
+      const domainVersions = domainMap.get(domain.data.id) || [];
+      const latestVersion = domainVersions[0]?.data.version || domain.data.version;
+      const versions = domainVersions.map((d) => d.data.version);
+
+      // Resolve Subdomains
+      const subDomainsInDomain = domain.data.domains || [];
+      const subDomains = subDomainsInDomain
+        .map((sd: { id: string; version: string | undefined }) => findInMap(domainMap, sd.id, sd.version))
+        .filter((sd): sd is Domain => !!sd && sd.data.id !== domain.data.id) // Filter nulls and self-refs
+        .map((subDomain: any) => {
+          // Hydrate services for the subdomain
+          let hydratedServices = subDomain.data.services || [];
+          if (enrichServices) {
+            hydratedServices = hydrateServices(subDomain.data.services || [], serviceMap, messageMap, containerMap);
+          } else {
+            // Just resolve the service objects without enrichment
+            hydratedServices = (subDomain.data.services || [])
+              .map((service: { id: string; version: string | undefined }) => findInMap(serviceMap, service.id, service.version))
+              .filter((s: any) => !!s);
+          }
+
+          // Hydrate data products for the subdomain
+          const subdomainDataProducts = (subDomain.data['data-products'] || [])
+            .map((dp: { id: string; version: string | undefined }) => findInMap(dataProductMap, dp.id, dp.version))
+            .filter((dp: any) => !!dp);
+
+          return {
+            ...subDomain,
+            data: {
+              ...subDomain.data,
+              services: hydratedServices as any,
+              'data-products': subdomainDataProducts as any,
+            },
+          };
+        });
+
+      // Resolve Entities
+      const entitiesInDomain = domain.data.entities || [];
+      const entities = entitiesInDomain
+        .map((entity: { id: string; version: string | undefined }) => findInMap(entityMap, entity.id, entity.version))
+        .filter((e): e is CollectionEntry<'entities'> => !!e);
+
+      // Resolve Flows
+      const flowsInDomain = domain.data.flows || [];
+      const flows = flowsInDomain
+        .map((flow: { id: string; version: string | undefined }) => findInMap(flowMap, flow.id, flow.version))
+        .filter((f): f is CollectionEntry<'flows'> => !!f);
+
+      // Resolve Data Products
+      const dataProductsInDomain = domain.data['data-products'] || [];
+      const dataProducts = dataProductsInDomain
+        .map((dataProduct: { id: string; version: string | undefined }) =>
+          findInMap(dataProductMap, dataProduct.id, dataProduct.version)
+        )
+        .filter((dp): dp is CollectionEntry<'data-products'> => !!dp);
+
+      // Resolve Services for Main Domain
+      const servicesInDomain = domain.data.services || [];
+
+      // Hydrate main domain services
+      let hydratedMainServices = [];
+      if (enrichServices) {
+        hydratedMainServices = hydrateServices(servicesInDomain, serviceMap, messageMap, containerMap);
+      } else {
+        hydratedMainServices = servicesInDomain
+          .map((service: { id: string; version: string | undefined }) => findInMap(serviceMap, service.id, service.version))
+          .filter((s) => !!s);
+      }
+
+      // Get already-hydrated subdomain services
+      const hydratedSubdomainServices = subDomains.flatMap((subDomain: any) => subDomain.data.services || []);
+
+      const services = includeServicesInSubdomains
+        ? [...(hydratedMainServices as any), ...(hydratedSubdomainServices as any)]
+        : (hydratedMainServices as any);
+
+      // Hydrate domain-level sends and receives
+      const domainSends = (domain.data.sends || [])
+        .map((m: { id: string; version: string | undefined }) => findInMap(messageMap, m.id, m.version))
+        .filter((e): e is CollectionEntry<CollectionMessageTypes> => !!e);
+
+      const domainReceives = (domain.data.receives || [])
+        .map((m: { id: string; version: string | undefined }) => findInMap(messageMap, m.id, m.version))
+        .filter((e): e is CollectionEntry<CollectionMessageTypes> => !!e);
+
+      return {
+        ...domain,
+        data: {
+          ...domain.data,
+          services: services as any, // Cast to avoid deep type issues with enriched data
+          domains: subDomains as any,
+          entities: entities as any,
+          flows: flows as any,
+          'data-products': dataProducts as any,
+          sends: domainSends as any,
+          receives: domainReceives as any,
+          latestVersion,
+          versions,
+        },
+      };
+    })
+  );
+
+  // Sort by name
+  processedDomains.sort((a, b) => {
+    return (a.data.name || a.data.id).localeCompare(b.data.name || b.data.id);
+  });
+
+  // Cache result
+  memoryCache[cacheKey] = processedDomains;
+
+  // console.timeEnd('✅ New getDomains');
+
+  return processedDomains;
+};
+
+export const getMessagesForDomain = async (
+  domain: Domain
+): Promise<{ sends: CollectionEntry<CollectionMessageTypes>[]; receives: CollectionEntry<CollectionMessageTypes>[] }> => {
+  // We already have the services from the domain
+  const services = domain.data.services as unknown as CollectionEntry<'services'>[];
+
+  const [events, commands, queries] = await Promise.all([
+    getCollection('events'),
+    getCollection('commands'),
+    getCollection('queries'),
+  ]);
+
+  const allMessages = [...events, ...commands, ...queries];
+  const messageMap = createVersionedMap(allMessages);
+
+  // Get service-level sends/receives
+  const serviceSends = services.flatMap((service) => service.data.sends || []);
+  const serviceReceives = services.flatMap((service) => service.data.receives || []);
+
+  // Get domain-level sends/receives (already hydrated if domain came from getDomains)
+  const domainSends = domain.data.sends || [];
+  const domainReceives = domain.data.receives || [];
+
+  // Combine and deduplicate - domain-level messages take priority
+  const allSends = [...domainSends, ...serviceSends];
+  const allReceives = [...domainReceives, ...serviceReceives];
+
+  const sendsMessages = allSends
+    .map((send: any) => {
+      // If already hydrated (has data property), return as-is
+      if (send.data) return send;
+      // Otherwise, resolve from map
+      return findInMap(messageMap, send.id, send.version);
+    })
+    .filter((msg): msg is CollectionEntry<CollectionMessageTypes> => !!msg);
+
+  const receivesMessages = allReceives
+    .map((receive: any) => {
+      // If already hydrated (has data property), return as-is
+      if (receive.data) return receive;
+      // Otherwise, resolve from map
+      return findInMap(messageMap, receive.id, receive.version);
+    })
+    .filter((msg): msg is CollectionEntry<CollectionMessageTypes> => !!msg);
+
+  // Deduplicate by id and version
+  const uniqueSends = Array.from(new Map(sendsMessages.map((msg) => [`${msg.data.id}-${msg.data.version}`, msg])).values());
+  const uniqueReceives = Array.from(new Map(receivesMessages.map((msg) => [`${msg.data.id}-${msg.data.version}`, msg])).values());
+
+  return {
+    sends: uniqueSends,
+    receives: uniqueReceives,
+  };
+};
+
+export const getUbiquitousLanguage = async (domain: Domain): Promise<UbiquitousLanguage[]> => {
+  const ubiquitousLanguages = await getCollection('ubiquitousLanguages', (ubiquitousLanguage: UbiquitousLanguage) => {
+    const domainFolder = path.dirname(domain.filePath || '');
+    const ubiquitousLanguageFolder = path.dirname(ubiquitousLanguage.filePath || '');
+    return domainFolder === ubiquitousLanguageFolder;
+  });
+
+  return ubiquitousLanguages;
+};
+
+export const getUbiquitousLanguageWithSubdomains = async (
+  domain: Domain
+): Promise<{
+  domain: UbiquitousLanguage | null;
+  subdomains: Array<{ subdomain: Domain; ubiquitousLanguage: UbiquitousLanguage | null }>;
+  duplicateTerms: Set<string>;
+}> => {
+  // Get domain's own ubiquitous language
+  const domainUbiquitousLanguage = await getUbiquitousLanguage(domain);
+  const domainUL = domainUbiquitousLanguage[0] || null;
+
+  // Get all subdomains
+  const subdomains = (domain.data.domains as unknown as Domain[]) || [];
+
+  // Get ubiquitous language for each subdomain
+  const subdomainULs = await Promise.all(
+    subdomains.map(async (subdomain) => {
+      const subdomainUL = await getUbiquitousLanguage(subdomain);
+      return {
+        subdomain,
+        ubiquitousLanguage: subdomainUL[0] || null,
+      };
+    })
+  );
+
+  // Find duplicate terms across domain and subdomains
+  const duplicateTerms = new Set<string>();
+  const termCounts = new Map<string, number>();
+
+  // Count terms from domain
+  if (domainUL?.data?.dictionary) {
+    domainUL.data.dictionary.forEach((term) => {
+      const termName = term.name.toLowerCase();
+      termCounts.set(termName, (termCounts.get(termName) || 0) + 1);
+    });
+  }
+
+  // Count terms from subdomains
+  subdomainULs.forEach(({ ubiquitousLanguage }) => {
+    if (ubiquitousLanguage?.data?.dictionary) {
+      ubiquitousLanguage.data.dictionary.forEach((term) => {
+        const termName = term.name.toLowerCase();
+        termCounts.set(termName, (termCounts.get(termName) || 0) + 1);
+      });
+    }
+  });
+
+  // Identify duplicates
+  termCounts.forEach((count, termName) => {
+    if (count > 1) {
+      duplicateTerms.add(termName);
+    }
+  });
+
+  return {
+    domain: domainUL,
+    subdomains: subdomainULs,
+    duplicateTerms,
+  };
+};
+
+export const getParentDomains = async (domain: Domain): Promise<Domain[]> => {
+  const domains = await getDomains({ getAllVersions: false });
+  return domains.filter((d) => {
+    const subDomains = (d.data.domains as unknown as Domain[]) || [];
+    return subDomains.some((d) => d.data.id === domain.data.id);
+  });
+};
+
+// Only return domains that are not found any any subdomain configuration
+export const getRootDomains = async (): Promise<Domain[]> => {
+  const domains = await getDomains({ getAllVersions: false });
+  const allSubDomains = domains.flatMap((d) => d.data.domains as unknown as Domain[]);
+  return domains.filter((d) => !allSubDomains.some((sd) => sd.data.id === d.data.id));
+};
+
+export const getDomainsForService = async (service: Service): Promise<Domain[]> => {
+  const domains = await getDomains({ getAllVersions: false });
+  return domains.filter((d) => {
+    const services = d.data.services as unknown as Service[];
+    return services.some((s) => s.data.id === service.data.id);
+  });
+};
+
+export const domainHasEntities = (domain: Domain): boolean => {
+  return (domain.data.entities && domain.data.entities.length > 0) || false;
+};
+
+export const getSpecificationsForDomain = (domain: Domain) => {
+  return processSpecifications(domain.data.specifications as any);
+};

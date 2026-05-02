@@ -1,0 +1,71 @@
+import { getCollection } from 'astro:content';
+import type { CollectionEntry } from 'astro:content';
+import { createVersionedMap, satisfies } from './util';
+
+export type DataProduct = CollectionEntry<'data-products'>;
+
+interface Props {
+  getAllVersions?: boolean;
+}
+
+const CACHE_ENABLED = process.env.DISABLE_EVENTCATALOG_CACHE !== 'true';
+
+// cache for build time
+let memoryCache: Record<string, DataProduct[]> = {};
+
+export const getDataProducts = async ({ getAllVersions = true }: Props = {}): Promise<DataProduct[]> => {
+  // console.time('✅ New getEntities');
+  const cacheKey = getAllVersions ? 'allVersions' : 'currentVersions';
+
+  if (CACHE_ENABLED && memoryCache[cacheKey] && memoryCache[cacheKey].length > 0) {
+    // console.timeEnd('✅ New getEntities');
+    return memoryCache[cacheKey];
+  }
+
+  // 1. Fetch collections in parallel
+  const [allDataProducts, allDomains] = await Promise.all([getCollection('data-products'), getCollection('domains')]);
+
+  // 2. Build optimized maps
+  const dataProductMap = createVersionedMap(allDataProducts);
+
+  // 3. Enrich data products
+  const processedDataProducts = await Promise.all(
+    allDataProducts.map(async (dataProduct) => {
+      // Version info
+      const dataProductVersions = dataProductMap.get(dataProduct.data.id) || [];
+      const latestVersion = dataProductVersions[0]?.data.version || dataProduct.data.version;
+      const versions = dataProductVersions.map((e) => e.data.version);
+
+      // Find Domains that reference this data product
+      const domainsThatReferenceDataProduct = allDomains.filter((domain) =>
+        domain.data['data-products']?.some((item) => {
+          if (item.id !== dataProduct.data.id) return false;
+          if (item.version === 'latest' || item.version === undefined) return dataProduct.data.version === latestVersion;
+          return satisfies(dataProduct.data.version, item.version);
+        })
+      );
+
+      return {
+        ...dataProduct,
+        data: {
+          ...dataProduct.data,
+          versions,
+          latestVersion,
+          domains: domainsThatReferenceDataProduct,
+        },
+      };
+    })
+  );
+
+  // order them by the name of the data product
+  processedDataProducts.sort((a, b) => {
+    return (a.data.name || a.data.id).localeCompare(b.data.name || b.data.id);
+  });
+
+  if (CACHE_ENABLED) {
+    memoryCache[cacheKey] = processedDataProducts;
+  }
+  // console.timeEnd('✅ New getDataProducts');
+
+  return processedDataProducts as DataProduct[];
+};

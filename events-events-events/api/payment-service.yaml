@@ -1,0 +1,38 @@
+asyncapi: '3.0.0'
+info:
+  title: Payment Service
+  version: '1.0.0'
+  description: Handles payment processing for orders.
+
+channels:
+  orders.created:
+    address: orders.created
+    messages:
+      orderCreated:
+        $ref: 'order-service.yaml#/components/messages/OrderCreated'
+  payments.processed:
+    address: payments.processed
+    messages:
+      paymentProcessed:
+        $ref: '#/components/messages/PaymentProcessed'
+
+operations:
+  subscribeOrderCreated:
+    action: receive
+    channel:
+      $ref: '#/channels/orders.created'
+  publishPaymentProcessed:
+    action: send
+    channel:
+      $ref: '#/channels/payments.processed'
+
+components:
+  messages:
+    PaymentProcessed:
+      name: PaymentProcessed
+      payload:
+        type: object
+        properties:
+          order_id: { type: string }
+          transaction_id: { type: string }
+          status: { type: string, enum: [success, failed] }

@@ -1,0 +1,250 @@
+{
+    "_json": {
+        "type": "object",
+        "properties": {
+            "order_id": {
+                "type": "string",
+                "x-parser-schema-id": "<anonymous-schema-7>"
+            },
+            "transaction_id": {
+                "type": "string",
+                "x-parser-schema-id": "<anonymous-schema-8>"
+            },
+            "status": {
+                "type": "string",
+                "enum": [
+                    "success",
+                    "failed"
+                ],
+                "x-parser-schema-id": "<anonymous-schema-9>"
+            }
+        },
+        "x-parser-schema-id": "<anonymous-schema-6>"
+    },
+    "_meta": {
+        "pointer": "/channels/payments.processed/messages/paymentProcessed/payload",
+        "asyncapi": {
+            "source": "../api/payment-service.yaml",
+            "input": "asyncapi: '3.0.0'\ninfo:\n  title: Payment Service\n  version: '1.0.0'\n  description: Handles payment processing for orders.\n\nchannels:\n  orders.created:\n    address: orders.created\n    messages:\n      orderCreated:\n        $ref: 'order-service.yaml#/components/messages/OrderCreated'\n  payments.processed:\n    address: payments.processed\n    messages:\n      paymentProcessed:\n        $ref: '#/components/messages/PaymentProcessed'\n\noperations:\n  subscribeOrderCreated:\n    action: receive\n    channel:\n      $ref: '#/channels/orders.created'\n  publishPaymentProcessed:\n    action: send\n    channel:\n      $ref: '#/channels/payments.processed'\n\ncomponents:\n  messages:\n    PaymentProcessed:\n      name: PaymentProcessed\n      payload:\n        type: object\n        properties:\n          order_id: { type: string }\n          transaction_id: { type: string }\n          status: { type: string, enum: [success, failed] }\n",
+            "parsed": {
+                "asyncapi": "3.0.0",
+                "info": {
+                    "title": "Payment Service",
+                    "version": "1.0.0",
+                    "description": "Handles payment processing for orders."
+                },
+                "channels": {
+                    "orders.created": {
+                        "address": "orders.created",
+                        "messages": {
+                            "orderCreated": {
+                                "name": "OrderCreated",
+                                "title": "Order Created Event",
+                                "summary": "Informative event when a new order is created.",
+                                "contentType": "application/json",
+                                "payload": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": {
+                                            "type": "string",
+                                            "format": "uuid",
+                                            "x-parser-schema-id": "<anonymous-schema-2>"
+                                        },
+                                        "customer_id": {
+                                            "type": "string",
+                                            "x-parser-schema-id": "<anonymous-schema-3>"
+                                        },
+                                        "amount": {
+                                            "type": "number",
+                                            "x-parser-schema-id": "<anonymous-schema-4>"
+                                        },
+                                        "created_at": {
+                                            "type": "string",
+                                            "format": "date-time",
+                                            "x-parser-schema-id": "<anonymous-schema-5>"
+                                        }
+                                    },
+                                    "x-parser-schema-id": "<anonymous-schema-1>"
+                                },
+                                "x-parser-unique-object-id": "orderCreated"
+                            }
+                        },
+                        "x-parser-unique-object-id": "orders.created"
+                    },
+                    "payments.processed": {
+                        "address": "payments.processed",
+                        "messages": {
+                            "paymentProcessed": {
+                                "name": "PaymentProcessed",
+                                "payload": {
+                                    "type": "object",
+                                    "properties": {
+                                        "order_id": {
+                                            "type": "string",
+                                            "x-parser-schema-id": "<anonymous-schema-7>"
+                                        },
+                                        "transaction_id": {
+                                            "type": "string",
+                                            "x-parser-schema-id": "<anonymous-schema-8>"
+                                        },
+                                        "status": {
+                                            "type": "string",
+                                            "enum": [
+                                                "success",
+                                                "failed"
+                                            ],
+                                            "x-parser-schema-id": "<anonymous-schema-9>"
+                                        }
+                                    },
+                                    "x-parser-schema-id": "<anonymous-schema-6>"
+                                },
+                                "x-parser-unique-object-id": "paymentProcessed"
+                            }
+                        },
+                        "x-parser-unique-object-id": "payments.processed"
+                    }
+                },
+                "operations": {
+                    "subscribeOrderCreated": {
+                        "action": "receive",
+                        "channel": {
+                            "address": "orders.created",
+                            "messages": {
+                                "orderCreated": {
+                                    "name": "OrderCreated",
+                                    "title": "Order Created Event",
+                                    "summary": "Informative event when a new order is created.",
+                                    "contentType": "application/json",
+                                    "payload": {
+                                        "type": "object",
+                                        "properties": {
+                                            "id": {
+                                                "type": "string",
+                                                "format": "uuid",
+                                                "x-parser-schema-id": "<anonymous-schema-2>"
+                                            },
+                                            "customer_id": {
+                                                "type": "string",
+                                                "x-parser-schema-id": "<anonymous-schema-3>"
+                                            },
+                                            "amount": {
+                                                "type": "number",
+                                                "x-parser-schema-id": "<anonymous-schema-4>"
+                                            },
+                                            "created_at": {
+                                                "type": "string",
+                                                "format": "date-time",
+                                                "x-parser-schema-id": "<anonymous-schema-5>"
+                                            }
+                                        },
+                                        "x-parser-schema-id": "<anonymous-schema-1>"
+                                    },
+                                    "x-parser-unique-object-id": "orderCreated"
+                                }
+                            },
+                            "x-parser-unique-object-id": "orders.created"
+                        },
+                        "x-parser-unique-object-id": "subscribeOrderCreated"
+                    },
+                    "publishPaymentProcessed": {
+                        "action": "send",
+                        "channel": {
+                            "address": "payments.processed",
+                            "messages": {
+                                "paymentProcessed": {
+                                    "name": "PaymentProcessed",
+                                    "payload": {
+                                        "type": "object",
+                                        "properties": {
+                                            "order_id": {
+                                                "type": "string",
+                                                "x-parser-schema-id": "<anonymous-schema-7>"
+                                            },
+                                            "transaction_id": {
+                                                "type": "string",
+                                                "x-parser-schema-id": "<anonymous-schema-8>"
+                                            },
+                                            "status": {
+                                                "type": "string",
+                                                "enum": [
+                                                    "success",
+                                                    "failed"
+                                                ],
+                                                "x-parser-schema-id": "<anonymous-schema-9>"
+                                            }
+                                        },
+                                        "x-parser-schema-id": "<anonymous-schema-6>"
+                                    },
+                                    "x-parser-unique-object-id": "paymentProcessed"
+                                }
+                            },
+                            "x-parser-unique-object-id": "payments.processed"
+                        },
+                        "x-parser-unique-object-id": "publishPaymentProcessed"
+                    }
+                },
+                "components": {
+                    "messages": {
+                        "PaymentProcessed": {
+                            "name": "PaymentProcessed",
+                            "payload": {
+                                "type": "object",
+                                "properties": {
+                                    "order_id": {
+                                        "type": "string",
+                                        "x-parser-schema-id": "<anonymous-schema-7>"
+                                    },
+                                    "transaction_id": {
+                                        "type": "string",
+                                        "x-parser-schema-id": "<anonymous-schema-8>"
+                                    },
+                                    "status": {
+                                        "type": "string",
+                                        "enum": [
+                                            "success",
+                                            "failed"
+                                        ],
+                                        "x-parser-schema-id": "<anonymous-schema-9>"
+                                    }
+                                },
+                                "x-parser-schema-id": "<anonymous-schema-6>"
+                            },
+                            "x-parser-unique-object-id": "paymentProcessed"
+                        }
+                    }
+                },
+                "x-parser-spec-parsed": true,
+                "x-parser-api-version": 3
+            },
+            "semver": {
+                "version": "3.0.0",
+                "major": 3,
+                "minor": 0,
+                "patch": 0
+            }
+        }
+    },
+    "_schemaObject": {
+        "type": "object",
+        "properties": {
+            "order_id": {
+                "type": "string",
+                "x-parser-schema-id": "<anonymous-schema-7>"
+            },
+            "transaction_id": {
+                "type": "string",
+                "x-parser-schema-id": "<anonymous-schema-8>"
+            },
+            "status": {
+                "type": "string",
+                "enum": [
+                    "success",
+                    "failed"
+                ],
+                "x-parser-schema-id": "<anonymous-schema-9>"
+            }
+        },
+        "x-parser-schema-id": "<anonymous-schema-6>"
+    },
+    "_schemaFormat": "application/vnd.aai.asyncapi;version=3.0.0"
+}

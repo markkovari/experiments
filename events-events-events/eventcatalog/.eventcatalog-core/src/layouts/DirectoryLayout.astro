@@ -1,0 +1,50 @@
+---
+import { Table, type TData, type TCollectionTypes } from '@components/Tables/Table';
+import VerticalSideBarLayout from './VerticalSideBarLayout.astro';
+import config from '@config';
+
+export interface Props<T extends TCollectionTypes> {
+  title: string;
+  subtitle: string;
+  data: TData<T>[];
+  type: T;
+}
+
+const { title, subtitle, data, type } = Astro.props;
+
+const checkboxLatestId = 'latest-only';
+const checkboxDraftsId = 'drafts-only';
+
+// @ts-ignore
+const tableConfiguration = config[type as keyof typeof config]?.tableConfiguration ?? { columns: {} };
+---
+
+<VerticalSideBarLayout title={`Explore | ${title}`} showNestedSideBar={false}>
+  <main
+    class="ml-0 bg-[rgb(var(--ec-page-bg))]"
+    style="margin-left: calc(var(--ec-app-content-padding-left, 5rem) * -1); margin-right: calc(var(--ec-app-content-padding-right, 5rem) * -1);"
+  >
+    <div class="p-8 pb-20">
+      <div class="min-w-0">
+        <h1 class="text-2xl font-semibold text-[rgb(var(--ec-page-text))] capitalize md:text-4xl">{title}</h1>
+        <p class="max-w-3xl pt-2 text-base font-light text-[rgb(var(--ec-page-text-muted))]">{subtitle}</p>
+      </div>
+      <div class="mt-2 min-w-0">
+        <Table
+          checkboxLatestId={checkboxLatestId}
+          checkboxDraftsId={checkboxDraftsId}
+          data={data}
+          collection={type}
+          tableConfiguration={tableConfiguration}
+          client:load
+        />
+      </div>
+    </div>
+  </main>
+</VerticalSideBarLayout>
+
+<style>
+  .ec-align-top {
+    vertical-align: top !important;
+  }
+</style>

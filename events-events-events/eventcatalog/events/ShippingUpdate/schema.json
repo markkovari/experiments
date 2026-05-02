@@ -1,0 +1,245 @@
+{
+    "_json": {
+        "type": "object",
+        "properties": {
+            "order_id": {
+                "type": "string",
+                "x-parser-schema-id": "<anonymous-schema-6>"
+            },
+            "tracking_number": {
+                "type": "string",
+                "x-parser-schema-id": "<anonymous-schema-7>"
+            },
+            "status": {
+                "type": "string",
+                "enum": [
+                    "dispatched",
+                    "in_transit",
+                    "delivered"
+                ],
+                "x-parser-schema-id": "<anonymous-schema-8>"
+            }
+        },
+        "x-parser-schema-id": "<anonymous-schema-5>"
+    },
+    "_meta": {
+        "pointer": "/channels/shipping.status/messages/shippingUpdate/payload",
+        "asyncapi": {
+            "source": "../api/shipping-service.yaml",
+            "input": "asyncapi: '3.0.0'\ninfo:\n  title: Shipping Service\n  version: '1.0.0'\n  description: Manages logistics and delivery.\n\nchannels:\n  payments.processed:\n    address: payments.processed\n    messages:\n      paymentProcessed:\n        $ref: 'payment-service.yaml#/components/messages/PaymentProcessed'\n  shipping.status:\n    address: shipping.status\n    messages:\n      shippingUpdate:\n        $ref: '#/components/messages/ShippingUpdate'\n\noperations:\n  subscribePaymentProcessed:\n    action: receive\n    channel:\n      $ref: '#/channels/payments.processed'\n  publishShippingUpdate:\n    action: send\n    channel:\n      $ref: '#/channels/shipping.status'\n\ncomponents:\n  messages:\n    ShippingUpdate:\n      name: ShippingUpdate\n      payload:\n        type: object\n        properties:\n          order_id: { type: string }\n          tracking_number: { type: string }\n          status: { type: string, enum: [dispatched, in_transit, delivered] }\n",
+            "parsed": {
+                "asyncapi": "3.0.0",
+                "info": {
+                    "title": "Shipping Service",
+                    "version": "1.0.0",
+                    "description": "Manages logistics and delivery."
+                },
+                "channels": {
+                    "payments.processed": {
+                        "address": "payments.processed",
+                        "messages": {
+                            "paymentProcessed": {
+                                "name": "PaymentProcessed",
+                                "payload": {
+                                    "type": "object",
+                                    "properties": {
+                                        "order_id": {
+                                            "type": "string",
+                                            "x-parser-schema-id": "<anonymous-schema-2>"
+                                        },
+                                        "transaction_id": {
+                                            "type": "string",
+                                            "x-parser-schema-id": "<anonymous-schema-3>"
+                                        },
+                                        "status": {
+                                            "type": "string",
+                                            "enum": [
+                                                "success",
+                                                "failed"
+                                            ],
+                                            "x-parser-schema-id": "<anonymous-schema-4>"
+                                        }
+                                    },
+                                    "x-parser-schema-id": "<anonymous-schema-1>"
+                                },
+                                "x-parser-unique-object-id": "paymentProcessed"
+                            }
+                        },
+                        "x-parser-unique-object-id": "payments.processed"
+                    },
+                    "shipping.status": {
+                        "address": "shipping.status",
+                        "messages": {
+                            "shippingUpdate": {
+                                "name": "ShippingUpdate",
+                                "payload": {
+                                    "type": "object",
+                                    "properties": {
+                                        "order_id": {
+                                            "type": "string",
+                                            "x-parser-schema-id": "<anonymous-schema-6>"
+                                        },
+                                        "tracking_number": {
+                                            "type": "string",
+                                            "x-parser-schema-id": "<anonymous-schema-7>"
+                                        },
+                                        "status": {
+                                            "type": "string",
+                                            "enum": [
+                                                "dispatched",
+                                                "in_transit",
+                                                "delivered"
+                                            ],
+                                            "x-parser-schema-id": "<anonymous-schema-8>"
+                                        }
+                                    },
+                                    "x-parser-schema-id": "<anonymous-schema-5>"
+                                },
+                                "x-parser-unique-object-id": "shippingUpdate"
+                            }
+                        },
+                        "x-parser-unique-object-id": "shipping.status"
+                    }
+                },
+                "operations": {
+                    "subscribePaymentProcessed": {
+                        "action": "receive",
+                        "channel": {
+                            "address": "payments.processed",
+                            "messages": {
+                                "paymentProcessed": {
+                                    "name": "PaymentProcessed",
+                                    "payload": {
+                                        "type": "object",
+                                        "properties": {
+                                            "order_id": {
+                                                "type": "string",
+                                                "x-parser-schema-id": "<anonymous-schema-2>"
+                                            },
+                                            "transaction_id": {
+                                                "type": "string",
+                                                "x-parser-schema-id": "<anonymous-schema-3>"
+                                            },
+                                            "status": {
+                                                "type": "string",
+                                                "enum": [
+                                                    "success",
+                                                    "failed"
+                                                ],
+                                                "x-parser-schema-id": "<anonymous-schema-4>"
+                                            }
+                                        },
+                                        "x-parser-schema-id": "<anonymous-schema-1>"
+                                    },
+                                    "x-parser-unique-object-id": "paymentProcessed"
+                                }
+                            },
+                            "x-parser-unique-object-id": "payments.processed"
+                        },
+                        "x-parser-unique-object-id": "subscribePaymentProcessed"
+                    },
+                    "publishShippingUpdate": {
+                        "action": "send",
+                        "channel": {
+                            "address": "shipping.status",
+                            "messages": {
+                                "shippingUpdate": {
+                                    "name": "ShippingUpdate",
+                                    "payload": {
+                                        "type": "object",
+                                        "properties": {
+                                            "order_id": {
+                                                "type": "string",
+                                                "x-parser-schema-id": "<anonymous-schema-6>"
+                                            },
+                                            "tracking_number": {
+                                                "type": "string",
+                                                "x-parser-schema-id": "<anonymous-schema-7>"
+                                            },
+                                            "status": {
+                                                "type": "string",
+                                                "enum": [
+                                                    "dispatched",
+                                                    "in_transit",
+                                                    "delivered"
+                                                ],
+                                                "x-parser-schema-id": "<anonymous-schema-8>"
+                                            }
+                                        },
+                                        "x-parser-schema-id": "<anonymous-schema-5>"
+                                    },
+                                    "x-parser-unique-object-id": "shippingUpdate"
+                                }
+                            },
+                            "x-parser-unique-object-id": "shipping.status"
+                        },
+                        "x-parser-unique-object-id": "publishShippingUpdate"
+                    }
+                },
+                "components": {
+                    "messages": {
+                        "ShippingUpdate": {
+                            "name": "ShippingUpdate",
+                            "payload": {
+                                "type": "object",
+                                "properties": {
+                                    "order_id": {
+                                        "type": "string",
+                                        "x-parser-schema-id": "<anonymous-schema-6>"
+                                    },
+                                    "tracking_number": {
+                                        "type": "string",
+                                        "x-parser-schema-id": "<anonymous-schema-7>"
+                                    },
+                                    "status": {
+                                        "type": "string",
+                                        "enum": [
+                                            "dispatched",
+                                            "in_transit",
+                                            "delivered"
+                                        ],
+                                        "x-parser-schema-id": "<anonymous-schema-8>"
+                                    }
+                                },
+                                "x-parser-schema-id": "<anonymous-schema-5>"
+                            },
+                            "x-parser-unique-object-id": "shippingUpdate"
+                        }
+                    }
+                },
+                "x-parser-spec-parsed": true,
+                "x-parser-api-version": 3
+            },
+            "semver": {
+                "version": "3.0.0",
+                "major": 3,
+                "minor": 0,
+                "patch": 0
+            }
+        }
+    },
+    "_schemaObject": {
+        "type": "object",
+        "properties": {
+            "order_id": {
+                "type": "string",
+                "x-parser-schema-id": "<anonymous-schema-6>"
+            },
+            "tracking_number": {
+                "type": "string",
+                "x-parser-schema-id": "<anonymous-schema-7>"
+            },
+            "status": {
+                "type": "string",
+                "enum": [
+                    "dispatched",
+                    "in_transit",
+                    "delivered"
+                ],
+                "x-parser-schema-id": "<anonymous-schema-8>"
+            }
+        },
+        "x-parser-schema-id": "<anonymous-schema-5>"
+    },
+    "_schemaFormat": "application/vnd.aai.asyncapi;version=3.0.0"
+}

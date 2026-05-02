@@ -1,0 +1,191 @@
+{
+    "_json": {
+        "type": "object",
+        "properties": {
+            "id": {
+                "type": "string",
+                "format": "uuid",
+                "x-parser-schema-id": "<anonymous-schema-2>"
+            },
+            "customer_id": {
+                "type": "string",
+                "x-parser-schema-id": "<anonymous-schema-3>"
+            },
+            "amount": {
+                "type": "number",
+                "x-parser-schema-id": "<anonymous-schema-4>"
+            },
+            "created_at": {
+                "type": "string",
+                "format": "date-time",
+                "x-parser-schema-id": "<anonymous-schema-5>"
+            }
+        },
+        "x-parser-schema-id": "<anonymous-schema-1>"
+    },
+    "_meta": {
+        "pointer": "/channels/orders.created/messages/orderCreated/payload",
+        "asyncapi": {
+            "source": "../api/order-service.yaml",
+            "input": "asyncapi: '3.0.0'\ninfo:\n  title: Order Service\n  version: '1.0.0'\n  description: Service for managing orders and publishing order events.\n\nchannels:\n  orders.created:\n    address: orders.created\n    messages:\n      orderCreated:\n        $ref: '#/components/messages/OrderCreated'\n\noperations:\n  publishOrderCreated:\n    action: send\n    channel:\n      $ref: '#/channels/orders.created'\n\ncomponents:\n  messages:\n    OrderCreated:\n      name: OrderCreated\n      title: Order Created Event\n      summary: Informative event when a new order is created.\n      contentType: application/json\n      payload:\n        type: object\n        properties:\n          id:\n            type: string\n            format: uuid\n          customer_id:\n            type: string\n          amount:\n            type: number\n          created_at:\n            type: string\n            format: date-time\n",
+            "parsed": {
+                "asyncapi": "3.0.0",
+                "info": {
+                    "title": "Order Service",
+                    "version": "1.0.0",
+                    "description": "Service for managing orders and publishing order events."
+                },
+                "channels": {
+                    "orders.created": {
+                        "address": "orders.created",
+                        "messages": {
+                            "orderCreated": {
+                                "name": "OrderCreated",
+                                "title": "Order Created Event",
+                                "summary": "Informative event when a new order is created.",
+                                "contentType": "application/json",
+                                "payload": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": {
+                                            "type": "string",
+                                            "format": "uuid",
+                                            "x-parser-schema-id": "<anonymous-schema-2>"
+                                        },
+                                        "customer_id": {
+                                            "type": "string",
+                                            "x-parser-schema-id": "<anonymous-schema-3>"
+                                        },
+                                        "amount": {
+                                            "type": "number",
+                                            "x-parser-schema-id": "<anonymous-schema-4>"
+                                        },
+                                        "created_at": {
+                                            "type": "string",
+                                            "format": "date-time",
+                                            "x-parser-schema-id": "<anonymous-schema-5>"
+                                        }
+                                    },
+                                    "x-parser-schema-id": "<anonymous-schema-1>"
+                                },
+                                "x-parser-unique-object-id": "orderCreated"
+                            }
+                        },
+                        "x-parser-unique-object-id": "orders.created"
+                    }
+                },
+                "operations": {
+                    "publishOrderCreated": {
+                        "action": "send",
+                        "channel": {
+                            "address": "orders.created",
+                            "messages": {
+                                "orderCreated": {
+                                    "name": "OrderCreated",
+                                    "title": "Order Created Event",
+                                    "summary": "Informative event when a new order is created.",
+                                    "contentType": "application/json",
+                                    "payload": {
+                                        "type": "object",
+                                        "properties": {
+                                            "id": {
+                                                "type": "string",
+                                                "format": "uuid",
+                                                "x-parser-schema-id": "<anonymous-schema-2>"
+                                            },
+                                            "customer_id": {
+                                                "type": "string",
+                                                "x-parser-schema-id": "<anonymous-schema-3>"
+                                            },
+                                            "amount": {
+                                                "type": "number",
+                                                "x-parser-schema-id": "<anonymous-schema-4>"
+                                            },
+                                            "created_at": {
+                                                "type": "string",
+                                                "format": "date-time",
+                                                "x-parser-schema-id": "<anonymous-schema-5>"
+                                            }
+                                        },
+                                        "x-parser-schema-id": "<anonymous-schema-1>"
+                                    },
+                                    "x-parser-unique-object-id": "orderCreated"
+                                }
+                            },
+                            "x-parser-unique-object-id": "orders.created"
+                        },
+                        "x-parser-unique-object-id": "publishOrderCreated"
+                    }
+                },
+                "components": {
+                    "messages": {
+                        "OrderCreated": {
+                            "name": "OrderCreated",
+                            "title": "Order Created Event",
+                            "summary": "Informative event when a new order is created.",
+                            "contentType": "application/json",
+                            "payload": {
+                                "type": "object",
+                                "properties": {
+                                    "id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "x-parser-schema-id": "<anonymous-schema-2>"
+                                    },
+                                    "customer_id": {
+                                        "type": "string",
+                                        "x-parser-schema-id": "<anonymous-schema-3>"
+                                    },
+                                    "amount": {
+                                        "type": "number",
+                                        "x-parser-schema-id": "<anonymous-schema-4>"
+                                    },
+                                    "created_at": {
+                                        "type": "string",
+                                        "format": "date-time",
+                                        "x-parser-schema-id": "<anonymous-schema-5>"
+                                    }
+                                },
+                                "x-parser-schema-id": "<anonymous-schema-1>"
+                            },
+                            "x-parser-unique-object-id": "orderCreated"
+                        }
+                    }
+                },
+                "x-parser-spec-parsed": true,
+                "x-parser-api-version": 3
+            },
+            "semver": {
+                "version": "3.0.0",
+                "major": 3,
+                "minor": 0,
+                "patch": 0
+            }
+        }
+    },
+    "_schemaObject": {
+        "type": "object",
+        "properties": {
+            "id": {
+                "type": "string",
+                "format": "uuid",
+                "x-parser-schema-id": "<anonymous-schema-2>"
+            },
+            "customer_id": {
+                "type": "string",
+                "x-parser-schema-id": "<anonymous-schema-3>"
+            },
+            "amount": {
+                "type": "number",
+                "x-parser-schema-id": "<anonymous-schema-4>"
+            },
+            "created_at": {
+                "type": "string",
+                "format": "date-time",
+                "x-parser-schema-id": "<anonymous-schema-5>"
+            }
+        },
+        "x-parser-schema-id": "<anonymous-schema-1>"
+    },
+    "_schemaFormat": "application/vnd.aai.asyncapi;version=3.0.0"
+}

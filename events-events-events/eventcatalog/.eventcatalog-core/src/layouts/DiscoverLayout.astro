@@ -1,0 +1,187 @@
+---
+import { Table, type TData, type TCollectionTypes } from '@components/Tables/Table';
+import { QueueListIcon, RectangleGroupIcon, BoltIcon, ChatBubbleLeftIcon } from '@heroicons/react/24/outline';
+import ServerIcon from '@heroicons/react/24/outline/ServerIcon';
+import { getCommands } from '@utils/collections/commands';
+import { getDomains } from '@utils/collections/domains';
+import { getFlows } from '@utils/collections/flows';
+import { getEvents } from '@utils/collections/events';
+import { getServices } from '@utils/collections/services';
+import { buildUrl } from '@utils/url-builder';
+import { getQueries } from '@utils/collections/queries';
+import { getContainers } from '@utils/collections/containers';
+import { DatabaseIcon } from 'lucide-react';
+import { MagnifyingGlassIcon } from '@heroicons/react/20/solid';
+import VerticalSideBarLayout from './VerticalSideBarLayout.astro';
+import Checkbox from '@components/Checkbox.astro';
+import config from '@config';
+
+const events = await getEvents();
+const queries = await getQueries();
+const commands = await getCommands();
+const services = await getServices();
+const domains = await getDomains();
+const flows = await getFlows();
+const containers = await getContainers();
+export interface Props<T extends TCollectionTypes> {
+  title: string;
+  subtitle: string;
+  data: TData<T>[];
+  type: T;
+}
+
+const { title, subtitle, data, type } = Astro.props;
+const currentPath = Astro.url.pathname;
+
+const checkboxLatestId = 'latest-only';
+const checkboxDraftsId = 'show-drafts';
+
+// @ts-ignore
+const tableConfiguration = config[type as keyof typeof config]?.tableConfiguration ?? { columns: {} };
+
+const tabs = [
+  {
+    label: `Events (${events.length})`,
+    href: buildUrl('/discover/events'),
+    isActive: currentPath === '/discover/events',
+    icon: BoltIcon,
+    activeColor: 'orange',
+    enabled: events.length > 0,
+    visible: events.length > 0,
+  },
+  {
+    label: `Commands (${commands.length})`,
+    href: buildUrl('/discover/commands'),
+    isActive: currentPath === '/discover/commands',
+    icon: ChatBubbleLeftIcon,
+    activeColor: 'blue',
+    enabled: commands.length > 0,
+    visible: commands.length > 0,
+  },
+  {
+    label: `Queries (${queries.length})`,
+    href: buildUrl('/discover/queries'),
+    isActive: currentPath === '/discover/queries',
+    icon: MagnifyingGlassIcon,
+    activeColor: 'green',
+    enabled: queries.length > 0,
+    visible: queries.length > 0,
+  },
+  {
+    label: `Services (${services.length})`,
+    href: buildUrl('/discover/services'),
+    isActive: currentPath === '/discover/services',
+    icon: ServerIcon,
+    activeColor: 'pink',
+    enabled: services.length > 0,
+    visible: services.length > 0,
+  },
+  {
+    label: `Domains (${domains.length})`,
+    href: buildUrl('/discover/domains'),
+    isActive: currentPath === '/discover/domains',
+    icon: RectangleGroupIcon,
+    activeColor: 'yellow',
+    enabled: domains.length > 0,
+    visible: domains.length > 0,
+  },
+  {
+    label: `Data (${containers.length})`,
+    href: buildUrl('/discover/containers'),
+    isActive: currentPath === '/discover/containers',
+    icon: DatabaseIcon,
+    activeColor: 'blue',
+    enabled: containers.length > 0,
+    visible: containers.length > 0,
+  },
+  {
+    label: `Flows (${flows.length})`,
+    href: buildUrl('/discover/flows'),
+    isActive: currentPath === '/discover/flows',
+    icon: QueueListIcon,
+    activeColor: 'teal',
+    enabled: flows.length > 0,
+    visible: flows.length > 0,
+  },
+];
+---
+
+<VerticalSideBarLayout title={`Explore | ${title}`} showNestedSideBar={false}>
+  <main class="ml-0 bg-[rgb(var(--ec-page-bg))] min-h-content">
+    <div id="discover-collection-tabs">
+      <div class="hidden sm:block">
+        <div class="border-b border-[rgb(var(--ec-page-border))]">
+          <nav class="flex space-x-8 -mb-0.5 pl-6" aria-label="Tabs">
+            {
+              tabs
+                .filter((tab) => tab.visible)
+                .map((tab) => (
+                  <a
+                    href={tab.href}
+                    class:list={[
+                      'group inline-flex items-center py-4 px-1 text-sm font-light text-[rgb(var(--ec-page-text))]',
+                      tab.isActive && 'border-b-[2px] border-[rgb(var(--ec-accent))] text-[rgb(var(--ec-accent))]',
+                      !tab.isActive && 'opacity-70 hover:opacity-100',
+                      !tab.enabled && 'disabled',
+                    ]}
+                    aria-current="page"
+                  >
+                    <tab.icon
+                      className={`w-6 h-6 -ml-0.5 mr-2 ${tab.isActive ? 'text-[rgb(var(--ec-accent))]' : 'text-[rgb(var(--ec-icon-color))]'}`}
+                    />
+                    <span>{tab.label}</span>
+                  </a>
+                ))
+            }
+          </nav>
+        </div>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div class="pb-20 ml-6 md:pr-10">
+      <div>
+        <div class="sm:flex sm:items-end py-4 pb-4" id="discover-title">
+          <div class="sm:flex-auto space-y-2">
+            <h1 class="text-4xl font-semibold text-[rgb(var(--ec-page-text))] capitalize">{title}</h1>
+            <p class="text-md text-[rgb(var(--ec-page-text-muted))]">{subtitle}</p>
+          </div>
+          <div class="flex gap-4">
+            <div class="p-4 border border-[rgb(var(--ec-page-border))] rounded-md bg-[rgb(var(--ec-card-bg,var(--ec-page-bg)))]">
+              <Checkbox id={checkboxLatestId} name={checkboxLatestId} label="Show latest version only" checked />
+            </div>
+            <div class="p-4 border border-[rgb(var(--ec-page-border))] rounded-md bg-[rgb(var(--ec-card-bg,var(--ec-page-bg)))]">
+              <Checkbox id={checkboxDraftsId} name={checkboxDraftsId} label="Show drafts only" />
+            </div>
+          </div>
+        </div>
+        <div class="mt-4 flow-root">
+          <div class="-mx-4 -my-2 overflow-x-auto sm:-mx-6 lg:-mx-8">
+            <div class="inline-block min-w-full align-middle sm:px-6 lg:px-8">
+              <Table
+                checkboxLatestId={checkboxLatestId}
+                checkboxDraftsId={checkboxDraftsId}
+                data={data}
+                collection={type}
+                tableConfiguration={tableConfiguration}
+                client:load
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</VerticalSideBarLayout>
+
+<style>
+  .ec-align-top {
+    vertical-align: top !important;
+  }
+
+  a.disabled {
+    pointer-events: none;
+    cursor: default;
+    opacity: 0.25;
+  }
+</style>

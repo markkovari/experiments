@@ -1,0 +1,359 @@
+import type { CollectionTypes } from '@types';
+import type { CollectionEntry } from 'astro:content';
+import semver, { coerce, compare, satisfies as satisfiesRange } from 'semver';
+import path from 'node:path';
+
+// --- FILE PATH HELPERS ---
+
+/**
+ * Extract the folder name from an Astro collection entry's filePath.
+ * Replaces the expensive SDK getResourceFolderName which globs + reads every file.
+ */
+export const getFolderNameFromFilePath = (filePath: string): string => {
+  return path.basename(path.dirname(filePath));
+};
+
+// --- SPECIFICATION HELPERS ---
+
+export type SpecificationType = 'asyncapi' | 'openapi' | 'graphql';
+
+export interface SpecificationInput {
+  type: SpecificationType;
+  path: string;
+  name?: string;
+  headers?: Record<string, string>;
+}
+
+export interface ProcessedSpecification {
+  type: SpecificationType;
+  path: string;
+  name: string;
+  filename: string;
+  filenameWithoutExtension: string;
+  headers?: Record<string, string>;
+}
+
+export const getDefaultSpecificationName = (type: string): string => {
+  switch (type) {
+    case 'asyncapi':
+      return 'AsyncAPI';
+    case 'openapi':
+      return 'OpenAPI';
+    case 'graphql':
+      return 'GraphQL';
+    default:
+      return 'Specification';
+  }
+};
+
+interface LegacySpecificationFormat {
+  asyncapiPath?: string;
+  openapiPath?: string;
+  graphqlPath?: string;
+}
+
+export const processSpecifications = (
+  specifications: SpecificationInput[] | LegacySpecificationFormat | undefined
+): ProcessedSpecification[] => {
+  const specs: SpecificationInput[] = Array.isArray(specifications) ? [...specifications] : [];
+
+  // Handle legacy object format
+  if (specifications && !Array.isArray(specifications)) {
+    if (specifications.asyncapiPath) {
+      specs.push({ type: 'asyncapi', path: specifications.asyncapiPath, name: 'AsyncAPI' });
+    }
+    if (specifications.openapiPath) {
+      specs.push({ type: 'openapi', path: specifications.openapiPath, name: 'OpenAPI' });
+    }
+    if (specifications.graphqlPath) {
+      specs.push({ type: 'graphql', path: specifications.graphqlPath, name: 'GraphQL' });
+    }
+  }
+
+  return specs.map((spec) => ({
+    ...spec,
+    name: spec.name || getDefaultSpecificationName(spec.type),
+    filename: path.basename(spec.path),
+    filenameWithoutExtension: path.basename(spec.path, path.extname(spec.path)),
+  }));
+};
+
+export const getPreviousVersion = (version: string, versions: string[]) => {
+  const index = versions.indexOf(version);
+  return index === -1 ? null : versions[index + 1];
+};
+
+export const getVersions = (data: CollectionEntry<CollectionTypes>[]) => {
+  const allVersions = data.map((item) => item.data.version);
+  const versions = [...new Set(allVersions)];
+  return sortStringVersions(versions);
+};
+
+export { isSameVersion } from './version-compare';
+
+/**
+ * Sorts versioned items. Latest version first.
+ */
+export function sortVersioned<T>(versioned: T[], versionExtractor: (e: T) => string): T[] {
+  // try to coerce semver versions from input version
+  const semverVersions = versioned.map((v) => ({ original: v, semver: coerce(versionExtractor(v)) }));
+
+  // if all versions are semver'ish, use semver to sort them
+  if (semverVersions.every((v) => v.semver != null)) {
+    const sorted = semverVersions.sort((a, b) => compare(b.semver!, a.semver!));
+
+    return sorted.map((v) => v.original);
+  } else {
+    // fallback to default sort
+    return versioned.sort((a, b) => versionExtractor(b).localeCompare(versionExtractor(a)));
+  }
+}
+
+// Takes a collection and a id of a resource, and checks if the version is the latest version in the collection
+export const getLatestVersionInCollectionById = (collection: CollectionEntry<CollectionTypes>[], id: string) => {
+  const items = collection.filter((i) => i.data.id === id);
+  const sortedVersions = sortVersioned(items, (v) => v.data.version);
+  return sortedVersions[0]?.data.version ?? id;
+};
+
+export const getVersionForCollectionItem = (
+  item: CollectionEntry<CollectionTypes>,
+  collection: CollectionEntry<CollectionTypes>[]
+) => {
+  const allVersionsForItem = collection.filter((i) => i.data.id === item.data.id);
+
+  return getVersions(allVersionsForItem);
+};
+
+export function sortStringVersions(versions: string[]) {
+  const sorted = sortVersioned(versions, (v) => v);
+
+  return { latestVersion: sorted[0], versions: sorted };
+}
+
+/**
+ * @param {string} version A valid version (number | v{\d+} | semver)
+ * @param {string} range A semver range or exact version to compare
+ * @returns {boolean} Returns true if the version satisfies the range.
+ */
+export const satisfies = (version: string, range: string): boolean => {
+  const coercedVersion = coerce(version);
+  if (!coercedVersion) return false;
+  return satisfiesRange(coercedVersion, range);
+};
+
+export const getItemsFromCollectionByIdAndSemverOrLatest = <T extends { data: { id: string; version: string } }>(
+  collection: T[],
+  id: string,
+  version?: string
+): T[] => {
+  const filteredCollection = collection.filter((c) => c.data.id == id);
+
+  if (version && version != 'latest') {
+    return filteredCollection.filter((c) => satisfies(c.data.version, version));
+  }
+
+  // Order by version
+  const sorted = sortVersioned(filteredCollection, (item) => item.data.version);
+
+  // latest version
+  return sorted[0] != null ? [sorted[0]] : [];
+};
+
+export const findMatchingNodes = (
+  nodesA: CollectionEntry<'events' | 'commands' | 'queries' | 'services' | 'containers' | 'data-products'>[],
+  nodesB: CollectionEntry<'events' | 'commands' | 'queries' | 'services' | 'containers' | 'data-products'>[]
+) => {
+  // Track messages that are both sent and received
+  return nodesA.filter((nodeA) => {
+    return nodesB.some((nodeB) => {
+      return nodeB.data.id === nodeA.data.id && nodeB.data.version === nodeA.data.version;
+    });
+  });
+};
+
+export const resourceToCollectionMap = {
+  service: 'services',
+  event: 'events',
+  command: 'commands',
+  query: 'queries',
+  domain: 'domains',
+  flow: 'flows',
+  channel: 'channels',
+  user: 'users',
+  team: 'teams',
+  container: 'containers',
+  entity: 'entities',
+  diagram: 'diagrams',
+  'data-product': 'data-products',
+} as const;
+
+export const collectionToResourceMap = {
+  services: 'service',
+  events: 'event',
+  commands: 'command',
+  queries: 'query',
+  domains: 'domain',
+  flows: 'flow',
+  channels: 'channel',
+  users: 'user',
+  teams: 'team',
+  containers: 'container',
+  entities: 'entity',
+  diagrams: 'diagram',
+  'data-products': 'data-product',
+} as const;
+
+/**
+ * Converts a collection name to a human-readable resource type label.
+ * e.g. 'data-products' → 'Data Product', 'services' → 'Service'
+ */
+export const getResourceTypeLabel = (collection: string): string => {
+  const raw = (collectionToResourceMap as Record<string, string>)[collection] || collection;
+  return raw
+    .split('-')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+};
+
+/**
+ * Returns the correct pointer field name for a collection and direction.
+ * Data-products use 'outputs'/'inputs' instead of 'sends'/'receives'.
+ */
+export const getPointerField = (collection: string, direction: 'sends' | 'receives'): string => {
+  if (collection === 'data-products') return direction === 'sends' ? 'outputs' : 'inputs';
+  return direction;
+};
+
+export const getDeprecatedDetails = (item: CollectionEntry<CollectionTypes>) => {
+  let options = {
+    isMarkedAsDeprecated: false,
+    hasDeprecated: false,
+    message: '',
+    deprecatedDate: '',
+  };
+
+  if (!item.data?.deprecated) return options;
+
+  if (typeof item.data.deprecated === 'boolean') {
+    options.hasDeprecated = item.data.deprecated;
+    options.isMarkedAsDeprecated = item.data.deprecated;
+  }
+
+  if (typeof item.data.deprecated === 'object') {
+    options.isMarkedAsDeprecated = true;
+    options.hasDeprecated = item.data.deprecated.date ? new Date(item.data.deprecated.date) < new Date() : false;
+    options.message = item.data.deprecated.message ?? '';
+    options.deprecatedDate = item.data.deprecated.date
+      ? new Date(item.data.deprecated.date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+      : '';
+  }
+
+  return options;
+};
+
+export const removeContentFromCollection = (collection: CollectionEntry<CollectionTypes>[]) => {
+  return collection.map((item) => ({
+    ...item,
+    body: undefined,
+  }));
+};
+
+// --- OPTIMIZATION HELPERS ---
+
+/**
+ * Groups items by ID and sorts them by version (Newest first).
+ * This allows O(1) lookup for "latest" (index 0) and specific versions.
+ */
+export const createVersionedMap = <T extends { data: { id: string; version?: string } }>(items: T[]) => {
+  const map = new Map<string, T[]>();
+
+  for (const item of items) {
+    const id = item.data.id;
+    if (!map.has(id)) map.set(id, []);
+    map.get(id)!.push(item);
+  }
+
+  // Sort every entry so index [0] is always the latest version
+  for (const [key, list] of map.entries()) {
+    list.sort((a, b) => {
+      // specific version sorting logic (fallback to string compare if not valid semver)
+      const vA = a.data.version || '0.0.0';
+      const vB = b.data.version || '0.0.0';
+      return semver.valid(vB) && semver.valid(vA) ? semver.rcompare(vA, vB) : vB.localeCompare(vA);
+    });
+  }
+  return map;
+};
+
+// Merge as many given maps as you want
+export const mergeMaps = <T>(...maps: Map<string, T[]>[]): Map<string, T[]> => {
+  return maps.reduce((acc, map) => {
+    return new Map([...acc, ...map]);
+  }, new Map<string, T[]>());
+};
+
+/**
+ * Fast lookup helper.
+ * If version is provided, find it. If not, return the first (latest) item.
+ */
+export const findInMap = <T extends { data: { version?: string } }>(
+  map: Map<string, T[]>,
+  id: string,
+  version?: string
+): T | undefined => {
+  const items = map.get(id);
+  if (!items || items.length === 0) return undefined;
+
+  // If no version specified or 'latest', return the first item (which is sorted to be latest)
+  if (!version || version === 'latest') return items[0];
+
+  // Try exact match
+  const exactMatch = items.find((i) => i.data.version === version);
+  if (exactMatch) return exactMatch;
+
+  // Try semver match if not exact
+  if (semver.validRange(version)) {
+    return items.find((i) => semver.satisfies(i.data.version || '0.0.0', version));
+  }
+
+  return undefined;
+};
+
+/**
+ * Matches a specific version against a version range pattern.
+ * Supports exact versions, semver ranges, x-patterns, and 'latest'.
+ *
+ * @param version - The specific version to check (e.g., "1.2.3")
+ * @param rangePattern - The pattern to match against (e.g., "^1.0.0", "1.x", "latest")
+ * @returns true if version matches the rangePattern
+ */
+export const versionMatches = (version: string, rangePattern: string): boolean => {
+  // Handle 'latest' keyword
+  if (rangePattern === 'latest') return true;
+
+  // Try exact match first
+  if (version === rangePattern) return true;
+
+  // Try semver range matching
+  try {
+    if (semver.validRange(rangePattern)) {
+      return semver.satisfies(version, rangePattern);
+    }
+  } catch (error) {
+    // Invalid semver, fall through
+  }
+
+  // Handle x-patterns like 1.x, 1.2.x
+  if (rangePattern.includes('.x')) {
+    const prefix = rangePattern.replace(/\.x/g, '');
+    // Check if version starts with the prefix and has a valid boundary
+    // (next character must be '.' or end of string)
+    if (version.startsWith(prefix)) {
+      const nextChar = version[prefix.length];
+      return nextChar === '.' || nextChar === undefined;
+    }
+  }
+
+  return false;
+};

@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package order.v1;
+
+option go_package = "github.com/markkovari/events-events-events/gen/proto/order/v1;orderv1";
+
+message CreateOrderRequest {
+  string customer_id = 1;
+  double amount = 2;
+}
+
+message CreateOrderResponse {
+  string order_id = 1;
+  string status = 2;
+}
+
+service OrderService {
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+}

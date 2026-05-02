@@ -1,0 +1,34 @@
+# Binaries
+bin/
+main
+
+# Go
+vendor/
+*.exe
+*.test
+*.prof
+
+# EventCatalog
+eventcatalog/node_modules
+eventcatalog/.next
+eventcatalog/out
+
+# IDEs
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Infrastructure / Data
+infra/nats-data/
+infra/tempo-data/
+infra/prometheus-data/
+
+**/node_modules
+**/dist
+**/.astro
+**/gen/
+**/temp_gen/
+proto/**/*.pb.go
+proto/**/orderv1connect/*.go

@@ -1,0 +1,70 @@
+---
+import Seo from '@components/Seo.astro';
+import { buildUrl } from '@utils/url-builder';
+import { getEvents } from '@utils/collections/events';
+import { getEntities } from '@utils/collections/entities';
+import { getCommands } from '@utils/collections/commands';
+import { getServices } from '@utils/collections/services';
+import { getDomains } from '@utils/collections/domains';
+import type { CollectionEntry } from 'astro:content';
+import type { CollectionTypes } from '@types';
+import { getChannels } from '@utils/collections/channels';
+
+export async function getStaticPaths() {
+  const [events, commands, services, domains, channels, entities] = await Promise.all([
+    getEvents(),
+    getCommands(),
+    getServices(),
+    getDomains(),
+    getChannels(),
+    getEntities(),
+  ]);
+
+  const buildPages = (collection: CollectionEntry<CollectionTypes>[]) => {
+    return collection.map((item) => ({
+      params: {
+        type: item.collection,
+        id: item.data.id,
+      },
+      props: {
+        type: item.collection,
+        ...item,
+      },
+    }));
+  };
+
+  return [
+    ...buildPages(domains),
+    ...buildPages(events),
+    ...buildPages(services),
+    ...buildPages(commands),
+    ...buildPages(channels),
+    ...buildPages(entities),
+  ];
+}
+
+const props = Astro.props;
+
+const pageTitle = `${props.collection} | ${props.data.name}`.replace(/^\w/, (c) => c.toUpperCase());
+
+const { pathname } = Astro.url;
+const redirectUrl = buildUrl(pathname + '/' + props.data.latestVersion, false, true);
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <Seo title={`EventCatalog | ${pageTitle}`} ogTitle={pageTitle} />
+  </head>
+  <body>
+    <p>You are being redirected to <a href={redirectUrl}>{redirectUrl}</a></p>
+  </body>
+</html>
+
+<script define:vars={{ redirectUrl }}>
+  document.addEventListener('DOMContentLoaded', () => {
+    const searchParams = window.location.search;
+    const fullRedirectUrl = redirectUrl + searchParams;
+    window.location.href = fullRedirectUrl;
+  });
+</script>
