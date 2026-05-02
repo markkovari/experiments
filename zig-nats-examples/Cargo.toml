@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "packages/config",
+    "packages/shared-auth",
+    "services/auth",
+    "services/org",
+    "services/scheduler",
+    "services/mock-executor",
+]
+resolver = "2"

@@ -1,0 +1,19 @@
+# Rust
+target/
+Cargo.lock
+
+# Configuration
+**/config/local.toml
+.env
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Databases (Local dev)
+*.db
+mongo_data/
+nats_data/
