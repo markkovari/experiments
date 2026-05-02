@@ -19,9 +19,13 @@ services:
       tag: latest
   - name: mock-executor
     port: 3003
-    dbName: none
     image:
       repository: my-repo/mock-executor
+      tag: latest
+  - name: gateway
+    port: 8080
+    image:
+      repository: my-repo/gateway
       tag: latest
 
 frontend:

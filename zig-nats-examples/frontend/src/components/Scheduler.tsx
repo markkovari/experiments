@@ -36,8 +36,8 @@ export function Scheduler({ token, org }: { token: string, org: Organization | n
     if (!org) return
     try {
       const [actionsRes, execsRes] = await Promise.all([
-        fetch('http://localhost:3002/actions', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('http://localhost:3002/executions', { headers: { 'Authorization': `Bearer ${token}` } })
+        fetch('http://localhost:8080/api/actions', { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch('http://localhost:8080/api/executions', { headers: { 'Authorization': `Bearer ${token}` } })
       ])
       if (actionsRes.ok) setOrgs(await actionsRes.json())
       if (execsRes.ok) setExecutions(await execsRes.json())
