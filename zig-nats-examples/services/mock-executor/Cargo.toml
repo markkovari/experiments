@@ -1,0 +1,16 @@
+[package]
+name = "mock-executor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+async-nats = { version = "0.38", features = ["service"] }
+futures = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+config = { path = "../../packages/config" }
+chrono = "0.4"

@@ -1,0 +1,13 @@
+{
+  "name": "zig-nats-examples",
+  "version": "1.0.0",
+  "scripts": {
+    "infra": "docker-compose up -d",
+    "services:auth": "cd services/auth && cargo run",
+    "services:org": "cd services/org && cargo run",
+    "services:scheduler": "cd services/scheduler && cargo run",
+    "services:executor": "cd services/mock-executor && cargo run",
+    "frontend": "cd frontend && pnpm dev",
+    "start:all": "pnpm infra && pnpm frontend"
+  }
+}
