@@ -1,7 +1,7 @@
 use axum::{
-    body::Body,
+    body::{Body},
     extract::{Path, Request, State},
-    http::{Method, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response},
     routing::any,
     Router,
@@ -14,7 +14,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[derive(Clone)]
 struct AppState {
     nats_client: async_nats::Client,
-    kv: async_nats::kv::Store,
+    kv: async_nats::jetstream::kv::Store,
     http_client: reqwest::Client,
     config: AppConfig,
 }
@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
     
     // Setup NATS KV for rate limiting
     let js = async_nats::jetstream::new(nats_client.clone());
-    let kv = js.create_key_value(async_nats::kv::Config {
+    let kv = js.create_key_value(async_nats::jetstream::kv::Config {
         bucket: "RATE_LIMITS".to_string(),
         history: 1,
         ..Default::default()
@@ -64,23 +64,22 @@ async fn proxy_handler(
     Path(path): Path<String>,
     req: Request,
 ) -> Response {
-    // 1. Rate Limiting Logic (Simplified for brevity, can be expanded to per-IP or per-User)
+    // 1. Rate Limiting Logic
     let identifier = req.headers().get("x-forwarded-for")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("unknown");
 
     let kv_key = format!("rate_limit:{}", identifier);
     
-    // Very basic atomic-ish counter in KV
     let current_count = match state.kv.get(&kv_key).await {
         Ok(Some(entry)) => {
-            let val = String::from_utf8_lossy(&entry.value).parse::<u32>().unwrap_or(0);
+            let val = String::from_utf8_lossy(&entry).parse::<u32>().unwrap_or(0);
             val
         }
         _ => 0,
     };
 
-    if current_count > 1000 { // High limit for dev
+    if current_count > 1000 {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded").into_response();
     }
 
@@ -99,21 +98,23 @@ async fn proxy_handler(
         return (StatusCode::NOT_FOUND, "Service not found").into_response();
     };
 
-    tracing::debug!("Proxying to {}", internal_url);
-
     // 3. Forward Request
     let method = req.method().clone();
     let headers = req.headers().clone();
-    let body = req.into_body();
+    
+    let body_bytes = match axum::body::to_bytes(req.into_body(), 10 * 1024 * 1024).await {
+        Ok(bytes) => bytes,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Failed to read request body").into_response(),
+    };
 
     let mut proxy_req = state.http_client.request(method, internal_url);
     for (key, value) in headers.iter() {
-        if key != "host" { // Don't forward Host header
+        if key != "host" {
             proxy_req = proxy_req.header(key, value);
         }
     }
 
-    let res = match proxy_req.body(body).send().await {
+    let res = match proxy_req.body(body_bytes).send().await {
         Ok(res) => res,
         Err(e) => {
             tracing::error!("Proxy error: {}", e);
@@ -123,12 +124,15 @@ async fn proxy_handler(
 
     // 4. Return Response
     let status = res.status();
-    let headers = res.headers().clone();
-    let res_body = Body::from_stream(res.bytes_stream());
+    let res_headers = res.headers().clone();
+    let res_body_bytes = match res.bytes().await {
+        Ok(bytes) => bytes,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read internal response").into_response(),
+    };
 
-    let mut response = Response::new(res_body);
+    let mut response = Response::new(Body::from(res_body_bytes));
     *response.status_mut() = status;
-    for (key, value) in headers.iter() {
+    for (key, value) in res_headers.iter() {
         response.headers_mut().insert(key, value.clone());
     }
 

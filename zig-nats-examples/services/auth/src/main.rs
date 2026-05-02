@@ -20,6 +20,7 @@ use argon2::{
 use jsonwebtoken::{encode, Header, EncodingKey};
 use chrono::{Utc, Duration};
 use models::*;
+use tower_http::cors::CorsLayer;
 
 #[derive(Clone)]
 struct AppState {
@@ -73,8 +74,9 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Connect to MongoDB
-    let mongo_client = mongodb::Client::with_uri_str(&settings.mongodb.url).await?;
-    let db = mongo_client.database(&settings.mongodb.db_name);
+    let mongo_config = settings.mongodb.as_ref().ok_or_else(|| anyhow::anyhow!("MongoDB configuration is missing"))?;
+    let mongo_client = mongodb::Client::with_uri_str(&mongo_config.url).await?;
+    let db = mongo_client.database(&mongo_config.db_name);
     
     // Ensure unique index on email
     let users_collection = db.collection::<User>("users");
@@ -97,7 +99,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health_check))
         .route("/register", post(register))
         .route("/login", post(login))
-        .layer(tower_http::cors::CorsLayer::permissive())
+        .layer(CorsLayer::permissive())
         .with_state(state);
 
     // Run it
@@ -183,7 +185,7 @@ async fn login(
     let token = encode(
         &Header::default(),
         &claims,
-        &EncodingKey::from_secret(state.config.auth.jwt_secret.as_ref()),
+        &EncodingKey::from_secret(state.config.auth.as_ref().expect("Auth config missing").jwt_secret.as_ref()),
     ).map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to generate token".to_string()))?;
 
     Ok(Json(AuthResponse { token }))
