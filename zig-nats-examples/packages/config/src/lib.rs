@@ -5,8 +5,8 @@ use config::{Config, ConfigError, Environment, File};
 pub struct AppConfig {
     pub server: ServerConfig,
     pub nats: NatsConfig,
-    pub mongodb: MongoConfig,
-    pub auth: AuthConfig,
+    pub mongodb: Option<MongoConfig>,
+    pub auth: Option<AuthConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

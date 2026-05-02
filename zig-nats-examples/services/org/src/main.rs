@@ -26,7 +26,7 @@ struct AppState {
 
 impl HasJwtSecret for AppState {
     fn jwt_secret(&self) -> &str {
-        &self.config.auth.jwt_secret
+        self.config.auth.as_ref().map(|a| a.jwt_secret.as_str()).unwrap_or("")
     }
 }
 
@@ -69,8 +69,9 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Connect to MongoDB
-    let mongo_client = mongodb::Client::with_uri_str(&settings.mongodb.url).await?;
-    let db = mongo_client.database(&settings.mongodb.db_name);
+    let mongo_config = settings.mongodb.as_ref().ok_or_else(|| anyhow::anyhow!("MongoDB configuration is missing"))?;
+    let mongo_client = mongodb::Client::with_uri_str(&mongo_config.url).await?;
+    let db = mongo_client.database(&mongo_config.db_name);
     tracing::info!("Connected to MongoDB");
 
     let state = AppState {

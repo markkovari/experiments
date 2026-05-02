@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 axum = "0.7"
 tokio = { version = "1.0", features = ["full"] }
-async-nats = { version = "0.38", features = ["service"] }
+async-nats = { version = "0.47", features = ["jetstream", "service"] }
 futures = "0.3"
 bytes = "1.0"
 mongodb = "3.1"
