@@ -1,0 +1,49 @@
+import type { CollectionTypes } from '@types';
+import { getCollection, type CollectionEntry } from 'astro:content';
+import path from 'node:path';
+import { coerce, rcompare } from 'semver';
+
+export type ChangeLog = CollectionEntry<'changelogs'>;
+
+export const getChangeLogs = async (item: CollectionEntry<CollectionTypes>): Promise<ChangeLog[]> => {
+  const { collection, data, filePath } = item;
+
+  const collectionDirectory = path.dirname(item?.filePath || '');
+  // Ensure the path follows <collectionDirectory>/versioned/<version>/changelog.mdx
+  // Pre-compile regex
+  const versionedPathPattern = new RegExp(`${collectionDirectory}/versioned/[^/]+/changelog\\.mdx$`);
+  const rootChangeLogPath = path.join(collectionDirectory, 'changelog.mdx');
+
+  // Get all logs for collection type and filter by given collection
+  const logs = await getCollection('changelogs', (log) => {
+    const isRootChangeLog = rootChangeLogPath === log.filePath;
+    const isVersionedChangeLog = versionedPathPattern.test(log.filePath!);
+    return log.id.includes(`${collection}/`) && (isRootChangeLog || isVersionedChangeLog);
+  });
+
+  const hydratedLogs = logs.map((log) => {
+    // Check if there is a version in the url
+    const isVersioned = log.id.includes('versioned');
+
+    const parts = log.filePath!.split('/');
+    // hack to get the version of the id (url)
+    const version = parts[parts.length - 2];
+    return {
+      ...log,
+      data: {
+        ...log.data,
+        version: isVersioned ? version : data.latestVersion || 'latest',
+      },
+    };
+  });
+
+  // Order by semver (descending)
+  return hydratedLogs.sort((a, b) => {
+    const semverA = coerce(a.data.version);
+    const semverB = coerce(b.data.version);
+    if (semverA && semverB) {
+      return rcompare(semverA, semverB);
+    }
+    return b.data.version.localeCompare(a.data.version);
+  });
+};

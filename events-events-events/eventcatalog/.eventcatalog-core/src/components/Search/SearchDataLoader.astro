@@ -1,0 +1,49 @@
+---
+/**
+ * SearchDataLoader.astro
+ *
+ * This component loads the sidebar/search data independently of the sidebar UI.
+ * It ensures the search functionality works on all pages, even when the nested
+ * sidebar is not rendered (e.g., /discover pages).
+ *
+ * The data is fetched from a static JSON file (/api/sidebar-data.json) instead of
+ * being embedded inline in every HTML page. This significantly reduces build size
+ * for large catalogs.
+ */
+---
+
+<script>
+  import { setSidebarData, sidebarStore } from '@stores/sidebar-store';
+  import { buildUrl } from '@utils/url-builder';
+
+  // Only fetch if we haven't already loaded the data
+  if (!sidebarStore.get()) {
+    const apiUrl = buildUrl('/api/sidebar-data.json', true);
+
+    const loadSidebarData = () => {
+      // Double-check cache in case another component loaded data while waiting for idle
+      if (sidebarStore.get()) return;
+
+      fetch(apiUrl)
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error(`Failed to fetch sidebar data: ${response.status}`);
+          }
+          return response.json();
+        })
+        .then((data) => {
+          setSidebarData(data);
+        })
+        .catch((error) => {
+          console.error('Error loading sidebar data:', error);
+        });
+    };
+
+    // Defer non-critical sidebar payload fetch until browser is idle
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(loadSidebarData, { timeout: 1200 });
+    } else {
+      setTimeout(loadSidebarData, 300);
+    }
+  }
+</script>

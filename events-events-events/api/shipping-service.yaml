@@ -1,0 +1,38 @@
+asyncapi: '3.0.0'
+info:
+  title: Shipping Service
+  version: '1.0.0'
+  description: Manages logistics and delivery.
+
+channels:
+  payments.processed:
+    address: payments.processed
+    messages:
+      paymentProcessed:
+        $ref: 'payment-service.yaml#/components/messages/PaymentProcessed'
+  shipping.status:
+    address: shipping.status
+    messages:
+      shippingUpdate:
+        $ref: '#/components/messages/ShippingUpdate'
+
+operations:
+  subscribePaymentProcessed:
+    action: receive
+    channel:
+      $ref: '#/channels/payments.processed'
+  publishShippingUpdate:
+    action: send
+    channel:
+      $ref: '#/channels/shipping.status'
+
+components:
+  messages:
+    ShippingUpdate:
+      name: ShippingUpdate
+      payload:
+        type: object
+        properties:
+          order_id: { type: string }
+          tracking_number: { type: string }
+          status: { type: string, enum: [dispatched, in_transit, delivered] }

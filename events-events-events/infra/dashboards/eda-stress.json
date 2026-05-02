@@ -1,0 +1,65 @@
+{
+  "title": "EDA Flow: Stress & Throttling",
+  "uid": "eda-stress-test",
+  "editable": true,
+  "panels": [
+    {
+      "title": "1. RPC Gateway: Allowed vs Dropped",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "sum by (result) (rate(order_requests_total[1m]))",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 10 },
+          "unit": "reqps"
+        }
+      }
+    },
+    {
+      "title": "2. NATS Waiting Room: Pending Backlog",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "sum(jetstream_consumer_num_pending) by (consumer_name)",
+          "legendFormat": "Backlog: {{consumer_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "area", "fillOpacity": 30 },
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "title": "3. Analytics Service: Constant Processing Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "rate(analytics_processed_total[1m])",
+          "legendFormat": "Actual Processing Speed"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "green", "mode": "fixed" },
+          "custom": { "drawStyle": "line", "lineWidth": 3 },
+          "unit": "mps"
+        }
+      }
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 34,
+  "time": { "from": "now-5m", "to": "now" }
+}

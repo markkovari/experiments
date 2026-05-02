@@ -1,0 +1,21 @@
+---
+import VerticalSideBarLayout from '@layouts/VerticalSideBarLayout.astro';
+import FieldsExplorer from '@components/FieldsExplorer/FieldsExplorer';
+import { isEventCatalogScaleEnabled } from '@utils/feature';
+
+export const prerender = false;
+---
+
+<VerticalSideBarLayout title="Fields Explorer - EventCatalog" showNestedSideBar={false}>
+  <style is:global>
+    #eventcatalog-header {
+      left: calc(var(--ec-vertical-nav-width, 14rem) + var(--ec-fields-sidebar-width, 320px)) !important;
+    }
+  </style>
+  <main
+    class="min-h-0 overflow-hidden bg-[rgb(var(--ec-page-bg))]"
+    style="--ec-fields-sidebar-width: 320px; margin-left: calc(var(--ec-app-content-padding-left, 5rem) * -1); margin-right: calc(var(--ec-app-content-padding-right, 5rem) * -1); height: calc(100dvh - 60px);"
+  >
+    <FieldsExplorer client:load isScaleEnabled={isEventCatalogScaleEnabled()} />
+  </main>
+</VerticalSideBarLayout>

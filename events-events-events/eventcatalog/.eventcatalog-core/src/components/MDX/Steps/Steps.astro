@@ -1,0 +1,42 @@
+---
+const { title } = Astro.props;
+const html = await Astro.slots.render('default');
+
+function splitByLi(html: string) {
+  // Use regex to match <li> tags and their contents, including nested tags
+  const liRegex = /<li[\s\S]*?<\/li>/g;
+
+  // Find all matches
+  const matches = html.match(liRegex) || [];
+
+  // Add data-step attribute to each li
+  return matches.map((li: string, index: number) => {
+    // Replace the opening <li tag with <li data-step="index+1"
+    return li.replace(/<li/, `<li data-step="${index + 1}"`);
+  });
+}
+
+const data = splitByLi(html);
+---
+
+<div class="bg-[rgb(var(--ec-page-bg))] text-[rgb(var(--ec-page-text))] py-10 pb-0 font-sans not-prose">
+  {title && <h2 class="text-2xl font-bold text-[rgb(var(--ec-page-text))] mb-6">{title}</h2>}
+  <ol class="relative border-l border-[rgb(var(--ec-page-border))] ml-3">
+    {data.map((item: any) => <Fragment set:html={item} />)}
+  </ol>
+</div>
+
+<script>
+  function applyStepNumbers() {
+    document.querySelectorAll('li[data-step]').forEach((li) => {
+      const stepNumber = li.getAttribute('data-step');
+      const stepSpan = li.querySelector('.step-number div');
+      if (stepSpan) {
+        stepSpan.textContent = stepNumber;
+      }
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', applyStepNumbers);
+  document.addEventListener('astro:page-load', applyStepNumbers);
+</script>

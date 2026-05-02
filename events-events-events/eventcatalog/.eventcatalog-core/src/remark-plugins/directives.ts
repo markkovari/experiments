@@ -1,0 +1,130 @@
+// src/remark-plugins/directives.js
+import { visit } from 'unist-util-visit';
+
+export function remarkDirectives() {
+  return (tree: any) => {
+    visit(tree, (node) => {
+      if (node.type === 'containerDirective') {
+        const blockTypes = {
+          info: 'bg-blue-50 dark:bg-blue-950/50 border-l-4 border-blue-500 text-blue-700 dark:text-blue-200',
+          warning: 'bg-yellow-50 dark:bg-yellow-950/50 border-l-4 border-yellow-500 text-yellow-700 dark:text-yellow-200',
+          danger: 'bg-red-50 dark:bg-red-950/50 border-l-4 border-red-500 text-red-700 dark:text-red-200',
+          tip: 'bg-green-50 dark:bg-green-950/50 border-l-4 border-green-500 text-green-700 dark:text-green-200',
+          note: 'bg-gray-50 dark:bg-gray-950/50 border-l-4 border-gray-500 text-gray-700 dark:text-gray-200',
+        };
+
+        // Lucide icon paths
+        const iconPaths = {
+          info: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z',
+          warning:
+            'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z',
+          danger:
+            'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z',
+          tip: 'M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z',
+          note: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z',
+        };
+
+        node.data = node.data || {};
+        node.data.hName = 'div';
+        node.data.hProperties = {
+          class: `rounded-lg p-4 my-4 ${blockTypes[node.name as keyof typeof blockTypes] || ''}`,
+        };
+
+        // Check if there's a custom title (label) provided via :::note[Custom Title]
+        // In remark-directive, the label is stored in node.children as a paragraph node
+        // with data.directiveLabel = true
+        let titleChildren;
+        let contentChildren;
+
+        const firstChild = node.children && node.children.length > 0 ? node.children[0] : null;
+        const hasCustomTitle = firstChild && firstChild.data?.directiveLabel === true;
+
+        if (hasCustomTitle && firstChild) {
+          // Custom title was provided in the label - it contains markdown parsed as inline content
+          titleChildren = firstChild.children || [
+            { type: 'text', value: node.name.charAt(0).toUpperCase() + node.name.slice(1) },
+          ];
+          contentChildren = node.children.slice(1);
+        } else {
+          // No custom title, use default based on directive name
+          titleChildren = [
+            {
+              type: 'text',
+              value: node.name.charAt(0).toUpperCase() + node.name.slice(1),
+            },
+          ];
+          contentChildren = node.children;
+        }
+
+        // Create header div that will contain icon and title
+        const headerNode = {
+          type: 'element',
+          data: {
+            hName: 'div',
+            hProperties: {
+              class: 'flex items-center gap-2 font-semibold mb-2',
+            },
+          },
+          children: [
+            // Lucide Icon SVG
+            {
+              type: 'element',
+              data: {
+                hName: 'svg',
+                hProperties: {
+                  xmlns: 'http://www.w3.org/2000/svg',
+                  width: '26',
+                  height: '26',
+                  viewBox: '0 0 24 24',
+                  fill: 'none',
+                  stroke: 'currentColor',
+                  strokeWidth: '2',
+                  strokeLinecap: 'round',
+                  strokeLinejoin: 'round',
+                  class: 'lucide',
+                },
+              },
+              children: [
+                {
+                  type: 'element',
+                  data: {
+                    hName: 'path',
+                    hProperties: {
+                      d: iconPaths[node.name as keyof typeof iconPaths] || '',
+                    },
+                  },
+                },
+              ],
+            },
+            // Title (with support for markdown)
+            {
+              type: 'element',
+              data: {
+                hName: 'span',
+                hProperties: {
+                  class: '',
+                },
+              },
+              children: titleChildren,
+            },
+          ],
+        };
+
+        // Create content div for the rest of the children
+        const contentNode = {
+          type: 'element',
+          data: {
+            hName: 'div',
+            hProperties: {
+              class: 'prose prose-md dark:prose-invert w-full max-w-none! prose-p:my-1 prose-p:text-inherit',
+            },
+          },
+          children: contentChildren,
+        };
+
+        // Replace node's children with header and content
+        node.children = [headerNode, contentNode];
+      }
+    });
+  };
+}

@@ -1,0 +1,862 @@
+---
+interface Props {
+  title: string;
+  sidebar?: boolean;
+  description?: string;
+  showNestedSideBar?: boolean;
+  showHeader?: boolean;
+}
+
+import {
+  TableProperties,
+  BotMessageSquare,
+  BookOpen,
+  FileText,
+  SquareDashedMousePointerIcon,
+  FileCode,
+  Waypoints,
+  PanelLeftClose,
+  Database,
+  UserRound,
+  UsersRound,
+} from 'lucide-react';
+import {
+  RectangleGroupIcon,
+  GlobeAltIcon,
+  CubeIcon,
+  BoltIcon,
+  ChatBubbleLeftIcon,
+  MagnifyingGlassIcon,
+  QueueListIcon,
+} from '@heroicons/react/24/outline';
+import ServerIcon from '@heroicons/react/24/outline/ServerIcon';
+import BaseLayout from './BaseLayout.astro';
+import Header from '../components/Header.astro';
+import SideNav from '../components/SideNav/SideNav.astro';
+import SearchDataLoader from '../components/Search/SearchDataLoader.astro';
+import config from '@config';
+import { getCollection } from 'astro:content';
+import '@fontsource/inter';
+import '@fontsource/inter/400.css'; // Specify weight
+import '@fontsource/inter/700.css'; // Specify weight
+
+// Tailwind CSS v4 (CSS-first config)
+import '../styles/tailwind.css';
+
+// Theme CSS variables (must load before user styles)
+import '../styles/theme.css';
+
+// Theme files - imported so they're available, applied via data-catalog-theme attribute
+import '../styles/themes/ocean.css';
+import '../styles/themes/sapphire.css';
+import '../styles/themes/sunset.css';
+import '../styles/themes/forest.css';
+
+import { ClientRouter } from 'astro:transitions';
+
+import { getCommands } from '@utils/collections/commands';
+import { getDomains } from '@utils/collections/domains';
+import { getEvents } from '@utils/collections/events';
+import { getServices } from '@utils/collections/services';
+import { getFlows } from '@utils/collections/flows';
+import { isCollectionVisibleInCatalog } from '@eventcatalog';
+import { buildUrl } from '@utils/url-builder';
+import { getQueries } from '@utils/collections/queries';
+import { hasLandingPageForDocs } from '@utils/pages';
+
+import { isEmbedEnabled, isCustomStylesEnabled, isEventCatalogScaleEnabled, isCustomDocsEnabled, isSSR } from '@utils/feature';
+
+const catalogHasDefaultLandingPageForDocs = await hasLandingPageForDocs();
+const customDocs = await getCollection('customPages');
+
+let events: any[] = [];
+let commands: any[] = [];
+let queries: any[] = [];
+let services: any[] = [];
+let domains: any[] = [];
+let flows: any[] = [];
+
+if (!catalogHasDefaultLandingPageForDocs) {
+  [events, commands, queries, services, domains, flows] = await Promise.all([
+    getEvents({ getAllVersions: false, hydrateServices: false }),
+    getCommands({ getAllVersions: false, hydrateServices: false }),
+    getQueries({ getAllVersions: false, hydrateServices: false }),
+    getServices({ getAllVersions: false }),
+    getDomains({ getAllVersions: false }),
+    getFlows({ getAllVersions: false }),
+  ]);
+}
+
+// Try and load any custom styles if they exist
+if (isCustomStylesEnabled()) {
+  try {
+    await import('../../eventcatalog.styles.css');
+  } catch (error) {}
+}
+
+const currentPath = Astro.url.pathname;
+
+const getDefaultUrl = (route: string, defaultValue: string) => {
+  if (route === 'docs/custom') {
+    return customDocs.length > 0 ? buildUrl(`/${route}/${customDocs[0].id.replace('docs', '')}`) : buildUrl(defaultValue);
+  }
+
+  const collections = [
+    { data: domains, key: 'domains' },
+    { data: services, key: 'services' },
+    { data: events, key: 'events' },
+    { data: commands, key: 'commands' },
+    { data: queries, key: 'queries' },
+    { data: flows, key: 'flows' },
+  ];
+
+  for (const { data, key } of collections) {
+    if (data.length > 0 && isCollectionVisibleInCatalog(key)) {
+      // find the first item that has visualiser set to true
+      const item = data.find((item) => item.data.visualiser !== false);
+      if (item) {
+        return buildUrl(`/${route}/${key}/${item.data.id}/${item.data.latestVersion}`);
+      } else {
+        continue;
+      }
+    }
+  }
+
+  return buildUrl(defaultValue);
+};
+
+const userSideBarConfiguration = config.sidebar || [];
+
+const navigationItems = [
+  {
+    id: '/',
+    label: 'Catalog',
+    icon: BookOpen,
+    href: buildUrl(config.landingPage || '/'),
+    current:
+      currentPath === '/' ||
+      (currentPath.includes('/docs') && !currentPath.includes('/docs/custom')) ||
+      currentPath.includes('/architecture/') ||
+      currentPath.includes('/visualiser') ||
+      (currentPath.includes('/schemas') &&
+        !currentPath.includes('/schemas/explorer') &&
+        !currentPath.includes('/schemas/fields')),
+  },
+  {
+    id: '/docs/custom',
+    label: 'Documentation',
+    icon: FileText,
+    href: getDefaultUrl('docs/custom', '/docs/custom'),
+    current: currentPath.includes('/docs/custom'),
+    isPremium: true,
+    visible: isCustomDocsEnabled(),
+  },
+  {
+    id: '/schemas/explorer',
+    label: 'Schemas',
+    icon: FileCode,
+    href: buildUrl('/schemas/explorer'),
+    current: currentPath.includes('/schemas/explorer') && !currentPath.includes('/schemas/fields'),
+  },
+  ...(isSSR()
+    ? [
+        {
+          id: '/schemas/fields',
+          label: 'Schema Insights',
+          icon: Waypoints,
+          href: buildUrl('/schemas/fields'),
+          current: currentPath.includes('/schemas/fields'),
+        },
+      ]
+    : []),
+].filter((item) => {
+  const userSideBarOption = userSideBarConfiguration.find((config: { id: string; visible: boolean }) => config.id === item.id);
+  const defaultVisible = item.visible ?? true;
+  return userSideBarOption ? userSideBarOption.visible : defaultVisible;
+});
+
+const studioNavigationItem = [
+  {
+    id: '/studio',
+    label: 'EventCatalog Studio',
+    icon: SquareDashedMousePointerIcon,
+    href: buildUrl('/studio'),
+    current: currentPath.includes('/studio'),
+  },
+].filter((item) => {
+  const userSideBarOption = userSideBarConfiguration.find((config: { id: string; visible: boolean }) => config.id === item.id);
+  return userSideBarOption ? userSideBarOption.visible : true;
+});
+
+const premiumFeatures: Array<{
+  id: string;
+  label: string;
+  icon: any;
+  href: string;
+  current: boolean;
+  isPremium?: boolean;
+}> = [];
+
+const browseItems = [
+  {
+    label: 'Domains',
+    icon: RectangleGroupIcon,
+    href: buildUrl('/discover/domains'),
+    current: currentPath === buildUrl('/discover/domains'),
+  },
+  {
+    label: 'Services',
+    icon: ServerIcon,
+    href: buildUrl('/discover/services'),
+    current: currentPath === buildUrl('/discover/services'),
+  },
+  {
+    label: 'External Systems',
+    icon: GlobeAltIcon,
+    href: buildUrl('/discover/external-systems'),
+    current: currentPath === buildUrl('/discover/external-systems'),
+  },
+  {
+    label: 'Events',
+    icon: BoltIcon,
+    href: buildUrl('/discover/events'),
+    current: currentPath === buildUrl('/discover/events'),
+  },
+  {
+    label: 'Commands',
+    icon: ChatBubbleLeftIcon,
+    href: buildUrl('/discover/commands'),
+    current: currentPath === buildUrl('/discover/commands'),
+  },
+  {
+    label: 'Queries',
+    icon: MagnifyingGlassIcon,
+    href: buildUrl('/discover/queries'),
+    current: currentPath === buildUrl('/discover/queries'),
+  },
+  {
+    label: 'Flows',
+    icon: QueueListIcon,
+    href: buildUrl('/discover/flows'),
+    current: currentPath === buildUrl('/discover/flows'),
+  },
+  {
+    label: 'Data Stores',
+    icon: Database,
+    href: buildUrl('/discover/containers'),
+    current: currentPath === buildUrl('/discover/containers'),
+  },
+  {
+    label: 'Data Products',
+    icon: CubeIcon,
+    href: buildUrl('/discover/data-products'),
+    current: currentPath === buildUrl('/discover/data-products'),
+  },
+];
+
+const organizationItems = [
+  {
+    label: 'Teams',
+    icon: UsersRound,
+    href: buildUrl('/directory/teams'),
+    current: currentPath === buildUrl('/directory/teams'),
+  },
+  {
+    label: 'Users',
+    icon: UserRound,
+    href: buildUrl('/directory/users'),
+    current: currentPath === buildUrl('/directory/users'),
+  },
+];
+
+const currentNavigationItem = [...navigationItems, ...studioNavigationItem, ...premiumFeatures].find((item) => item.current);
+const { title, description, showNestedSideBar = true, showHeader = true } = Astro.props;
+
+const canPageBeEmbedded = isEmbedEnabled();
+---
+
+<BaseLayout title={`EventCatalog | ${title}`} description={description} ogTitle={title}>
+  <Fragment slot="head">
+    <script is:inline>
+      (() => {
+        try {
+          const savedState = localStorage.getItem('eventcatalog-vertical-nav-collapsed');
+          const isCollapsed = savedState === null ? true : savedState === 'true';
+          document.documentElement.setAttribute('data-vertical-nav-collapsed', isCollapsed ? 'true' : 'false');
+        } catch (error) {
+          document.documentElement.setAttribute('data-vertical-nav-collapsed', 'true');
+        }
+      })();
+    </script>
+    <style is:global>
+      :root {
+        --ec-vertical-nav-width: 14rem;
+      }
+
+      :root[data-vertical-nav-collapsed='true'] {
+        --ec-vertical-nav-width: 3rem;
+      }
+
+      html,
+      body {
+        background-color: rgb(var(--ec-page-bg));
+      }
+
+      body {
+        min-height: 100vh;
+        min-height: 100dvh;
+      }
+
+      #eventcatalog-application {
+        min-height: 100vh;
+        min-height: 100dvh;
+        background-color: rgb(var(--ec-page-bg));
+        --ec-sidebar-panel-width: 17rem;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .app-content-wrapper {
+        --ec-app-content-padding-left: 5rem;
+        --ec-app-content-padding-right: 5rem;
+        margin-left: auto;
+        margin-right: auto;
+        padding-left: var(--ec-app-content-padding-left);
+        padding-right: var(--ec-app-content-padding-right);
+      }
+      .app-shell {
+        min-height: calc(100vh - 4rem);
+        flex: 1;
+      }
+      .app-shell--rail-only {
+        margin-left: var(--ec-vertical-nav-width);
+      }
+      .app-shell--with-sidebar {
+        margin-left: calc(var(--ec-vertical-nav-width) + var(--ec-sidebar-panel-width));
+      }
+      .vertical-nav-rail {
+        width: var(--ec-vertical-nav-width);
+        border-right: 1px solid rgb(var(--ec-sidebar-border) / 1);
+        background: linear-gradient(
+          180deg,
+          rgb(var(--ec-accent) / 0.1) 0%,
+          rgb(var(--ec-sidebar-bg-gradient)) 16%,
+          rgb(var(--ec-sidebar-bg)) 48%,
+          rgb(var(--ec-sidebar-bg)) 100%
+        );
+        box-shadow:
+          inset -1px 0 0 rgb(var(--ec-page-border) / 0.45),
+          0 24px 44px -34px rgb(var(--ec-page-text) / 0.28);
+        overflow: hidden;
+      }
+      :root[data-vertical-nav-collapsed='true'] .vertical-nav-rail .nav-brand-text,
+      :root[data-vertical-nav-collapsed='true'] .vertical-nav-rail .nav-item-label,
+      :root[data-vertical-nav-collapsed='true'] .vertical-nav-rail .rail-section-label,
+      :root[data-vertical-nav-collapsed='true'] .vertical-nav-rail .nav-count-pill,
+      :root[data-vertical-nav-collapsed='true'] .vertical-nav-rail .nav-label,
+      .vertical-nav-rail[data-collapsed='true'] .nav-brand-text,
+      .vertical-nav-rail[data-collapsed='true'] .nav-item-label,
+      .vertical-nav-rail[data-collapsed='true'] .rail-section-label,
+      .vertical-nav-rail[data-collapsed='true'] .nav-count-pill,
+      .vertical-nav-rail[data-collapsed='true'] .nav-label {
+        display: none;
+      }
+      :root[data-vertical-nav-collapsed='true'] .vertical-nav-rail .nav-brand-link,
+      :root[data-vertical-nav-collapsed='true'] .vertical-nav-rail [data-role='nav-item'],
+      :root[data-vertical-nav-collapsed='true'] .vertical-nav-rail .nav-secondary-item,
+      :root[data-vertical-nav-collapsed='true'] .vertical-nav-rail #vertical-nav-toggle,
+      .vertical-nav-rail[data-collapsed='true'] .nav-brand-link,
+      .vertical-nav-rail[data-collapsed='true'] [data-role='nav-item'],
+      .vertical-nav-rail[data-collapsed='true'] .nav-secondary-item,
+      .vertical-nav-rail[data-collapsed='true'] #vertical-nav-toggle {
+        justify-content: center;
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+      }
+      :root[data-vertical-nav-collapsed='true'] .vertical-nav-rail .nav-brand-link,
+      .vertical-nav-rail[data-collapsed='true'] .nav-brand-link {
+        padding-left: 0;
+        padding-right: 0;
+      }
+      :root[data-vertical-nav-collapsed='true'] .vertical-nav-rail nav,
+      .vertical-nav-rail[data-collapsed='true'] nav {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+      }
+      :root[data-vertical-nav-collapsed='true'] .vertical-nav-rail .rail-divider,
+      .vertical-nav-rail[data-collapsed='true'] .rail-divider {
+        margin-left: 0.25rem;
+        margin-right: 0.25rem;
+      }
+      :root[data-vertical-nav-collapsed='true'] .vertical-nav-rail .nav-premium-icon,
+      .vertical-nav-rail[data-collapsed='true'] .nav-premium-icon {
+        margin-left: 0;
+      }
+      :root[data-vertical-nav-collapsed='true'] .vertical-nav-rail .nav-collapse-icon,
+      .vertical-nav-rail[data-collapsed='true'] .nav-collapse-icon {
+        transform: rotate(180deg);
+      }
+      .sidebar-panel {
+        width: var(--ec-sidebar-panel-width);
+        min-width: var(--ec-sidebar-panel-width);
+        height: 100vh;
+        border-right: 1px solid rgb(var(--ec-content-border));
+        background: rgb(var(--ec-page-bg));
+        display: flex;
+        flex-direction: column;
+        position: fixed;
+        top: 0;
+        left: var(--ec-vertical-nav-width);
+        z-index: 20;
+        overflow-y: auto;
+      }
+      .content-panel {
+        min-width: 0;
+        flex: 1;
+        min-height: calc(100vh - 4rem);
+      }
+      .sidebar-transition {
+        transition-property: width, transform;
+        transition-duration: 300ms;
+        transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+      }
+      .tooltip {
+        visibility: hidden;
+        position: absolute;
+      }
+      .has-tooltip:hover .tooltip {
+        visibility: visible;
+        z-index: 100;
+      }
+
+      /* Hide anchor link by default */
+      .anchor-link {
+        display: inline-block;
+        width: 1em;
+        height: 1em;
+        margin-left: 0.5rem;
+        margin-top: 0.25rem;
+        background-image: url('data:image/svg+xml,%3Csvg%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2024%2024%22%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%3E%3Cpath%20fill%3D%22currentColor%22%20d%3D%22m12.11%2015.39-3.88%203.88a2.52%202.52%200%200%201-3.5%200%202.47%202.47%200%200%201%200-3.5l3.88-3.88a1%201%200%200%200-1.42-1.42l-3.88%203.89a4.48%204.48%200%200%200%206.33%206.33l3.89-3.88a1%201%200%201%200-1.42-1.42Zm8.58-12.08a4.49%204.49%200%200%200-6.33%200l-3.89%203.88a1%201%200%200%200%201.42%201.42l3.88-3.88a2.52%202.52%200%200%201%203.5%200%202.47%202.47%200%200%201%200%203.5l-3.88%203.88a1%201%200%201%200%201.42%201.42l3.88-3.89a4.49%204.49%200%200%200%200-6.33ZM8.83%2015.17a1%201%200%200%200%201.1.22%201%201%200%200%200%20.32-.22l4.92-4.92a1%201%200%200%200-1.42-1.42l-4.92%204.92a1%201%200%200%200%200%201.42Z%22/%3E%3C/svg%3E');
+        background-repeat: no-repeat;
+        background-position: center;
+        background-size: 1em 1em;
+        opacity: 0;
+        transition: opacity 0.2s ease-in-out;
+        text-decoration: none;
+        vertical-align: -2px;
+      }
+
+      /* Show icon on heading hover */
+      h1:hover .anchor-link,
+      h2:hover .anchor-link,
+      h3:hover .anchor-link,
+      h4:hover .anchor-link,
+      h5:hover .anchor-link,
+      h6:hover .anchor-link {
+        opacity: 1;
+      }
+
+      /* Show on keyboard focus */
+      .anchor-link:focus {
+        opacity: 1;
+        outline: none;
+      }
+    </style>
+  </Fragment>
+  {/* Load search data even when sidebar is hidden */}
+  <SearchDataLoader />
+  <main id="eventcatalog-application" class="relative">
+    {
+      showHeader && (
+        <div transition:persist="site-header">
+          <Header showNestedSideBar={showNestedSideBar} />
+        </div>
+      )
+    }
+    <div class={`app-shell ${showNestedSideBar ? 'app-shell--with-sidebar' : 'app-shell--rail-only'}`}>
+      <aside class="flex" id="eventcatalog-vertical-nav">
+        <div
+          id="vertical-nav-rail"
+          data-collapsed="true"
+          transition:persist="vertical-nav-rail"
+          class="vertical-nav-rail fixed top-0 left-0 flex flex-col h-screen z-30 transition-[width] duration-200"
+        >
+          <a
+            href={buildUrl(config.landingPage || '/')}
+            aria-label="Home"
+            class="nav-brand-link flex items-center gap-2.5 px-4 h-[3.75rem] border-b border-[rgb(var(--ec-sidebar-border)/0.7)] flex-shrink-0"
+          >
+            <img
+              src={config?.logo?.src ? buildUrl('/' + config.logo.src.replace(/^\/+/, ''), true) : buildUrl('/logo.png', true)}
+              alt={config?.logo?.alt || 'EventCatalog'}
+              class="w-6 h-6 flex-shrink-0"
+            />
+            <span class="nav-brand-text text-[15px] font-semibold text-[rgb(var(--ec-page-text))] tracking-tight">
+              {config?.logo?.text || config?.organizationName || 'EventCatalog'}
+            </span>
+          </a>
+
+          <nav class="flex flex-col flex-1 overflow-y-auto px-3 py-4 gap-1">
+            {
+              navigationItems.map((item) => {
+                return (
+                  <a
+                    id={item.id}
+                    data-role="nav-item"
+                    href={item.href}
+                    aria-label={item.label}
+                    class={`flex items-center gap-3 px-3 py-2.5 rounded-xl border text-[13px] font-medium transition-all duration-150 ${
+                      item.current
+                        ? 'border-[rgb(var(--ec-accent)/0.2)] bg-[rgb(var(--ec-page-bg)/0.88)] text-[rgb(var(--ec-accent-text))] shadow-sm'
+                        : 'border-transparent text-[rgb(var(--ec-sidebar-text))] hover:border-[rgb(var(--ec-sidebar-border)/0.65)] hover:bg-[rgb(var(--ec-page-bg)/0.78)] hover:text-[rgb(var(--ec-page-text))]'
+                    }`}
+                    title={item.label}
+                  >
+                    <item.icon className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+                    <span class="nav-item-label">{item.label}</span>
+                  </a>
+                );
+              })
+            }
+
+            <hr class="rail-divider my-3 border-t border-[rgb(var(--ec-sidebar-border)/0.7)]" />
+
+            <div
+              class="rail-section-label px-3 pb-1 text-[0.65rem] font-semibold tracking-[0.18em] uppercase text-[rgb(var(--ec-sidebar-text))]"
+            >
+              Browse
+            </div>
+
+            {
+              browseItems.map((item) => (
+                <a
+                  href={item.href}
+                  data-role="secondary-nav-item"
+                  aria-label={item.label}
+                  class={`nav-secondary-item flex items-center gap-3 px-3 py-2.5 rounded-xl border text-[13px] font-medium transition-all duration-150 ${
+                    item.current
+                      ? 'border-[rgb(var(--ec-accent)/0.2)] bg-[rgb(var(--ec-page-bg)/0.88)] text-[rgb(var(--ec-accent-text))] shadow-sm'
+                      : 'border-transparent text-[rgb(var(--ec-sidebar-text))] hover:border-[rgb(var(--ec-sidebar-border)/0.65)] hover:bg-[rgb(var(--ec-page-bg)/0.78)] hover:text-[rgb(var(--ec-page-text))]'
+                  }`}
+                  title={item.label}
+                >
+                  <item.icon className="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+                  <span class="nav-item-label">{item.label}</span>
+                </a>
+              ))
+            }
+
+            <hr class="rail-divider my-3 border-t border-[rgb(var(--ec-sidebar-border)/0.7)]" />
+
+            <div
+              class="rail-section-label px-3 pb-1 text-[0.65rem] font-semibold tracking-[0.18em] uppercase text-[rgb(var(--ec-sidebar-text))]"
+            >
+              Organization
+            </div>
+
+            {
+              organizationItems.map((item) => (
+                <a
+                  href={item.href}
+                  data-role="secondary-nav-item"
+                  aria-label={item.label}
+                  class={`nav-secondary-item flex items-center gap-3 px-3 py-2.5 rounded-xl border text-[13px] font-medium transition-all duration-150 ${
+                    item.current
+                      ? 'border-[rgb(var(--ec-accent)/0.2)] bg-[rgb(var(--ec-page-bg)/0.88)] text-[rgb(var(--ec-accent-text))] shadow-sm'
+                      : 'border-transparent text-[rgb(var(--ec-sidebar-text))] hover:border-[rgb(var(--ec-sidebar-border)/0.65)] hover:bg-[rgb(var(--ec-page-bg)/0.78)] hover:text-[rgb(var(--ec-page-text))]'
+                  }`}
+                  title={item.label}
+                >
+                  <item.icon className="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+                  <span class="nav-item-label">{item.label}</span>
+                </a>
+              ))
+            }
+
+            {premiumFeatures.length > 0 && <hr class="rail-divider my-2 border-t border-[rgb(var(--ec-sidebar-border)/0.7)]" />}
+
+            {
+              premiumFeatures.map((item) => (
+                <a
+                  id={item.id}
+                  data-role="nav-item"
+                  href={item.href}
+                  aria-label={item.label}
+                  class={`flex items-center gap-3 px-3 py-2.5 rounded-xl border text-[13px] font-medium transition-all duration-150 ${
+                    item.current
+                      ? 'border-[rgb(var(--ec-accent)/0.2)] bg-[rgb(var(--ec-page-bg)/0.88)] text-[rgb(var(--ec-accent-text))] shadow-sm'
+                      : 'border-transparent text-[rgb(var(--ec-sidebar-text))] hover:border-[rgb(var(--ec-sidebar-border)/0.65)] hover:bg-[rgb(var(--ec-page-bg)/0.78)] hover:text-[rgb(var(--ec-page-text))]'
+                  }`}
+                  title={item.label}
+                >
+                  <item.icon className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+                  <span class="nav-item-label">{item.label}</span>
+                </a>
+              ))
+            }
+          </nav>
+
+          <div class="border-t border-[rgb(var(--ec-sidebar-border)/0.7)] px-3 py-3 flex-shrink-0">
+            <button
+              id="vertical-nav-toggle"
+              type="button"
+              aria-label="Collapse sidebar"
+              class="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent text-[13px] font-medium text-[rgb(var(--ec-sidebar-text))] hover:border-[rgb(var(--ec-sidebar-border)/0.65)] hover:bg-[rgb(var(--ec-page-bg)/0.78)] hover:text-[rgb(var(--ec-page-text))] transition-all duration-150 w-full"
+            >
+              <PanelLeftClose className="h-4 w-4 flex-shrink-0 nav-collapse-icon" aria-hidden="true" />
+              <span class="nav-label">Collapse</span>
+            </button>
+          </div>
+        </div>
+      </aside>
+      {showNestedSideBar && <SideNav id="sidebar" class={`sidebar-panel sidebar-transition`} />}
+      <main class="content-panel sidebar-transition w-full bg-[rgb(var(--ec-page-bg))]" id="content">
+        <div class="app-content-wrapper">
+          <slot />
+        </div>
+      </main>
+
+      <!-- Create a overlay that tells people to purchase backstage plugin if they want to embed the page -->
+      <div class="absolute inset-0 bg-black items-center justify-center z-50 hidden" id="embed-overlay">
+        <div class="text-white text-center space-y-4">
+          <div>
+            <h1 class="text-2xl font-bold">EventCatalog Backstage Integration</h1>
+            <p class="text-md text-red-500">Missing license key for backstage integration.</p>
+          </div>
+          <div>
+            <p class="text-sm text-gray-500">Please configure the backstage plugin to embed this page into Backstage.</p>
+            <a href="https://www.eventcatalog.dev/integrations/backstage" class="text-blue-500 text-xs"
+              >Configure backstage plugin &rarr;</a
+            >
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</BaseLayout>
+
+<ClientRouter />
+<script
+  define:vars={{
+    navigationItems,
+    currentNavigationItem,
+    canPageBeEmbedded,
+  }}
+>
+  const VERTICAL_NAV_STORAGE_KEY = 'eventcatalog-vertical-nav-collapsed';
+  const ACTIVE_NAV_CLASSES = [
+    'border-[rgb(var(--ec-accent)/0.2)]',
+    'bg-[rgb(var(--ec-page-bg)/0.88)]',
+    'text-[rgb(var(--ec-accent-text))]',
+    'shadow-sm',
+  ];
+  const INACTIVE_NAV_CLASSES = [
+    'border-transparent',
+    'text-[rgb(var(--ec-sidebar-text))]',
+    'hover:border-[rgb(var(--ec-sidebar-border)/0.65)]',
+    'hover:bg-[rgb(var(--ec-page-bg)/0.78)]',
+    'hover:text-[rgb(var(--ec-page-text))]',
+  ];
+
+  const isNavItemCurrent = (id, pathname) => {
+    if (id === '/') {
+      return (
+        pathname === '/' ||
+        (pathname.includes('/docs') && !pathname.includes('/docs/custom')) ||
+        pathname.includes('/architecture/') ||
+        pathname.includes('/visualiser') ||
+        (pathname.includes('/schemas') && !pathname.includes('/schemas/explorer') && !pathname.includes('/schemas/fields'))
+      );
+    }
+
+    if (id === '/schemas/explorer') {
+      return pathname.includes('/schemas/explorer') && !pathname.includes('/schemas/fields');
+    }
+
+    if (id === '/schemas/fields') {
+      return pathname.includes('/schemas/fields');
+    }
+
+    if (id === '/studio') {
+      return pathname.includes('/studio');
+    }
+
+    if (id === '/docs/custom') {
+      return pathname.includes('/docs/custom');
+    }
+
+    return false;
+  };
+
+  const syncNavItemStates = () => {
+    const pathname = window.location.pathname;
+    const navItems = document.querySelectorAll('[data-role="nav-item"]');
+    const secondaryNavItems = document.querySelectorAll('[data-role="secondary-nav-item"]');
+
+    navItems.forEach((item) => {
+      const id = item.getAttribute('id');
+      const isCurrent = id ? isNavItemCurrent(id, pathname) : false;
+
+      if (isCurrent) {
+        item.classList.remove(...INACTIVE_NAV_CLASSES);
+        item.classList.add(...ACTIVE_NAV_CLASSES);
+      } else {
+        item.classList.remove(...ACTIVE_NAV_CLASSES);
+        item.classList.add(...INACTIVE_NAV_CLASSES);
+      }
+    });
+
+    secondaryNavItems.forEach((item) => {
+      const href = item.getAttribute('href');
+      const targetPath = href ? new URL(href, window.location.origin).pathname : null;
+      const isCurrent = targetPath ? pathname === targetPath : false;
+
+      if (isCurrent) {
+        item.classList.remove(...INACTIVE_NAV_CLASSES);
+        item.classList.add(...ACTIVE_NAV_CLASSES);
+      } else {
+        item.classList.remove(...ACTIVE_NAV_CLASSES);
+        item.classList.add(...INACTIVE_NAV_CLASSES);
+      }
+    });
+  };
+
+  const getPersistedVerticalNavCollapsedState = () => {
+    try {
+      const savedState = localStorage.getItem(VERTICAL_NAV_STORAGE_KEY);
+      return savedState === null ? true : savedState === 'true';
+    } catch (error) {
+      return true;
+    }
+  };
+
+  const applyPersistedVerticalNavState = () => {
+    const isCollapsed = getPersistedVerticalNavCollapsedState();
+    document.documentElement.setAttribute('data-vertical-nav-collapsed', isCollapsed ? 'true' : 'false');
+
+    const verticalNavRail = document.getElementById('vertical-nav-rail');
+    if (verticalNavRail) {
+      verticalNavRail.setAttribute('data-collapsed', isCollapsed ? 'true' : 'false');
+    }
+  };
+
+  // Apply immediately when this script executes so transitions don't briefly re-open the rail.
+  applyPersistedVerticalNavState();
+
+  // Re-apply around Astro view transitions because the incoming document can momentarily drop the root attribute.
+  document.addEventListener('astro:before-preparation', applyPersistedVerticalNavState);
+  document.addEventListener('astro:after-swap', applyPersistedVerticalNavState);
+
+  // Listen for Astro transititions
+  document.addEventListener('astro:page-load', () => {
+    applyPersistedVerticalNavState();
+    document.dispatchEvent(new CustomEvent('contentLoaded'));
+  });
+
+  // Listen for DOM loaded
+  document.addEventListener('DOMContentLoaded', () => {
+    applyPersistedVerticalNavState();
+    document.dispatchEvent(new CustomEvent('contentLoaded'));
+  });
+
+  document.addEventListener('contentLoaded', () => {
+    // Users can add ?embed=true to the URL to hide the navigation
+    const urlSearchParams = new URLSearchParams(window.location.search);
+    const params = Object.fromEntries(urlSearchParams.entries());
+    const embeded = params.embed === 'true' ? true : false;
+    const content = document.getElementById('content');
+    const shell = document.querySelector('.app-shell');
+    const app = document.getElementById('eventcatalog-application');
+    const verticalNavRail = document.getElementById('vertical-nav-rail');
+    const verticalNavToggle = document.getElementById('vertical-nav-toggle');
+    const navToggleLabel = verticalNavToggle?.querySelector('.nav-label');
+    const collapseIcon = verticalNavToggle?.querySelector('.nav-collapse-icon');
+
+    const setVerticalNavCollapsedState = (collapsed) => {
+      if (!app || !verticalNavRail || !verticalNavToggle || !navToggleLabel) return;
+      const railTextElements = verticalNavRail.querySelectorAll(
+        '.nav-brand-text, .nav-item-label, .rail-section-label, .nav-count-pill, .nav-label'
+      );
+
+      document.documentElement.setAttribute('data-vertical-nav-collapsed', collapsed ? 'true' : 'false');
+      verticalNavRail.setAttribute('data-collapsed', collapsed ? 'true' : 'false');
+      verticalNavToggle.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+      verticalNavToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      navToggleLabel.textContent = collapsed ? 'Expand' : 'Collapse';
+      railTextElements.forEach((element) => {
+        if (collapsed) {
+          element.setAttribute('hidden', '');
+        } else {
+          element.removeAttribute('hidden');
+        }
+      });
+
+      if (collapseIcon) {
+        collapseIcon.setAttribute('title', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+      }
+    };
+
+    if (embeded && !canPageBeEmbedded) {
+      const overlay = document.getElementById('embed-overlay');
+      overlay.style.display = 'flex';
+      return;
+    }
+
+    if (embeded) {
+      const elementsToHide = [
+        'eventcatalog-vertical-nav',
+        'eventcatalog-header',
+        'eventcatalog-header-spacer',
+        'visualiser-footer',
+        // /discover page elements
+        'discover-collection-tabs',
+        'discover-title',
+      ];
+
+      elementsToHide.forEach((id) => {
+        const element = document.getElementById(id);
+        if (element) element.style.display = 'none';
+      });
+
+      document.body.style.overflow = '';
+      app.style.overflow = '';
+      if (shell) shell.style.marginLeft = '0';
+      return;
+    }
+
+    if (shell) {
+      shell.style.marginLeft = '';
+    }
+
+    setVerticalNavCollapsedState(getPersistedVerticalNavCollapsedState());
+
+    syncNavItemStates();
+
+    const navItems = document.querySelectorAll('[data-role="nav-item"]');
+
+    // Navigation items simply navigate to their href - no toggle logic
+    navItems.forEach((item) => {
+      item.onclick = (e) => {
+        const id = item.getAttribute('id');
+        const navItem = navigationItems.find((navItem) => navItem.id === id);
+
+        if (navItem && navItem.href) {
+          window.location.href = navItem.href;
+        }
+      };
+    });
+
+    if (verticalNavToggle) {
+      verticalNavToggle.onclick = () => {
+        const isCollapsed = verticalNavRail?.getAttribute('data-collapsed') === 'true';
+        const nextState = !isCollapsed;
+
+        setVerticalNavCollapsedState(nextState);
+
+        try {
+          localStorage.setItem(VERTICAL_NAV_STORAGE_KEY, String(nextState));
+        } catch (error) {}
+      };
+    }
+  });
+</script>

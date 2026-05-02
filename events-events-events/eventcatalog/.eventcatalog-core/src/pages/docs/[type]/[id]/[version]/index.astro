@@ -1,0 +1,738 @@
+---
+// External dependencies
+import { marked } from 'marked';
+
+import { render } from 'astro:content';
+import type { CollectionEntry } from 'astro:content';
+
+import VerticalSideBarLayout from '@layouts/VerticalSideBarLayout.astro';
+import Footer from '@layouts/Footer.astro';
+
+import components from '@components/MDX/components';
+import NodeGraph from '@components/MDX/NodeGraph/NodeGraph.astro';
+import SchemaViewer from '@components/MDX/SchemaViewer/SchemaViewerRoot.astro';
+import Admonition from '@components/MDX/Admonition';
+import VersionList from '@components/Lists/VersionList.astro';
+import CopyAsMarkdown from '@components/CopyAsMarkdown';
+import FavoriteButton from '@components/FavoriteButton';
+import { shouldRenderSideBarSection } from '@stores/sidebar-store/builders/shared';
+
+import {
+  QueueListIcon,
+  RectangleGroupIcon,
+  ServerIcon,
+  BoltIcon,
+  ChatBubbleLeftIcon,
+  MagnifyingGlassIcon,
+  MapIcon,
+  ClockIcon,
+} from '@heroicons/react/24/outline';
+import { ArrowsRightLeftIcon } from '@heroicons/react/20/solid';
+import { Box, Boxes, SquarePenIcon, DatabaseIcon, DatabaseZapIcon, ShieldCheckIcon, AlignLeft, Package } from 'lucide-react';
+
+import { getSpecificationsForService } from '@utils/collections/services';
+import { resourceToCollectionMap, collectionToResourceMap, getDeprecatedDetails } from '@utils/collections/util';
+import { getSchemasFromResource } from '@utils/collections/schemas';
+import { getIcon } from '@utils/badges';
+import { buildUrl, buildEditUrlForResource } from '@utils/url-builder';
+import { isIconPath, resolveIconUrl } from '@utils/icon';
+import {
+  isEventCatalogChatEnabled,
+  isMarkdownDownloadEnabled,
+  isVisualiserEnabled,
+  isRSSEnabled,
+  isExportPDFEnabled,
+} from '@utils/feature';
+import { getMDXComponentsByName } from '@utils/markdown';
+
+import type { CollectionTypes } from '@types';
+
+import config from '@config';
+
+import { Page } from './_index.data';
+
+export const prerender = Page.prerender;
+export const getStaticPaths = Page.getStaticPaths;
+
+// Get data
+const props = await Page.getData(Astro);
+
+const { Content, headings } = await render(props);
+
+const pageTitle = `${props.collection} | ${props.data.name}`.replace(/^\w/, (c) => c.toUpperCase());
+const contentBadges = props.data.badges || [];
+const editUrl =
+  props.data.editUrl || (config.editUrl && props?.filePath ? buildEditUrlForResource(config.editUrl, props?.filePath) : '');
+
+const headerIconSrc = isIconPath(props.data.styles?.icon) ? resolveIconUrl(props.data.styles!.icon!) : null;
+
+const getContentBadges = () =>
+  contentBadges.map((badge: any) => ({
+    ...badge,
+    icon: badge.icon ? getIcon(badge.icon) : null,
+  }));
+
+const getBadge = () => {
+  if (props.collection === 'services') {
+    return [{ backgroundColor: 'pink', textColor: 'pink', content: 'Service', icon: ServerIcon }];
+  }
+  if (props.collection === 'events') {
+    return [{ backgroundColor: 'orange', textColor: 'orange', content: 'Event', icon: BoltIcon }];
+  }
+  if (props.collection === 'commands') {
+    return [{ backgroundColor: 'blue', textColor: 'blue', content: 'Command', icon: ChatBubbleLeftIcon }];
+  }
+  if (props.collection === 'queries') {
+    return [{ backgroundColor: 'green', textColor: 'green', content: 'Query', icon: MagnifyingGlassIcon }];
+  }
+  if (props.collection === 'domains') {
+    return [
+      {
+        backgroundColor: 'yellow',
+        textColor: 'yellow',
+        content: 'Domain',
+        icon: RectangleGroupIcon,
+      },
+    ];
+  }
+
+  if (props.collection === 'flows') {
+    return [{ backgroundColor: 'teal', textColor: 'teal', content: 'Flow', icon: QueueListIcon }];
+  }
+
+  if (props.collection === 'channels') {
+    return [{ backgroundColor: 'teal', textColor: 'teal', content: 'Channel', icon: ArrowsRightLeftIcon }];
+  }
+
+  if (props.collection === 'containers') {
+    const badges = [];
+    const content = props.data.container_type?.charAt(0).toUpperCase() + props.data.container_type?.slice(1) || 'Database';
+
+    badges.push({ backgroundColor: 'blue', textColor: 'blue', content: content, icon: DatabaseIcon });
+
+    if (props.data?.technology) {
+      badges.push({
+        backgroundColor: 'indigo',
+        textColor: 'indigo',
+        content: `${props.data.technology}`,
+        icon: DatabaseZapIcon,
+      });
+    }
+
+    if (props.data?.residency) {
+      badges.push({
+        backgroundColor: 'red',
+        textColor: 'red',
+        content: `Residency: ${props.data.residency}`,
+        icon: MapIcon,
+      });
+    }
+
+    if (props.data?.retention) {
+      badges.push({
+        backgroundColor: 'green',
+        textColor: 'green',
+        content: `Retention: ${props.data.retention}`,
+        icon: ClockIcon,
+      });
+    }
+
+    if (props.data?.access_mode) {
+      badges.push({
+        backgroundColor: 'green',
+        textColor: 'green',
+        content: `Access Mode: ${props.data.access_mode}`,
+        icon: ShieldCheckIcon,
+      });
+    }
+
+    return badges;
+  }
+
+  if (props.collection === 'entities') {
+    const entityBadges = [{ backgroundColor: 'purple', textColor: 'purple', content: 'Entity', icon: Box, class: 'text-gray' }];
+    if (props.data.aggregateRoot) {
+      entityBadges.push({
+        backgroundColor: 'purple',
+        textColor: 'purple',
+        content: '(Aggregate Root)',
+        icon: Boxes,
+        class: 'text-gray',
+      });
+    }
+    return entityBadges;
+  }
+
+  if (props.collection === 'data-products') {
+    return [{ backgroundColor: 'indigo', textColor: 'indigo', content: 'Data Product', icon: Package }];
+  }
+
+  return [{ backgroundColor: 'teal', textColor: 'teal', content: '', icon: QueueListIcon, class: 'text-gray' }];
+};
+
+const getSpecificationBadges = () => {
+  const badges = [];
+
+  const specifications = getSpecificationsForService(props);
+
+  const asyncapiSpecs = specifications.filter((spec) => spec.type === 'asyncapi');
+  const openapiSpecs = specifications.filter((spec) => spec.type === 'openapi');
+  const graphQLSpecs = specifications.filter((spec) => spec.type === 'graphql');
+
+  if (openapiSpecs.length > 0) {
+    for (const spec of openapiSpecs) {
+      badges.push({
+        backgroundColor: 'white',
+        textColor: 'gray',
+        content: spec.name || 'OpenAPI Spec',
+        iconURL: buildUrl('/icons/openapi.svg', true),
+        class: 'text-[rgb(var(--ec-page-text))] hover:underline',
+        id: 'open-api-badge',
+        url: buildUrl(`/docs/${props.collection}/${props.data.id}/${props.data.version}/spec/${spec.filenameWithoutExtension}`),
+      });
+    }
+  }
+
+  if (asyncapiSpecs.length > 0) {
+    for (const spec of asyncapiSpecs) {
+      badges.push({
+        backgroundColor: 'white',
+        textColor: 'gray',
+        content: spec.name || 'AsyncAPI Spec',
+        iconURL: buildUrl('/icons/asyncapi.svg', true),
+        class: 'text-[rgb(var(--ec-page-text))] hover:underline',
+        id: 'asyncapi-badge',
+        url: buildUrl(
+          `/docs/${props.collection}/${props.data.id}/${props.data.version}/asyncapi/${spec.filenameWithoutExtension}`
+        ),
+      });
+    }
+  }
+
+  if (graphQLSpecs.length > 0) {
+    for (const spec of graphQLSpecs) {
+      badges.push({
+        backgroundColor: 'white',
+        textColor: 'gray',
+        content: spec.name || 'GraphQL Spec',
+        iconURL: buildUrl('/icons/graphql.svg', true),
+        class: 'text-[rgb(var(--ec-page-text))] hover:underline',
+        id: 'graphql-badge',
+        url: buildUrl(
+          `/docs/${props.collection}/${props.data.id}/${props.data.version}/graphql/${spec.filenameWithoutExtension}`
+        ),
+      });
+    }
+  }
+
+  return badges;
+};
+
+const badges = [...getBadge(), ...getContentBadges(), ...getSpecificationBadges()];
+
+// Index only the latest version
+const pagefindAttributes =
+  props.data.version === props.data.latestVersion
+    ? {
+        'data-pagefind-body': '',
+        'data-pagefind-meta': `title:${pageTitle}`,
+      }
+    : {};
+
+const {
+  hasDeprecated,
+  message: deprecatedMessage,
+  isMarkedAsDeprecated,
+  deprecatedDate: formattedDate,
+} = getDeprecatedDetails(props as unknown as CollectionEntry<CollectionTypes>);
+
+let friendlyCollectionName = props.collection.slice(0, props.collection.length - 1);
+friendlyCollectionName = friendlyCollectionName === 'querie' ? 'query' : friendlyCollectionName;
+
+const schemasForResource = getSchemasFromResource(props);
+
+const messageCollections = ['events', 'commands', 'queries'];
+const printUrl =
+  isExportPDFEnabled() && messageCollections.includes(props.collection)
+    ? buildUrl(`/docs/print/${props.collection}/${props.data.id}/${props.data.version}`)
+    : undefined;
+
+const generatePromptForResource = (props: any) => {
+  return `
+    Please tell me more about the ${props.collection.slice(0, props.collection.length - 1)} -  ${props.data.name} v${props.data.version} in this catalog.
+  `;
+};
+
+// Handle node graphs in the markdown
+let nodeGraphs = getMDXComponentsByName(props.body || '', 'NodeGraph') || [];
+
+// Get props for the node graph (when no id is passed, we assume its the current page)
+const nodeGraphPropsForPage = nodeGraphs.find((nodeGraph: any) => nodeGraph.id === undefined) || ({} as any);
+
+const shouldRenderVersionList =
+  shouldRenderSideBarSection(props, 'versions') && props.data.versions && props.data.versions.length > 1;
+
+// This will render the graph for this page
+nodeGraphs.push({
+  id: props.data.id,
+  version: props.data.version,
+  type: collectionToResourceMap[props.collection as keyof typeof collectionToResourceMap],
+  ...nodeGraphPropsForPage,
+  search: nodeGraphPropsForPage?.search ? nodeGraphPropsForPage.search === 'true' : true,
+  legend: nodeGraphPropsForPage?.legend ? nodeGraphPropsForPage.legend === 'true' : true,
+});
+---
+
+<VerticalSideBarLayout title={pageTitle} description={props.data.summary}>
+  <main class="flex docs-layout min-h-full bg-[rgb(var(--ec-page-bg))]" {...pagefindAttributes}>
+    <div class="flex docs-layout w-full">
+      <div class="w-full lg:mr-2 pr-24 py-8 bg-[rgb(var(--ec-page-bg))]">
+        <div class="border-b border-[rgb(var(--ec-page-border))] md:pb-2">
+          <div>
+            <div class="flex justify-between items-center">
+              <div class="flex items-center gap-2">
+                {
+                  headerIconSrc && (
+                    <img
+                      src={headerIconSrc}
+                      alt={props.data.name}
+                      class="w-8 h-8 md:w-10 md:h-10 object-contain rounded-md shrink-0"
+                    />
+                  )
+                }
+                <h2
+                  id="doc-page-header"
+                  class={`text-2xl md:text-4xl font-bold text-[rgb(var(--ec-page-text))] ${props.data.deprecated && hasDeprecated ? 'text-red-500' : ''}`}
+                >
+                  {props.data.name}
+                  {props.data.latestVersion !== props.data.version && <span>(v{props.data.version})</span>}
+                </h2>
+                <FavoriteButton
+                  client:load
+                  nodeKey={`${collectionToResourceMap[props.collection as keyof typeof collectionToResourceMap]}:${props.data.id}:${props.data.version}`}
+                  title={props.data.name}
+                  badge={collectionToResourceMap[props.collection as keyof typeof collectionToResourceMap]
+                    .charAt(0)
+                    .toUpperCase() + collectionToResourceMap[props.collection as keyof typeof collectionToResourceMap].slice(1)}
+                  href={buildUrl(`/docs/${props.collection}/${props.data.id}/${props.data.version}`)}
+                  size="md"
+                />
+              </div>
+              <div class="hidden lg:block">
+                <CopyAsMarkdown
+                  client:only="react"
+                  schemas={schemasForResource}
+                  chatQuery={generatePromptForResource(props)}
+                  chatEnabled={isEventCatalogChatEnabled()}
+                  markdownDownloadEnabled={isMarkdownDownloadEnabled()}
+                  rssFeedEnabled={isRSSEnabled()}
+                  editUrl={editUrl}
+                  preferChatAsDefault={isEventCatalogChatEnabled()}
+                  printUrl={printUrl}
+                />
+              </div>
+            </div>
+
+            <h2 class="text-base pt-2 text-[rgb(var(--ec-page-text-muted))] font-light">{props.data.summary}</h2>
+            {
+              badges && (
+                <div class="flex flex-wrap gap-3 py-4">
+                  {badges.map((badge: any) => {
+                    return (
+                      <span
+                        id={badge.id || ''}
+                        class={`
+                          inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium
+                          bg-[rgb(var(--ec-content-hover))] border border-[rgb(var(--ec-page-border))]
+                          text-[rgb(var(--ec-page-text))]
+                          shadow-xs
+                          ${badge.class ? badge.class : ''}
+                        `}
+                      >
+                        {badge.icon && <badge.icon className="w-4 h-4 flex-shrink-0 text-[rgb(var(--ec-icon-color))]" />}
+                        {badge.iconURL && <img src={badge.iconURL} class="w-4 h-4 flex-shrink-0 opacity-80" alt="" />}
+                        <span>{badge.content}</span>
+                      </span>
+                    );
+                  })}
+                </div>
+              )
+            }
+
+            {
+              isMarkedAsDeprecated && hasDeprecated && (
+                <Admonition
+                  className="w-full"
+                  type="alert"
+                  title={formattedDate ? `This ${friendlyCollectionName} was deprecated on ${formattedDate}` : `Deprecated`}
+                >
+                  <div>
+                    {!deprecatedMessage && (
+                      <p>
+                        The {friendlyCollectionName} has been marked as deprecated
+                        {formattedDate && ` on ${formattedDate}`}.
+                      </p>
+                    )}
+                    {deprecatedMessage && <div class="prose prose-sm max-w-none" set:html={marked.parse(deprecatedMessage)} />}
+                  </div>
+                </Admonition>
+              )
+            }
+            {
+              isMarkedAsDeprecated && !hasDeprecated && (
+                <Admonition type="warning" title={`This ${friendlyCollectionName} will be deprecated on ${formattedDate}`}>
+                  <div>
+                    {!deprecatedMessage && (
+                      <p>
+                        The {friendlyCollectionName} will be deprecated on {formattedDate}.
+                      </p>
+                    )}
+                    {deprecatedMessage && <div class="prose prose-sm max-w-none" set:html={marked.parse(deprecatedMessage)} />}
+                  </div>
+                </Admonition>
+              )
+            }
+
+            {
+              props.data.draft && (
+                <Admonition type="warning" title={props.data?.draft?.title || `Draft ${friendlyCollectionName}`}>
+                  <div>
+                    {!props.data.draft.message && (
+                      <p>This resource has been marked as a draft and may still be under development.</p>
+                    )}
+                    {props.data.draft.message && (
+                      <div class="prose prose-sm max-w-none" set:html={marked.parse(props.data.draft.message)} />
+                    )}
+                  </div>
+                </Admonition>
+              )
+            }
+          </div>
+        </div>
+
+        <div data-pagefind-ignore>
+          {
+            props.data.version !== props.data.latestVersion && (
+              <div class="rounded-md bg-[rgb(var(--ec-accent-subtle))] p-4 not-prose my-4">
+                <div class="flex">
+                  <div class="flex-shrink-0">
+                    <svg class="h-5 w-5 text-[rgb(var(--ec-accent))]" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                      <path
+                        fill-rule="evenodd"
+                        d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z"
+                        clip-rule="evenodd"
+                      />
+                    </svg>
+                  </div>
+                  <div class="ml-3">
+                    <h3 class="text-sm font-medium text-[rgb(var(--ec-accent-text))]">New version found</h3>
+                    <div class="mt-2 text-sm text-[rgb(var(--ec-accent-text))]">
+                      <p>
+                        You are looking at a previous version of the {props.collection.slice(0, props.collection.length - 1)}{' '}
+                        <strong>{props.data.name}</strong>.{' '}
+                        <a
+                          class="underline hover:text-primary block pt-2"
+                          href={buildUrl(`/docs/${props.collection}/${props.data.id}/${props.data.latestVersion}`)}
+                        >
+                          The latest version of this {props.collection.slice(0, props.collection.length - 1)} is
+                          <span>v{props.data.latestVersion}</span> &rarr;
+                        </a>
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )
+          }
+        </div>
+
+        <div class="prose prose-md py-4 w-full text-[15px]">
+          <Content components={components(props)} />
+        </div>
+        <div data-pagefind-ignore>
+          <!-- @ts-ignore -->
+          <!-- <SchemaViewer id={props.data.id} catalog={props.catalog} filePath={props.filePath} /> -->
+          <SchemaViewer id={props.data.id} filePath={props.filePath} />
+
+          {
+            nodeGraphs.length > 0 &&
+              nodeGraphs.map((nodeGraph: any) => {
+                const collection = resourceToCollectionMap[nodeGraph.type as keyof typeof resourceToCollectionMap];
+                return (
+                  <NodeGraph
+                    id={nodeGraph.id}
+                    version={nodeGraph.version}
+                    collection={collection}
+                    title={nodeGraph.title}
+                    mode={nodeGraph.mode || 'simple'}
+                    linksToVisualiser={true}
+                    showSearch={nodeGraph.search ?? true}
+                    showLegend={nodeGraph.legend ?? true}
+                    href={
+                      isVisualiserEnabled()
+                        ? {
+                            label: 'Open in Visualiser',
+                            url: buildUrl(`/visualiser/${collection}/${nodeGraph.id}/${nodeGraph.version}`),
+                          }
+                        : undefined
+                    }
+                  />
+                );
+              })
+          }
+        </div>
+        <Footer />
+        <!-- Add edit this page button  with icon and text-->
+        <div class="flex justify-end">
+          <!-- Built with EventCatalog -->
+          {
+            editUrl && (
+              <div class="flex justify-end">
+                <a
+                  href={editUrl}
+                  class="text-sm text-[rgb(var(--ec-page-text-muted))] hover:text-[rgb(var(--ec-page-text))] border border-[rgb(var(--ec-page-border))] rounded-md p-2"
+                >
+                  <SquarePenIcon className="w-4 h-4 inline-block mr-1" />
+                  Edit this page
+                </a>
+              </div>
+            )
+          }
+        </div>
+      </div>
+      <aside
+        id="eventcatalog-docs-sidebar"
+        class="hidden xl:block sticky top-[4rem] self-start w-[280px] max-h-[calc(100vh-4rem)] overflow-y-auto py-2 flex-shrink-0 pr-10 bg-[rgb(var(--ec-page-bg))]"
+      >
+        <div class="mt-8 space-y-8">
+          {
+            headings.length > 0 && (
+              <div>
+                <h3 class="text-xs text-[rgb(var(--ec-page-text))] font-semibold group-data-[hover]:text-[rgb(var(--ec-page-text))]/80 capitalize flex items-center gap-2 mb-4">
+                  <AlignLeft className="w-4 h-4" />
+                  On this page
+                </h3>
+                <div class="space-y-8">
+                  <nav class="text-xs border-l border-[rgb(var(--ec-page-border))]">
+                    {headings.map((heading) => {
+                      const level = heading.depth > 2 ? heading.depth : 1;
+                      if (heading.depth > 3) {
+                        return null;
+                      }
+                      return (
+                        <a
+                          href={`#${heading.slug}`}
+                          class={`block py-1.5 pr-2.5 leading-5 text-[rgb(var(--ec-page-text-muted))] hover:border-[rgb(var(--ec-page-border))] hover:text-[rgb(var(--ec-page-text))] border-l-2 border-transparent -ml-px transition-all duration-200`}
+                          style={`padding-left: ${level * 0.75}rem`}
+                        >
+                          {heading.text}
+                        </a>
+                      );
+                    })}
+                  </nav>
+                </div>
+              </div>
+            )
+          }
+          {
+            shouldRenderVersionList && (
+              <VersionList
+                title={`Versions (${props.data.versions?.length})`}
+                versions={props.data.versions}
+                collectionItem={props}
+              />
+            )
+          }
+        </div>
+      </aside>
+    </div>
+
+    <style is:global>
+      .docs-layout .prose {
+        max-width: none;
+        overflow: auto;
+      }
+
+      .mermaid svg {
+        margin: 1em auto 2em;
+      }
+
+      /* Fix for architecture diagrams */
+      .mermaid[data-content*='architecture'] svg {
+        max-width: 350px !important;
+        margin: 0;
+        /* width: 100px !important; */
+      }
+
+      /* TOC active state styles using accent variables */
+      .toc-active-text {
+        color: rgb(var(--ec-accent));
+      }
+      .toc-active-border {
+        border-color: rgb(var(--ec-accent));
+      }
+    </style>
+
+    <script define:vars={{ config }}>
+      window.eventcatalog = {};
+      window.eventcatalog.mermaid = config.mermaid;
+    </script>
+
+    <script>
+      import { destroyZoomInstances, renderMermaidWithZoom } from '@utils/mermaid-zoom';
+
+      // Listen for Astro transitions
+      document.addEventListener('astro:page-load', () => {
+        destroyZoomInstances();
+        const graphs = document.getElementsByClassName('mermaid');
+        if (graphs.length > 0) {
+          renderMermaidWithZoom(graphs, window.eventcatalog?.mermaid);
+        }
+      });
+
+      // Initial render
+      const graphs = document.getElementsByClassName('mermaid');
+      if (graphs.length > 0) {
+        renderMermaidWithZoom(graphs, window.eventcatalog?.mermaid);
+      }
+
+      // Make available globally for accordion component
+      window.renderDiagrams = (graphs: HTMLCollectionOf<Element>) => {
+        renderMermaidWithZoom(graphs, window.eventcatalog?.mermaid);
+      };
+    </script>
+
+    <script>
+      import { renderPlantUMLWithZoom } from '@utils/mermaid-zoom';
+
+      function initPlantUML() {
+        const blocks = document.getElementsByClassName('plantuml');
+        if (blocks.length > 0) {
+          renderPlantUMLWithZoom(blocks);
+        }
+      }
+
+      // Run on initial load and page transitions
+      initPlantUML();
+      document.addEventListener('astro:page-load', initPlantUML);
+
+      // Make available globally for accordion component
+      window.renderPlantUML = (blocks: HTMLCollectionOf<Element>) => {
+        renderPlantUMLWithZoom(blocks);
+      };
+    </script>
+    <script>
+      // @ts-nocheck
+      function setupObserver() {
+        try {
+          const observerOptions = {
+            rootMargin: '0px 0px -40% 0px',
+            threshold: 0.1,
+          };
+
+          // Flag to temporarily disable observer after click
+          let observerPaused = false;
+
+          // Function to highlight a TOC item
+          function highlightTocItem(id) {
+            // Remove active class from all links
+            document.querySelectorAll('.active-toc-item').forEach((link) => {
+              link.classList.remove('active-toc-item', 'toc-active-text', 'font-medium', 'toc-active-border');
+              link.classList.add('border-transparent');
+            });
+
+            // Add active class to current link
+            const tocLink = document.querySelector(`nav a[href="#${id}"]`);
+            if (tocLink) {
+              tocLink.classList.add('active-toc-item', 'toc-active-text', 'font-medium', 'toc-active-border');
+              tocLink.classList.remove('border-transparent');
+
+              // Scroll the highlighted item into view with a small delay to ensure DOM updates first
+              setTimeout(() => {
+                tocLink.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+              }, 10);
+            }
+          }
+
+          // Set up the intersection observer for scrolling
+          const observer = new IntersectionObserver((entries) => {
+            // If observer is paused, don't process entries
+            if (observerPaused) return;
+
+            entries.forEach((entry) => {
+              try {
+                const id = entry.target.getAttribute('id');
+                if (entry.isIntersecting && id) {
+                  highlightTocItem(id);
+                }
+              } catch (entryError) {
+                console.error('Error processing intersection entry:', entryError);
+              }
+            });
+          }, observerOptions);
+
+          // Find all headings in the content area within the .prose container to observe
+          const prose = document.querySelector('.prose');
+          if (!prose) {
+            console.warn('No .prose container found for TOC highlighting');
+            return;
+          }
+
+          // First try to find headings with IDs
+          const headings = prose.querySelectorAll('h1[id], h2[id], h3[id]');
+
+          if (headings.length > 0) {
+            headings.forEach((heading) => {
+              observer.observe(heading);
+            });
+          } else {
+            // Fallback: If no headings with IDs found, attach IDs to them
+            const allHeadings = prose.querySelectorAll('h1, h2, h3');
+
+            allHeadings.forEach((heading) => {
+              // Only add ID if it doesn't exist
+              if (!heading.id) {
+                const text = heading.textContent || '';
+                const slug = text
+                  .toLowerCase()
+                  .replace(/[^\w\s-]/g, '')
+                  .replace(/\s+/g, '-');
+                heading.id = slug;
+              }
+              observer.observe(heading);
+            });
+          }
+
+          // Add click event listeners to all TOC links
+          const tocLinks = document.querySelectorAll('nav a[href^="#"]');
+          tocLinks.forEach((link) => {
+            link.addEventListener('click', (e) => {
+              // Get the ID from the href attribute
+              const hrefAttr = link.getAttribute('href');
+              if (!hrefAttr) return;
+
+              const id = hrefAttr.substring(1);
+
+              // Highlight the clicked item
+              highlightTocItem(id);
+
+              // Temporarily pause the observer to prevent immediate highlighting changes
+              observerPaused = true;
+
+              // Resume the observer after a delay (1.5 seconds)
+              setTimeout(() => {
+                observerPaused = false;
+              }, 500);
+            });
+          });
+        } catch (error) {
+          console.error('Error setting up TOC highlighting:', error);
+        }
+      }
+
+      setupObserver();
+
+      document.addEventListener('astro:page-load', setupObserver);
+    </script>
+  </main>
+</VerticalSideBarLayout>

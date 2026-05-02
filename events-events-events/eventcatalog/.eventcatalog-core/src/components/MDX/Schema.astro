@@ -1,0 +1,34 @@
+---
+import fs from 'fs';
+import { Code } from 'astro-expressive-code/components';
+import { getAbsoluteFilePathForAstroFile } from '@utils/files';
+import { getResourceFilePath } from '@utils/resource-files';
+
+interface Props {
+  file?: string;
+  title?: string;
+  filePath: string;
+  lang?: string;
+}
+
+const { file = 'schema.json', title, filePath, lang = 'json' } = Astro.props;
+
+let code: string | null = null;
+
+const absoluteFilePath = getAbsoluteFilePathForAstroFile(filePath, file);
+
+const exists = fs.existsSync(absoluteFilePath);
+if (exists) {
+  code = fs.readFileSync(absoluteFilePath, 'utf-8');
+}
+---
+
+{
+  code ? (
+    <div class="not-prose max-w-4xl overflow-x-auto">
+      <Code code={code} title={title || file} lang={lang} />
+    </div>
+  ) : (
+    <div class="italic">Tried to load schema from {getResourceFilePath({ filePath }, file)}, but no schema can be found</div>
+  )
+}

@@ -1,0 +1,350 @@
+---
+import { getCommands } from '@utils/collections/commands';
+import { getDomains, getDomainsForService } from '@utils/collections/domains';
+import { getEvents } from '@utils/collections/events';
+import { getServices } from '@utils/collections/services';
+import { getQueries } from '@utils/collections/queries';
+import { getContainers } from '@utils/collections/containers';
+import { getDataProducts } from '@utils/collections/data-products';
+import { getUsers } from '@utils/collections/users';
+import { getTeams } from '@utils/collections/teams';
+import { getChannels } from '@utils/collections/channels';
+import VerticalSideBarLayout from '@layouts/VerticalSideBarLayout.astro';
+import { DiscoverTable, type DiscoverTableData, type CollectionType } from '@components/Tables/Discover';
+import config from '@config';
+import { Page } from './_index.data';
+
+export const prerender = Page.prerender;
+export const getStaticPaths = Page.getStaticPaths;
+
+const { type, data } = await Page.getData(Astro);
+
+const events = await getEvents();
+const queries = await getQueries();
+const commands = await getCommands();
+const services = await getServices();
+const domains = await getDomains({ getAllVersions: false });
+const containers = await getContainers();
+const dataProducts = await getDataProducts();
+const channels = await getChannels();
+const users = await getUsers();
+const teams = await getTeams();
+
+// Create lookup maps for users and teams
+const userMap = new Map(users.map((u) => [u.data.id, u]));
+const teamMap = new Map(teams.map((t) => [t.data.id, t]));
+
+// Type configuration for property options
+const typeConfig: Record<
+  string,
+  {
+    label: string;
+    description: string;
+    propertyOptions: Array<{ id: string; label: string }>;
+  }
+> = {
+  events: {
+    label: 'Events',
+    description: 'Explore the events flowing through your catalog and understand who produces and consumes them.',
+    propertyOptions: [
+      { id: 'hasProducers', label: 'Has Producers' },
+      { id: 'hasConsumers', label: 'Has Consumers' },
+      { id: 'hasOwners', label: 'Has Owners' },
+      { id: 'isDeprecated', label: 'Is Deprecated' },
+    ],
+  },
+  commands: {
+    label: 'Commands',
+    description: 'Browse the commands in your catalog and see which services issue and respond to them.',
+    propertyOptions: [
+      { id: 'hasProducers', label: 'Has Producers' },
+      { id: 'hasConsumers', label: 'Has Consumers' },
+      { id: 'hasOwners', label: 'Has Owners' },
+      { id: 'isDeprecated', label: 'Is Deprecated' },
+    ],
+  },
+  queries: {
+    label: 'Queries',
+    description: 'Explore the queries available across your catalog and trace the services connected to them.',
+    propertyOptions: [
+      { id: 'hasProducers', label: 'Has Producers' },
+      { id: 'hasConsumers', label: 'Has Consumers' },
+      { id: 'hasOwners', label: 'Has Owners' },
+      { id: 'isDeprecated', label: 'Is Deprecated' },
+    ],
+  },
+  domains: {
+    label: 'Domains',
+    description: 'Organize and explore the business domains that shape your architecture.',
+    propertyOptions: [
+      { id: 'hasServices', label: 'Has Services' },
+      { id: 'hasOwners', label: 'Has Owners' },
+      { id: 'isSubdomain', label: 'Is Subdomain' },
+      { id: 'isDeprecated', label: 'Is Deprecated' },
+    ],
+  },
+  services: {
+    label: 'Services',
+    description: 'Browse the internal services in your catalog and inspect the capabilities they expose.',
+    propertyOptions: [
+      { id: 'hasSpecifications', label: 'Has Specifications' },
+      { id: 'hasOwners', label: 'Has Owners' },
+      { id: 'hasRepository', label: 'Has Repository' },
+      { id: 'hasDataDependencies', label: 'Has Data Dependencies' },
+      { id: 'isDeprecated', label: 'Is Deprecated' },
+    ],
+  },
+  'external-systems': {
+    label: 'External Systems',
+    description: 'Explore the external systems connected to your architecture and the contracts around them.',
+    propertyOptions: [
+      { id: 'hasSpecifications', label: 'Has Specifications' },
+      { id: 'hasOwners', label: 'Has Owners' },
+      { id: 'hasRepository', label: 'Has Repository' },
+      { id: 'hasDataDependencies', label: 'Has Data Dependencies' },
+      { id: 'isDeprecated', label: 'Is Deprecated' },
+    ],
+  },
+  flows: {
+    label: 'Flows',
+    description: 'Inspect the business and technical flows that connect resources across your catalog.',
+    propertyOptions: [
+      { id: 'hasOwners', label: 'Has Owners' },
+      { id: 'isDeprecated', label: 'Is Deprecated' },
+    ],
+  },
+  containers: {
+    label: 'Data',
+    description: 'Explore the data stores and containers that services read from and write to.',
+    propertyOptions: [
+      { id: 'hasOwners', label: 'Has Owners' },
+      { id: 'hasWriters', label: 'Has Writers' },
+      { id: 'hasReaders', label: 'Has Readers' },
+      { id: 'isDeprecated', label: 'Is Deprecated' },
+    ],
+  },
+  'data-products': {
+    label: 'Data Products',
+    description: 'Browse your data products and understand the inputs, outputs, and ownership behind them.',
+    propertyOptions: [
+      { id: 'hasOwners', label: 'Has Owners' },
+      { id: 'hasInputs', label: 'Has Inputs' },
+      { id: 'hasOutputs', label: 'Has Outputs' },
+      { id: 'isDeprecated', label: 'Is Deprecated' },
+    ],
+  },
+};
+
+const currentTypeConfig = typeConfig[type] || typeConfig.events;
+
+// External systems reuse the user's `services.tableConfiguration` so customisations apply to both tabs
+const tableConfigurationKey = type === 'external-systems' ? 'services' : type;
+// @ts-ignore
+const tableConfiguration = config[tableConfigurationKey as keyof typeof config]?.tableConfiguration ?? { columns: {} };
+
+// Map data to match the expected structure for the table
+function mapToItem(i: any) {
+  return {
+    collection: i.collection,
+    data: {
+      id: i.data.id,
+      name: i.data.name,
+      version: i.data.version,
+    },
+  };
+}
+
+// Helper to map owner references with type detection
+function mapOwner(o: any) {
+  if (!o) return null;
+  const id = typeof o === 'string' ? o : o.data?.id || o.id || o;
+
+  // Look up in users first, then teams
+  const user = userMap.get(id);
+  if (user) {
+    return { id, name: user.data.name || id, type: 'user' as const };
+  }
+
+  const team = teamMap.get(id);
+  if (team) {
+    return { id, name: team.data.name || id, type: 'team' as const };
+  }
+
+  // Fallback if not found in either
+  const name = typeof o === 'string' ? o : o.data?.name || o.name || id;
+  return { id, name, type: 'user' as const };
+}
+
+// Helper to check if service has specifications
+function hasSpecifications(service: any): boolean {
+  const specs = service.data?.specifications;
+  if (!specs) return false;
+  if (Array.isArray(specs)) return specs.length > 0;
+  return !!(specs.openapiPath || specs.asyncapiPath || specs.graphqlPath);
+}
+
+// Build lookup maps for all collections (for resolving data product inputs/outputs)
+const allCollections = [
+  ...services.map((s) => ({ ...s, collection: 'services' })),
+  ...containers.map((c) => ({ ...c, collection: 'containers' })),
+  ...channels.map((c) => ({ ...c, collection: 'channels' })),
+  ...events.map((e) => ({ ...e, collection: 'events' })),
+  ...commands.map((c) => ({ ...c, collection: 'commands' })),
+  ...queries.map((q) => ({ ...q, collection: 'queries' })),
+  ...dataProducts.map((dp) => ({ ...dp, collection: 'data-products' })),
+];
+
+// Create a map for quick lookup by id
+const collectionItemMap = new Map(allCollections.map((item) => [item.data.id, item]));
+
+// Helper to resolve a pointer to a collection item
+function resolvePointer(pointer: { id: string; version?: string }) {
+  if (!pointer?.id) return null;
+  const item = collectionItemMap.get(pointer.id);
+  if (!item) return null;
+  return {
+    collection: item.collection,
+    data: {
+      id: item.data.id,
+      name: item.data.name,
+      version: item.data.version,
+    },
+  };
+}
+
+// Build a Set of subdomain IDs (domains that are nested within other domains)
+const allSubdomainIds = new Set(
+  domains.flatMap((d: any) => (d.data?.domains || []).map((sd: any) => sd.data?.id || sd.id)).filter(Boolean)
+);
+
+const isServiceLike = type === 'services' || type === 'external-systems';
+
+// For services and external systems, enrich with domain information
+const enrichedData = isServiceLike
+  ? await Promise.all(
+      data.map(async (service: any) => {
+        const serviceDomains = await getDomainsForService(service);
+        return {
+          ...service,
+          enrichedDomains: serviceDomains.map((d: any) => ({
+            id: d.data.id,
+            name: d.data.name,
+            version: d.data.version,
+          })),
+        };
+      })
+    )
+  : data;
+
+const tableData = enrichedData.map((d: any) => ({
+  collection: d.collection,
+  owners: (d.data?.owners || []).map(mapOwner).filter(Boolean),
+  hasOwners: (d.data?.owners || []).length > 0,
+  hasServices: type === 'domains' ? (d.data?.services || []).length > 0 : false,
+  isSubdomain: type === 'domains' ? allSubdomainIds.has(d.data.id) : false,
+  // Service-specific properties
+  domains: isServiceLike ? d.enrichedDomains : undefined,
+  hasSpecifications: isServiceLike ? hasSpecifications(d) : false,
+  hasRepository: isServiceLike ? !!d.data?.repository?.url : false,
+  hasDataDependencies: isServiceLike ? (d.data?.writesTo || []).length > 0 || (d.data?.readsFrom || []).length > 0 : false,
+  // Data-product-specific properties
+  hasInputs: type === 'data-products' ? (d.data?.inputs || []).length > 0 : false,
+  hasOutputs: type === 'data-products' ? (d.data?.outputs || []).length > 0 : false,
+  isDeprecated: d.data?.deprecated === true || (typeof d.data?.deprecated === 'object' && d.data?.deprecated !== null),
+  data: {
+    id: d.data.id,
+    name: d.data.name,
+    summary: d.data?.summary,
+    icon: d.data?.styles?.icon,
+    version: d.data.version,
+    latestVersion: d.data?.latestVersion,
+    draft: d.data?.draft,
+    badges: d.data?.badges,
+    producers: d.data?.producers?.map(mapToItem) ?? [],
+    consumers: d.data?.consumers?.map(mapToItem) ?? [],
+    receives: d.data?.receives?.map(mapToItem) ?? [],
+    sends: d.data?.sends?.map(mapToItem) ?? [],
+    services: d.data?.services?.map(mapToItem) ?? [],
+    servicesThatWriteToContainer: d.data?.servicesThatWriteToContainer?.map(mapToItem) ?? [],
+    servicesThatReadFromContainer: d.data?.servicesThatReadFromContainer?.map(mapToItem) ?? [],
+    inputs: d.data?.inputs?.map(resolvePointer).filter(Boolean) ?? [],
+    outputs: d.data?.outputs?.map(resolvePointer).filter(Boolean) ?? [],
+  },
+}));
+
+// Get unique owners from all items
+const uniqueOwners = Array.from(new Map(tableData.flatMap((d: any) => d.owners || []).map((o: any) => [o.id, o])).values()).sort(
+  (a: any, b: any) => a.name.localeCompare(b.name)
+);
+
+// Get unique producers (services) for message types
+// Check for duplicate names and add version if needed
+const servicesByName = new Map<string, typeof services>();
+services.forEach((s) => {
+  const name = s.data.name;
+  if (!servicesByName.has(name)) servicesByName.set(name, []);
+  servicesByName.get(name)!.push(s);
+});
+
+const uniqueProducers = services
+  .map((s) => {
+    const hasDuplicateName = (servicesByName.get(s.data.name)?.length ?? 0) > 1;
+    const isLatest = s.data.version === s.data.latestVersion;
+    const versionLabel = isLatest ? 'latest' : `v${s.data.version}`;
+    return {
+      id: s.data.id,
+      name: hasDuplicateName ? `${s.data.name} (${versionLabel})` : s.data.name,
+    };
+  })
+  .sort((a, b) => a.name.localeCompare(b.name));
+
+// Show producers/consumers filter only for events, commands, queries
+const showProducersFilter = ['events', 'commands', 'queries'].includes(type);
+const showConsumersFilter = ['events', 'commands', 'queries'].includes(type);
+
+// Consumers are the same services list
+const uniqueConsumers = uniqueProducers;
+
+// Get unique domains for the services filter
+const uniqueDomains = domains.map((d) => ({
+  id: d.data.id,
+  name: d.data.name,
+  version: d.data.version,
+}));
+
+// Show domains filter only for services and external systems
+const showDomainsFilter = isServiceLike;
+
+const title = `${currentTypeConfig.label} (${data.length})`;
+---
+
+<VerticalSideBarLayout title={`Explore | ${title}`} showNestedSideBar={false}>
+  <style is:global>
+    #eventcatalog-header {
+      left: calc(var(--ec-vertical-nav-width, 14rem) + var(--ec-discover-sidebar-width, 320px)) !important;
+    }
+  </style>
+  <main
+    class="ml-0 flex h-full min-h-0 flex-col overflow-hidden bg-[rgb(var(--ec-page-bg))]"
+    style={`--ec-discover-sidebar-width: 320px; margin-left: calc(var(--ec-app-content-padding-left, 5rem) * -1); margin-right: calc(var(--ec-app-content-padding-right, 5rem) * -1); height: calc(100dvh - 60px);`}
+  >
+    <div class="flex-1 min-h-0 overflow-hidden">
+      <DiscoverTable
+        data={tableData as DiscoverTableData[]}
+        collectionType={type as CollectionType}
+        collectionLabel={currentTypeConfig.label}
+        collectionDescription={currentTypeConfig.description}
+        domains={uniqueDomains}
+        owners={uniqueOwners as Array<{ id: string; name: string; type?: 'user' | 'team' }>}
+        producers={uniqueProducers}
+        consumers={uniqueConsumers}
+        propertyOptions={currentTypeConfig.propertyOptions}
+        tableConfiguration={tableConfiguration}
+        showDomainsFilter={showDomainsFilter}
+        showProducersFilter={showProducersFilter}
+        showConsumersFilter={showConsumersFilter}
+        client:only="react"
+      />
+    </div>
+  </main>
+</VerticalSideBarLayout>

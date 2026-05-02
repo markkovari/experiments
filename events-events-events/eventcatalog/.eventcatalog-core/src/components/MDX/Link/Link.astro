@@ -1,0 +1,7 @@
+---
+import { buildUrl } from '@utils/url-builder';
+
+const { href } = Astro.props;
+---
+
+<a href={buildUrl(href)} class="text-[rgb(var(--ec-accent))] hover:text-[rgb(var(--ec-accent-hover))]"><slot /></a>

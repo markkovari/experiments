@@ -1,0 +1,17 @@
+{
+  "name": "eventcatalog",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "eventcatalog dev",
+    "build": "eventcatalog build",
+    "generate": "eventcatalog generate",
+    "lint": "spectral lint ../api/*.yaml"
+  },
+  "dependencies": {
+    "@eventcatalog/core": "latest",
+    "@eventcatalog/plugin-doc-generator-asyncapi": "latest"
+  },
+  "devDependencies": {
+    "@stoplight/spectral-cli": "^6.15.1"
+  }
+}

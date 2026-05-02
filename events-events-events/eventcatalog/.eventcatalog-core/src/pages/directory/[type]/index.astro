@@ -1,0 +1,61 @@
+---
+import type { CollectionEntry } from 'astro:content';
+
+import DirectoryLayout, { type Props as DirectoryLayoutProps } from '@layouts/DirectoryLayout.astro';
+import { Page } from './_index.data';
+
+export const prerender = Page.prerender;
+export const getStaticPaths = Page.getStaticPaths;
+
+const { type, data } = await Page.getData(Astro);
+
+function mapToItem(i: any) {
+  return {
+    collection: i.collection,
+    data: {
+      id: i.data.id,
+      name: i.data.name,
+      version: i.data.version,
+    },
+  };
+}
+---
+
+<DirectoryLayout
+  title={`${type} (${data.length})`}
+  subtitle={`Find, filter and search for any ${type} in your system.`}
+  data={data.map(
+    (d: CollectionEntry<'users' | 'teams'>) =>
+      ({
+        collection: d.collection,
+        data: {
+          // @ts-ignore
+          id: d.data.id,
+          name: d.data.name,
+          // @ts-ignore
+          role: d.data?.role,
+          // @ts-ignore
+          avatarUrl: d.data?.avatarUrl,
+          // @ts-ignore
+          email: d.data?.email,
+          // @ts-ignore
+          slackDirectMessageUrl: d.data?.slackDirectMessageUrl,
+          // @ts-ignore
+          msTeamsDirectMessageUrl: d.data?.msTeamsDirectMessageUrl,
+          // @ts-ignore
+          associatedTeams: d.data?.associatedTeams?.map(mapToItem) ?? [],
+          // @ts-ignore
+          ownedCommands: d.data?.ownedCommands?.map(mapToItem) ?? [],
+          // @ts-ignore
+          ownedQueries: d.data?.ownedQueries?.map(mapToItem) ?? [],
+          // @ts-ignore
+          ownedEvents: d.data?.ownedEvents?.map(mapToItem) ?? [],
+          // @ts-ignore
+          ownedServices: d.data?.ownedServices?.map(mapToItem) ?? [],
+          // @ts-ignore
+          members: d.data?.members,
+        },
+      }) as DirectoryLayoutProps<typeof type>['data'][0]
+  )}
+  type={type}
+/>

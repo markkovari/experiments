@@ -1,0 +1,239 @@
+---
+import { createElement } from 'react';
+import { renderToString } from 'react-dom/server';
+import { Parser } from '@asyncapi/parser';
+import { AvroSchemaParser } from '@asyncapi/avro-schema-parser';
+import fs from 'fs';
+
+import { isSameOrigin, resolveHeaders } from '@utils/remote-spec';
+
+import '@asyncapi/react-component/styles/default.min.css';
+import js from '@asyncapi/react-component/browser/standalone/without-parser.js?url';
+import { AsyncApiComponentWP, type ConfigInterface } from '@asyncapi/react-component';
+import VerticalSideBarLayout from '@layouts/VerticalSideBarLayout.astro';
+import CopyAsMarkdown from '@components/CopyAsMarkdown';
+import { isEventCatalogChatEnabled } from '@utils/feature';
+import Config from '@utils/eventcatalog-config/catalog';
+import { Page } from './_[filename].data';
+import { getAbsoluteFilePathForAstroFile } from '@utils/files';
+
+export const prerender = Page.prerender;
+export const getStaticPaths = Page.getStaticPaths;
+
+// Get data
+const { collection, data, filePath, filename, path: relativeSpecPath, headers = {} } = await Page.getData(Astro);
+
+const fileName = filename || 'asyncapi.yaml';
+const pathToSpec = getAbsoluteFilePathForAstroFile(filePath, fileName);
+const fileExists = fs.existsSync(pathToSpec);
+const isRemote = relativeSpecPath.includes('https://');
+let content = '';
+
+const allowAnyEnvInSpecHeaders = Config?.asyncAPI?.allowAnyEnvInSpecHeaders ?? false;
+const resolvedHeaders = resolveHeaders(headers, { allowAnyEnvInHeaders: allowAnyEnvInSpecHeaders });
+
+if (fileExists && !isRemote) {
+  content = fs.readFileSync(pathToSpec, 'utf8');
+}
+
+if (isRemote) {
+  const response = await fetch(relativeSpecPath, { headers: resolvedHeaders });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch AsyncAPI spec: ${response.status} ${response.statusText}`);
+  }
+
+  content = await response.text();
+}
+
+// AsyncAPI parser will parse schemas for users, they can turn this off.
+const parseSchemas = Config?.asyncAPI?.renderParsedSchemas ?? true;
+const parserOptions: NonNullable<Parameters<Parser['parse']>[1]> = {
+  parseSchemas,
+  source: isRemote ? relativeSpecPath : pathToSpec,
+};
+
+if (isRemote && Object.keys(resolvedHeaders).length > 0) {
+  // NOTE: AsyncAPI parser exposes resolver wiring via __unstable.
+  // Keep this isolated so parser upgrades can adjust in one place.
+  const resolverWithHeaders = {
+    canRead: true,
+    read: async (uri: { toString: () => string }) => {
+      const targetUrl = uri.toString();
+      const shouldForwardHeaders = isSameOrigin(relativeSpecPath, targetUrl);
+
+      const response = await fetch(targetUrl, {
+        headers: shouldForwardHeaders ? resolvedHeaders : undefined,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch reference: ${response.status} ${response.statusText}`);
+      }
+
+      return response.text();
+    },
+  };
+
+  parserOptions.__unstable = {
+    resolver: {
+      resolvers: [
+        { schema: 'https', ...resolverWithHeaders },
+        { schema: 'http', ...resolverWithHeaders },
+      ],
+    },
+  };
+}
+
+const parsed = await new Parser({ schemaParsers: [AvroSchemaParser()] }).parse(content, parserOptions);
+
+/**
+ * The AsyncAPI parser resolves all $ref pointers, which can create circular
+ * object references (e.g. oneOf/allOf discriminator patterns where child schemas
+ * reference the parent). We need to break true cycles before Astro's
+ * `define:vars` calls JSON.stringify internally.
+ *
+ * We track ancestors (not all-ever-seen objects) so that shared but
+ * non-circular references are preserved intact.
+ * See: https://github.com/event-catalog/generators/issues/364
+ */
+const deepCopyBreakingCycles = (value: unknown, ancestors = new WeakSet()): unknown => {
+  if (typeof value !== 'object' || value === null) return value;
+
+  if (ancestors.has(value)) {
+    const schemaId = (value as Record<string, unknown>)['x-parser-schema-id'];
+    if (schemaId && typeof schemaId === 'string') {
+      return { $ref: `#/components/schemas/${schemaId}` };
+    }
+    return { $ref: '#' };
+  }
+
+  ancestors.add(value);
+
+  let result: unknown;
+  if (Array.isArray(value)) {
+    result = value.map((item) => deepCopyBreakingCycles(item, ancestors));
+  } else {
+    const obj: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      obj[k] = deepCopyBreakingCycles(v, ancestors);
+    }
+    result = obj;
+  }
+
+  ancestors.delete(value);
+  return result;
+};
+
+const rawJson = parsed.document?.json();
+const stringified = rawJson ? deepCopyBreakingCycles(rawJson) : undefined;
+const config: ConfigInterface = { show: { sidebar: true, errors: true } };
+
+const component = createElement(AsyncApiComponentWP, { schema: { stringified }, config });
+const renderedComponent = renderToString(component);
+
+// Capitalize the first letter of a string
+const pageTitle = `${collection} | ${data.name} | AsyncApi Spec`.replace(/^\w/, (c) => c.toUpperCase());
+
+// Chat configuration
+const chatEnabled = isEventCatalogChatEnabled();
+const chatQuery = `Tell me about the AsyncAPI specification for "${data.name}" (version ${data.version})`;
+
+// Index only the latest version
+const pagefindAttributes =
+  data.version === data.latestVersion
+    ? {
+        'data-pagefind-body': '',
+        'data-pagefind-meta': `title:${pageTitle}`,
+      }
+    : {};
+---
+
+<VerticalSideBarLayout title={pageTitle}>
+  <div
+    {...pagefindAttributes}
+    class="relative"
+    style="margin-left: calc(var(--ec-app-content-padding-left, 5rem) * -1); margin-right: calc(var(--ec-app-content-padding-right, 5rem) * -1);"
+  >
+    {
+      // Currently, Pagefind does not index metadata (such as the title),
+      // so we need to ensure it is included as text on the page.
+      // https://github.com/CloudCannon/pagefind/issues/437
+    }
+    <h2 class="hidden">{pageTitle}</h2>
+    {
+      chatEnabled && (
+        <div class="absolute top-3 right-4 z-10">
+          <CopyAsMarkdown
+            client:only="react"
+            schemas={[]}
+            chatQuery={chatQuery}
+            chatEnabled={chatEnabled}
+            editUrl=""
+            markdownDownloadEnabled={false}
+            rssFeedEnabled={false}
+            preferChatAsDefault={true}
+            chatButtonText="Ask about this specification"
+          />
+        </div>
+      )
+    }
+    <div id="asyncapi" class="not-prose" set:html={renderedComponent} />
+  </div>
+</VerticalSideBarLayout>
+
+<script is:inline src={js}></script>
+<script is:inline define:vars={{ schema: stringified, config }}>
+  function initAsyncApi() {
+    const root = document.getElementById('asyncapi');
+    if (!root || root.dataset.initialized) return;
+
+    if (typeof AsyncApiStandalone !== 'undefined') {
+      AsyncApiStandalone.render({ schema, config }, root);
+      root.dataset.initialized = 'true';
+    } else {
+      setTimeout(initAsyncApi, 50);
+    }
+  }
+
+  document.addEventListener('astro:page-load', initAsyncApi);
+  initAsyncApi();
+</script>
+
+<style>
+  #asyncapi {
+    @media screen and (min-width: 1417px) {
+      .sidebar {
+        z-index: 1 !important;
+      }
+    }
+
+    .burger-menu {
+      display: none;
+    }
+
+    .aui-root .z-10 {
+      z-index: 8;
+    }
+  }
+
+  /* Keep AsyncAPI markdown code blocks isolated from EventCatalog dark prose overrides. */
+  :root[data-theme='dark'] #asyncapi .aui-root .prose code {
+    color: #1a202c;
+    background-color: transparent;
+    border-radius: 0;
+    padding: 0;
+  }
+
+  :root[data-theme='dark'] #asyncapi .aui-root .prose pre {
+    color: #edf2f7;
+    background-color: #1a202c;
+    border: 0;
+  }
+
+  :root[data-theme='dark'] #asyncapi .aui-root .prose pre code {
+    color: inherit;
+    background-color: transparent;
+    border-radius: 0;
+    padding: 0;
+  }
+</style>

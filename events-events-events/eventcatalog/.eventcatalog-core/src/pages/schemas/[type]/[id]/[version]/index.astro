@@ -1,0 +1,141 @@
+---
+import type { PageTypes } from '@types';
+import VerticalSideBarLayout from '@layouts/VerticalSideBarLayout.astro';
+import { Page } from './_index.data';
+import SchemaPageViewer from '@components/SchemaExplorer/SchemaPageViewer';
+import { pageDataLoader } from '@utils/page-loaders/page-data-loader';
+import { sortVersioned } from '@utils/collections/util';
+import { isEventCatalogScaleEnabled } from '@utils/feature';
+import { resourceFileExists, readResourceFile } from '@utils/resource-files';
+import path from 'node:path';
+import type { SchemaItem } from '@components/SchemaExplorer/types';
+import { getExamplesForResource } from '@utils/collections/examples';
+
+export const prerender = Page.prerender;
+export const getStaticPaths = Page.getStaticPaths;
+
+// Get data
+const props = await Page.getData(Astro);
+const { type, data } = props as { type: PageTypes; data: any };
+
+// Check if this is a data product with a contract
+const isDataProduct = type === 'data-products';
+// Try query param first (SSR mode), then fall back to props (static mode)
+const contractPath = Astro.url.searchParams.get('contract') || (props as any).contractPath;
+
+let currentMessage: SchemaItem | null = null;
+let sortedVersions: SchemaItem[] = [];
+let pageTitle = `${type} | ${data.name}`.replace(/^\w/, (c) => c.toUpperCase());
+
+if (isDataProduct && contractPath) {
+  // Handle data product contracts
+  const allDataProducts = await pageDataLoader['data-products']();
+  const dataProductVersions = allDataProducts.filter((item) => item.data.id === data.id);
+
+  // Find contracts across all versions
+  const contractVersions = dataProductVersions
+    .map((dataProduct) => {
+      const outputs = (dataProduct.data as any).outputs || [];
+      const matchingOutput = outputs.find((output: any) => output.contract?.path === contractPath);
+
+      if (!matchingOutput) return null;
+
+      if (!resourceFileExists(dataProduct, contractPath)) return null;
+
+      try {
+        const schemaContent = readResourceFile(dataProduct, contractPath) ?? '';
+        const schemaExtension = path.extname(contractPath).slice(1);
+
+        return {
+          collection: 'data-products',
+          data: {
+            id: dataProduct.data.id,
+            name: matchingOutput.contract.name,
+            version: dataProduct.data.version,
+            summary: `Data contract for ${dataProduct.data.name}`,
+            schemaPath: contractPath,
+          },
+          schemaContent,
+          schemaExtension,
+          contractType: matchingOutput.contract.type,
+          dataProductId: dataProduct.data.id,
+          dataProductVersion: dataProduct.data.version,
+        } as SchemaItem;
+      } catch (error) {
+        console.error(`Error reading contract for ${dataProduct.data.id}:`, error);
+        return null;
+      }
+    })
+    .filter((v): v is SchemaItem => v !== null);
+
+  sortedVersions = sortVersioned(contractVersions, (item) => item.data.version);
+  currentMessage = sortedVersions.find((v) => v.data.version === data.version) ?? null;
+
+  if (currentMessage) {
+    pageTitle = `Data Contract | ${currentMessage.data.name}`;
+  }
+} else {
+  // Handle regular messages (events, commands, queries)
+  const allItems = await pageDataLoader[type]();
+  const versions = allItems.filter((item) => item.data.id === data.id);
+
+  // Transform to SchemaItems
+  const availableVersions = versions
+    .filter((message) => message.data.schemaPath && resourceFileExists(message, message.data.schemaPath))
+    .map((message) => {
+      try {
+        const schemaPath = message.data.schemaPath ?? '';
+        const schemaContent = readResourceFile(message, schemaPath) ?? '';
+        const schemaExtension = path.extname(schemaPath).slice(1);
+
+        return {
+          collection: message.collection,
+          data: {
+            id: message.data.id,
+            name: message.data.name,
+            version: message.data.version,
+            summary: message.data.summary,
+            schemaPath: message.data.schemaPath,
+            // @ts-ignore
+            producers: message.data.producers || [],
+            // @ts-ignore
+            consumers: message.data.consumers || [],
+          },
+          schemaContent,
+          schemaExtension,
+          examples: getExamplesForResource(message),
+        } as SchemaItem;
+      } catch (error) {
+        console.error(`Error reading schema for ${message.data.id}:`, error);
+        return null;
+      }
+    })
+    .filter((v): v is SchemaItem => v !== null);
+
+  sortedVersions = sortVersioned(availableVersions, (item) => item.data.version);
+  currentMessage = sortedVersions.find((v) => v.data.version === data.version) ?? null;
+}
+
+const apiAccessEnabled = isEventCatalogScaleEnabled();
+---
+
+<VerticalSideBarLayout title={pageTitle}>
+  <div class="h-[calc(100vh-4rem)] w-full overflow-hidden flex flex-col">
+    {
+      currentMessage ? (
+        <SchemaPageViewer
+          client:load
+          message={currentMessage}
+          availableVersions={sortedVersions}
+          apiAccessEnabled={apiAccessEnabled}
+          showOwners={false}
+          showProducersConsumers={false}
+        />
+      ) : (
+        <div class="p-8 flex items-center justify-center h-full text-[rgb(var(--ec-page-text-muted))]">
+          Schema not found or could not be loaded.
+        </div>
+      )
+    }
+  </div>
+</VerticalSideBarLayout>

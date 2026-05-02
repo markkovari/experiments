@@ -1,0 +1,102 @@
+{
+  "description": "NATS JetStream Dashboard",
+  "editable": true,
+  "panels": [
+    {
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 3,
+          "max": 1,
+          "min": 0,
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 0 },
+      "id": 28,
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "sum(gnatsd_varz_jetstream_stats_storage)/sum(gnatsd_varz_jetstream_config_max_storage)",
+          "refId": "A"
+        }
+      ],
+      "title": "Storage Used",
+      "type": "gauge"
+    },
+    {
+      "gridPos": { "h": 3, "w": 5, "x": 4, "y": 0 },
+      "id": 15,
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "sum(gnatsd_varz_jetstream_stats_storage)",
+          "refId": "A"
+        }
+      ],
+      "title": "Total Storage Used",
+      "type": "stat"
+    },
+    {
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 7 },
+      "id": 17,
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "sum(jetstream_stream_total_bytes) by (stream_name)",
+          "legendFormat": "{{stream_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Stream data size",
+      "type": "timeseries"
+    },
+    {
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 7 },
+      "id": 24,
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "sum(jetstream_stream_total_messages) by (stream_name)",
+          "legendFormat": "{{stream_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Stream message count",
+      "type": "timeseries"
+    },
+    {
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 7 },
+      "id": 20,
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "sum(rate(jetstream_stream_last_seq[$__rate_interval])) by (stream_name)",
+          "legendFormat": "{{stream_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Message Rate (per second)",
+      "type": "timeseries"
+    },
+    {
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 14 },
+      "id": 25,
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "sum(jetstream_consumer_num_pending) by (consumer_name)",
+          "legendFormat": "{{consumer_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Pending messages per consumer",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 34,
+  "style": "dark",
+  "title": "NATS JetStream (EDA)",
+  "uid": "nats-jetstream-eda",
+  "version": 1
+}
