@@ -12,7 +12,23 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Starting Mock Executor Service...");
 
     let settings = AppConfig::load().map_err(|e| anyhow::anyhow!("Failed to load config: {}", e))?;
-    let nats_client = async_nats::connect(&settings.nats.url).await?;
+    
+    // Connect to NATS with retry
+    let nats_client = {
+        let mut retry_count = 0;
+        loop {
+            match async_nats::connect(&settings.nats.url).await {
+                Ok(client) => break client,
+                Err(e) if retry_count < 10 => {
+                    retry_count += 1;
+                    tracing::warn!("Failed to connect to NATS, retrying ({}/10): {}", retry_count, e);
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+                Err(e) => return Err(anyhow::anyhow!("Final NATS connection failure: {}", e)),
+            }
+        }
+    };
+
     let js = async_nats::jetstream::new(nats_client.clone());
 
     let stream = js.get_stream("ACTIONS_DISPATCH").await?;

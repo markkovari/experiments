@@ -3,34 +3,39 @@ services:
     port: 3000
     dbName: auth_db
     image:
-      repository: my-repo/auth
+      repository: event-platform/auth
       tag: latest
   - name: org
     port: 3001
     dbName: org_db
     image:
-      repository: my-repo/org
+      repository: event-platform/org
       tag: latest
   - name: scheduler
     port: 3002
     dbName: scheduler_db
     image:
-      repository: my-repo/scheduler
+      repository: event-platform/scheduler
       tag: latest
   - name: mock-executor
     port: 3003
+    dbName: none
     image:
-      repository: my-repo/mock-executor
+      repository: event-platform/mock-executor
       tag: latest
   - name: gateway
     port: 8080
+    dbName: none
     image:
-      repository: my-repo/gateway
+      repository: event-platform/gateway
       tag: latest
+
+services_base_repo: event-platform
+image_tag: latest
 
 frontend:
   image:
-    repository: my-repo/frontend
+    repository: event-platform/frontend
     tag: latest
 
 nats:

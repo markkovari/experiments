@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { Play, Calendar, History, Clock } from 'lucide-react'
+import { Play, Calendar, History, Clock, Trash2 } from 'lucide-react'
 import { Organization } from '../App'
 import { useToast } from "@/hooks/use-toast"
 
@@ -25,28 +25,40 @@ interface Execution {
   result?: any;
 }
 
-export function Scheduler({ token, org }: { token: string, org: Organization | null }) {
-  const [actions, setOrgs] = useState<Action[]>([])
+export function Scheduler({ token, org, currentRole }: { token: string, org: Organization | null, currentRole: string }) {
+  const [actions, setActions] = useState<Action[]>([])
   const [executions, setExecutions] = useState<Execution[]>([])
   const [actionType, setActionType] = useState('email.send')
   const [cron, setCron] = useState('')
   const { toast } = useToast()
+  
+  const apiHost = window.location.hostname === 'localhost' ? 'localhost:8080' : `${window.location.hostname}:8081`;
 
   const fetchData = async () => {
     if (!org) return
     try {
+      const orgQuery = `?org_id=${org._id.$oid}`
       const [actionsRes, execsRes] = await Promise.all([
-        fetch('http://localhost:8080/api/actions', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('http://localhost:8080/api/executions', { headers: { 'Authorization': `Bearer ${token}` } })
+        fetch(`http://${apiHost}/api/actions${orgQuery}`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`http://${apiHost}/api/executions${orgQuery}`, { headers: { 'Authorization': `Bearer ${token}` } })
       ])
-      if (actionsRes.ok) setOrgs(await actionsRes.json())
-      if (execsRes.ok) setExecutions(await execsRes.json())
+      if (actionsRes.ok) {
+         const fetchedActions = await actionsRes.json();
+         setActions(fetchedActions);
+         
+         if (execsRes.ok) {
+           const fetchedExecutions = await execsRes.json();
+           setExecutions(fetchedExecutions);
+         }
+      }
     } catch (e) {
       console.error("Failed to fetch scheduler data", e)
     }
   }
 
   useEffect(() => {
+    setActions([])
+    setExecutions([])
     fetchData()
     const interval = setInterval(fetchData, 5000)
     return () => clearInterval(interval)
@@ -55,7 +67,7 @@ export function Scheduler({ token, org }: { token: string, org: Organization | n
   const createAction = async (type: 'Manual' | 'Cron') => {
     if (!org) return
     try {
-      const response = await fetch('http://localhost:3002/actions', {
+      const response = await fetch(`http://${apiHost}/api/actions`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -81,7 +93,7 @@ export function Scheduler({ token, org }: { token: string, org: Organization | n
 
   const triggerAction = async (id: string) => {
     try {
-      const response = await fetch(`http://localhost:3002/actions/${id}/trigger`, {
+      const response = await fetch(`http://${apiHost}/api/actions/${id}/trigger`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       })
@@ -94,6 +106,22 @@ export function Scheduler({ token, org }: { token: string, org: Organization | n
     }
   }
 
+  const deleteAction = async (id: string) => {
+    try {
+      const response = await fetch(`http://${apiHost}/api/actions/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      if (response.ok) {
+        toast({ title: "Action deleted" })
+        fetchData()
+      }
+    } catch {
+      toast({ variant: "destructive", title: "Failed to delete action" })
+    }
+  }
+
+
   if (!org) {
     return (
       <div className="flex flex-col items-center justify-center h-[400px] bg-white rounded-xl border-2 border-dashed border-zinc-200 text-zinc-400">
@@ -103,9 +131,13 @@ export function Scheduler({ token, org }: { token: string, org: Organization | n
     )
   }
 
+  const canManageActions = currentRole === 'Owner' || currentRole === 'Admin' || currentRole === 'Editor';
+  const canRunActions = canManageActions || currentRole === 'Invoker';
+
   return (
     <div className="space-y-8">
-      <Card className="shadow-sm border-zinc-200 overflow-hidden">
+      {canManageActions && (
+        <Card className="shadow-sm border-zinc-200 overflow-hidden">
         <CardHeader className="bg-zinc-50 border-b border-zinc-100">
           <CardTitle className="text-lg flex items-center gap-2">
             <Play className="w-5 h-5 text-primary" />
@@ -144,10 +176,12 @@ export function Scheduler({ token, org }: { token: string, org: Organization | n
               </div>
             </div>
           </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+          </Card>
+          )}
 
-      <Card className="shadow-sm border-zinc-200">
+          <Card className="shadow-sm border-zinc-200">
+
         <CardHeader>
           <CardTitle className="text-lg flex items-center gap-2">
             <History className="w-5 h-5" />
@@ -215,11 +249,18 @@ export function Scheduler({ token, org }: { token: string, org: Organization | n
                   )}
                 </p>
               </div>
-              {action.trigger_type === 'Manual' && (
-                <Button size="sm" variant="ghost" onClick={() => triggerAction(action._id.$oid)}>
-                  Run Now
-                </Button>
-              )}
+              <div className="flex gap-2 items-center">
+                {action.trigger_type === 'Manual' && canRunActions && (
+                  <Button size="sm" variant="ghost" onClick={() => triggerAction(action._id.$oid)}>
+                    Run Now
+                  </Button>
+                )}
+                {canManageActions && (
+                  <Button size="sm" variant="ghost" onClick={() => deleteAction(action._id.$oid)}>
+                    <Trash2 className="w-4 h-4 text-destructive" />
+                  </Button>
+                )}
+              </div>
             </Card>
           ))}
         </div>
@@ -227,3 +268,4 @@ export function Scheduler({ token, org }: { token: string, org: Organization | n
     </div>
   )
 }
+

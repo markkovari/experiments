@@ -1,0 +1,393 @@
+---
+# Source: event-platform/templates/secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: auth-secrets
+type: Opaque
+data:
+  # Base64 encoded "super_secret_key_change_me_in_production"
+  jwt-secret: c3VwZXJfc2VjcmV0X2tleV9jaGFuZ2VfbWVfaW5fcHJvZHVjdGlvbg==
+---
+# Source: event-platform/templates/mongodb.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+spec:
+  selector:
+    app: mongodb
+  ports:
+  - port: 27017
+    targetPort: 27017
+---
+# Source: event-platform/templates/nats.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats
+spec:
+  selector:
+    app: nats
+  ports:
+  - name: client
+    port: 4222
+    targetPort: 4222
+  - name: monitor
+    port: 8222
+    targetPort: 8222
+---
+# Source: event-platform/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth
+spec:
+  selector:
+    app: auth
+  ports:
+  - protocol: TCP
+    port: 3000
+    targetPort: 3000
+  type: ClusterIP
+---
+# Source: event-platform/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: org
+spec:
+  selector:
+    app: org
+  ports:
+  - protocol: TCP
+    port: 3001
+    targetPort: 3001
+  type: ClusterIP
+---
+# Source: event-platform/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: scheduler
+spec:
+  selector:
+    app: scheduler
+  ports:
+  - protocol: TCP
+    port: 3002
+    targetPort: 3002
+  type: ClusterIP
+---
+# Source: event-platform/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-executor
+spec:
+  selector:
+    app: mock-executor
+  ports:
+  - protocol: TCP
+    port: 3003
+    targetPort: 3003
+  type: ClusterIP
+---
+# Source: event-platform/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+spec:
+  selector:
+    app: gateway
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080
+  type: ClusterIP
+---
+# Source: event-platform/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-external
+spec:
+  selector:
+    app: gateway
+  ports:
+  - protocol: TCP
+    port: 8081
+    targetPort: 8080
+  type: LoadBalancer
+---
+# Source: event-platform/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+spec:
+  selector:
+    app: frontend
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+  type: LoadBalancer
+---
+# Source: event-platform/templates/deployments.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth
+  template:
+    metadata:
+      labels:
+        app: auth
+    spec:
+      containers:
+      - name: auth
+        image: "event-platform/auth:latest"
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3000
+        env:
+        - name: APP_SERVER__PORT
+          value: "3000"
+        - name: APP_NATS__URL
+          value: "nats://nats:4222"
+        - name: APP_MONGODB__URL
+          value: "mongodb://mongodb:27017"
+        - name: APP_MONGODB__DB_NAME
+          value: "auth_db"
+        - name: APP_AUTH__JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: auth-secrets
+              key: jwt-secret
+---
+# Source: event-platform/templates/deployments.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: org
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: org
+  template:
+    metadata:
+      labels:
+        app: org
+    spec:
+      containers:
+      - name: org
+        image: "event-platform/org:latest"
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3001
+        env:
+        - name: APP_SERVER__PORT
+          value: "3001"
+        - name: APP_NATS__URL
+          value: "nats://nats:4222"
+        - name: APP_MONGODB__URL
+          value: "mongodb://mongodb:27017"
+        - name: APP_MONGODB__DB_NAME
+          value: "org_db"
+        - name: APP_AUTH__JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: auth-secrets
+              key: jwt-secret
+---
+# Source: event-platform/templates/deployments.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scheduler
+  template:
+    metadata:
+      labels:
+        app: scheduler
+    spec:
+      containers:
+      - name: scheduler
+        image: "event-platform/scheduler:latest"
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3002
+        env:
+        - name: APP_SERVER__PORT
+          value: "3002"
+        - name: APP_NATS__URL
+          value: "nats://nats:4222"
+        - name: APP_MONGODB__URL
+          value: "mongodb://mongodb:27017"
+        - name: APP_MONGODB__DB_NAME
+          value: "scheduler_db"
+        - name: APP_AUTH__JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: auth-secrets
+              key: jwt-secret
+---
+# Source: event-platform/templates/deployments.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-executor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-executor
+  template:
+    metadata:
+      labels:
+        app: mock-executor
+    spec:
+      containers:
+      - name: mock-executor
+        image: "event-platform/mock-executor:latest"
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3003
+        env:
+        - name: APP_SERVER__PORT
+          value: "3003"
+        - name: APP_NATS__URL
+          value: "nats://nats:4222"
+        - name: APP_MONGODB__URL
+          value: "mongodb://mongodb:27017"
+        - name: APP_MONGODB__DB_NAME
+          value: "none"
+        - name: APP_AUTH__JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: auth-secrets
+              key: jwt-secret
+---
+# Source: event-platform/templates/deployments.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      containers:
+      - name: gateway
+        image: "event-platform/gateway:latest"
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+        env:
+        - name: APP_SERVER__PORT
+          value: "8080"
+        - name: APP_NATS__URL
+          value: "nats://nats:4222"
+        - name: APP_MONGODB__URL
+          value: "mongodb://mongodb:27017"
+        - name: APP_MONGODB__DB_NAME
+          value: "none"
+        - name: APP_AUTH__JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: auth-secrets
+              key: jwt-secret
+        - name: AUTH_SERVICE_URL
+          value: "http://auth:3000"
+        - name: ORG_SERVICE_URL
+          value: "http://org:3001"
+        - name: SCHEDULER_SERVICE_URL
+          value: "http://scheduler:3002"
+---
+# Source: event-platform/templates/deployments.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: "event-platform/frontend:latest"
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 80
+---
+# Source: event-platform/templates/mongodb.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      containers:
+      - name: mongodb
+        image: mongo:latest
+        ports:
+        - containerPort: 27017
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          value: admin
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          value: password
+---
+# Source: event-platform/templates/nats.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nats
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nats
+  template:
+    metadata:
+      labels:
+        app: nats
+    spec:
+      containers:
+      - name: nats
+        image: nats:latest
+        args: ["--js", "--sd", "/data"]
+        ports:
+        - containerPort: 4222
+        - containerPort: 8222

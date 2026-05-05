@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -15,7 +15,8 @@ export function Auth({ onLogin }: { onLogin: (token: string) => void }) {
   const handleAuth = async (type: 'login' | 'register') => {
     setLoading(true)
     try {
-      const response = await fetch(`http://localhost:8080/api/auth/${type}`, {
+      const apiHost = window.location.hostname === 'localhost' ? 'localhost:8080' : `${window.location.hostname}:8081`;
+      const response = await fetch(`http://${apiHost}/api/auth/${type}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),

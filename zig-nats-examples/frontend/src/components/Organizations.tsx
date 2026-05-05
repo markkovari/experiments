@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -17,10 +17,12 @@ export function Organizations({ token, onSelectOrg, selectedOrg }: OrgsProps) {
   const [orgs, setOrgs] = useState<Organization[]>([])
   const [newOrgName, setNewOrgName] = useState('')
   const { toast } = useToast()
+  
+  const apiHost = window.location.hostname === 'localhost' ? 'localhost:8080' : `${window.location.hostname}:8081`;
 
   const fetchOrgs = async () => {
     try {
-      const response = await fetch('http://localhost:8080/api/orgs', {
+      const response = await fetch(`http://${apiHost}/api/orgs`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       if (response.ok) {
@@ -42,7 +44,7 @@ export function Organizations({ token, onSelectOrg, selectedOrg }: OrgsProps) {
   const createOrg = async () => {
     if (!newOrgName) return
     try {
-      const response = await fetch('http://localhost:8080/api/orgs', {
+      const response = await fetch(`http://${apiHost}/api/orgs`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
