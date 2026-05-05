@@ -20,3 +20,4 @@ shared-auth = { path = "../../packages/shared-auth" }
 chrono = { version = "0.4", features = ["serde"] }
 cron = "0.12"
 tower-http = { version = "0.6.8", features = ["cors"] }
+reqwest = { version = "0.12", features = ["json"] }

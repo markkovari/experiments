@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: executor
+spec:
+  selector:
+    app: executor
+  ports:
+    - protocol: TCP
+      port: 3003
+      targetPort: 3003
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: executor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: executor
+  template:
+    metadata:
+      labels:
+        app: executor
+    spec:
+      containers:
+        - name: executor
+          image: "{{ .Values.services_base_repo }}/executor:{{ .Values.image_tag }}"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3003
+          env:
+            - name: APP_NATS__URL
+              value: "nats://nats:4222"
+            - name: APP_MONGODB__URL
+              value: "mongodb://admin:password@mongodb:27017"
+            - name: APP_AUTH__JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: auth-secrets
+                  key: jwt-secret

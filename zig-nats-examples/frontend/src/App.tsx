@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { Toaster } from "@/components/ui/toaster"
 import { useToast } from "@/hooks/use-toast"
 import { Auth } from './components/Auth'
 import { Organizations } from './components/Organizations'
 import { Scheduler } from './components/Scheduler'
+import { Members } from './components/Members'
 import { Button } from '@/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { LogOut, LayoutDashboard } from 'lucide-react'
 
 export interface User {
@@ -12,16 +14,23 @@ export interface User {
   email: string;
 }
 
+export interface OrgMember {
+  user_id: { $oid: string };
+  email: string;
+  role: string;
+}
+
 export interface Organization {
   _id: { $oid: string };
   name: string;
   owner_id: { $oid: string };
-  member_ids: { $oid: string }[];
+  members: OrgMember[];
 }
 
 function App() {
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'))
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null)
+  const [currentRole, setCurrentRole] = useState<string>('Viewer')
   const { toast } = useToast()
 
   useEffect(() => {
@@ -32,6 +41,21 @@ function App() {
       setCurrentOrg(null)
     }
   }, [token])
+
+  useEffect(() => {
+    if (token && currentOrg) {
+      try {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        const userId = payload.sub;
+        const member = currentOrg.members.find(m => m.user_id.$oid === userId);
+        if (member) {
+          setCurrentRole(member.role);
+        }
+      } catch (e) {
+        console.error("Failed to parse token", e);
+      }
+    }
+  }, [token, currentOrg])
 
   const logout = () => {
     setToken(null)
@@ -61,7 +85,7 @@ function App() {
           <div className="flex items-center gap-4">
             {currentOrg && (
               <span className="text-sm font-medium text-zinc-500 bg-zinc-100 px-3 py-1 rounded-full">
-                Org: {currentOrg.name}
+                Org: {currentOrg.name} ({currentRole})
               </span>
             )}
             <Button variant="ghost" size="sm" onClick={logout} className="gap-2">
@@ -80,10 +104,22 @@ function App() {
             />
           </aside>
           <section className="md:col-span-2">
-            <Scheduler 
-              token={token} 
-              org={currentOrg} 
-            />
+             {currentOrg ? (
+              <Tabs defaultValue="scheduler" className="w-full">
+                <TabsList className="mb-4">
+                  <TabsTrigger value="scheduler">Actions & Executions</TabsTrigger>
+                  <TabsTrigger value="members">Team Members</TabsTrigger>
+                </TabsList>
+                <TabsContent value="scheduler">
+                  <Scheduler token={token} org={currentOrg} currentRole={currentRole} />
+                </TabsContent>
+                <TabsContent value="members">
+                  <Members token={token} org={currentOrg} currentRole={currentRole} />
+                </TabsContent>
+              </Tabs>
+             ) : (
+                <Scheduler token={token} org={null} currentRole={currentRole} />
+             )}
           </section>
         </main>
       </div>

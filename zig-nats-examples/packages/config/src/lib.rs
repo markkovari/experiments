@@ -36,20 +36,55 @@ impl AppConfig {
         let run_mode = std::env::var("RUN_MODE").unwrap_or_else(|_| "development".into());
 
         let s = Config::builder()
-            // Start off by merging in the "default" configuration file
             .add_source(File::with_name("config/default").required(false))
-            // Add in the current environment file
-            // Default to 'development' env
-            // Note that this file is _optional_
             .add_source(File::with_name(&format!("config/{}", run_mode)).required(false))
-            // Add in a local configuration file
-            // This file shouldn't be checked in to git
             .add_source(File::with_name("config/local").required(false))
-            // Add in settings from the environment (with a prefix of APP)
-            // Eg.. `APP_SERVER__PORT=8080` would set `server.port`
-            .add_source(Environment::with_prefix("APP").separator("__"))
+            // The library merge logic often fails with mixed case env vars.
+            // We build the base config from files first.
             .build()?;
 
-        s.try_deserialize()
+        let mut config: AppConfig = s.try_deserialize()?;
+        
+        // 🚀 ROBUST K8S OVERRIDES
+        // Instead of relying on the library to merge, we manually inject 
+        // the standard K8s environment variables if they exist.
+        
+        if let Ok(url) = std::env::var("APP_NATS__URL") {
+            config.nats.url = url;
+        }
+
+        if let Ok(url) = std::env::var("APP_MONGODB__URL") {
+            if let Some(ref mut mongo) = config.mongodb {
+                mongo.url = url;
+            } else {
+                // If the section didn't exist in TOML, initialize it
+                config.mongodb = Some(MongoConfig {
+                    url: url.clone(),
+                    db_name: std::env::var("APP_MONGODB__DB_NAME").unwrap_or_else(|_| "default_db".into()),
+                });
+            }
+        }
+        
+        // Explicitly check for db_name override
+        if let Ok(db_name) = std::env::var("APP_MONGODB__DB_NAME") {
+            if let Some(ref mut mongo) = config.mongodb {
+                mongo.db_name = db_name;
+            }
+        }
+
+        if let Ok(secret) = std::env::var("APP_AUTH__JWT_SECRET") {
+            if let Some(ref mut auth) = config.auth {
+                auth.jwt_secret = secret;
+            } else {
+                config.auth = Some(AuthConfig { jwt_secret: secret });
+            }
+        }
+
+        println!("🚀 CONFIG READY | NATS: {} | MONGO_DB: {}", 
+            config.nats.url, 
+            config.mongodb.as_ref().map(|m| m.db_name.as_str()).unwrap_or("none")
+        );
+        
+        Ok(config)
     }
 }

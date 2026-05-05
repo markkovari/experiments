@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 axum = "0.7"
 tokio = { version = "1.0", features = ["full"] }
-async-nats = { version = "0.47", features = ["service"] }
+async-nats = { version = "0.47", features = ["service", "kv", "jetstream"] }
 futures = "0.3"
 bytes = "1.0"
 mongodb = "3.1"
@@ -18,3 +18,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 config = { path = "../../packages/config" }
 shared-auth = { path = "../../packages/shared-auth" }
 tower-http = { version = "0.6.8", features = ["cors"] }
+reqwest = { version = "0.12", features = ["json"] }

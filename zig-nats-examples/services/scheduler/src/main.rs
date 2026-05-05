@@ -3,9 +3,10 @@ mod models;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, post, put, delete},
     Json, Router,
 };
+
 use std::net::SocketAddr;
 use std::str::FromStr;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -22,6 +23,7 @@ struct AppState {
     db: mongodb::Database,
     nats: async_nats::Client,
     js: async_nats::jetstream::Context,
+    kv: async_nats::jetstream::kv::Store,
     config: AppConfig,
 }
 
@@ -45,8 +47,22 @@ async fn main() -> anyhow::Result<()> {
     let settings = AppConfig::load().map_err(|e| anyhow::anyhow!("Failed to load config: {}", e))?;
     tracing::info!("Configuration loaded");
 
-    // Connect to NATS
-    let nats_client = async_nats::connect(&settings.nats.url).await?;
+    // Connect to NATS with retry
+    let nats_client = {
+        let mut retry_count = 0;
+        loop {
+            match async_nats::connect(&settings.nats.url).await {
+                Ok(client) => break client,
+                Err(e) if retry_count < 10 => {
+                    retry_count += 1;
+                    tracing::warn!("Failed to connect to NATS, retrying ({}/10): {}", retry_count, e);
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+                Err(e) => return Err(anyhow::anyhow!("Final NATS connection failure: {}", e)),
+            }
+        }
+    };
+
     let js = async_nats::jetstream::new(nats_client.clone());
     
     // Ensure JetStream Streams exist
@@ -64,9 +80,27 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Connected to NATS and JetStream initialized");
 
-    // Connect to MongoDB
+    // Connect to MongoDB with retry
     let mongo_config = settings.mongodb.as_ref().ok_or_else(|| anyhow::anyhow!("MongoDB configuration is missing"))?;
-    let mongo_client = mongodb::Client::with_uri_str(&mongo_config.url).await?;
+    let mongo_client = {
+        let mut retry_count = 0;
+        loop {
+            match mongodb::Client::with_uri_str(&mongo_config.url).await {
+                Ok(client) => {
+                    if let Ok(_) = client.database("admin").run_command(doc! {"ping": 1}).await {
+                        break client;
+                    }
+                }
+                _ => {}
+            }
+            if retry_count >= 10 {
+                return Err(anyhow::anyhow!("Final MongoDB connection failure"));
+            }
+            retry_count += 1;
+            tracing::warn!("Waiting for MongoDB, retrying ({}/10)...", retry_count);
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    };
     let db = mongo_client.database(&mongo_config.db_name);
     tracing::info!("Connected to MongoDB");
 
@@ -74,6 +108,11 @@ async fn main() -> anyhow::Result<()> {
         db: db.clone(),
         nats: nats_client,
         js: js.clone(),
+        kv: js.create_key_value(async_nats::jetstream::kv::Config {
+            bucket: "ORG_ROLES".to_string(),
+            history: 1,
+            ..Default::default()
+        }).await?,
         config: settings.clone(),
     };
 
@@ -103,6 +142,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/actions", post(create_action).get(list_actions))
+        .route("/actions/:id", delete(delete_action).put(update_action))
         .route("/actions/:id/trigger", post(trigger_action))
         .route("/executions", get(list_executions))
         .layer(tower_http::cors::CorsLayer::permissive())
@@ -117,6 +157,45 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn check_permission(state: &AppState, org_id: &str, user_id: &str, allowed_roles: &[&str]) -> Result<(), (StatusCode, String)> {
+    let kv_key = format!("org:{}:user:{}", org_id, user_id);
+    
+    // 1. Try Cache First
+    if let Ok(Some(entry)) = state.kv.get(&kv_key).await {
+        let cached_role = String::from_utf8_lossy(&entry);
+        if allowed_roles.contains(&cached_role.as_ref()) {
+            return Ok(());
+        } else {
+            return Err((StatusCode::FORBIDDEN, format!("User role '{}' is not authorized for this action", cached_role)));
+        }
+    }
+
+    // 2. Cache Miss: Fall back to HTTP API
+    let org_url = std::env::var("ORG_SERVICE_URL").unwrap_or_else(|_| "http://org:3001".to_string());
+    let reqwest_client = reqwest::Client::new();
+    let url = format!("{}/internal/orgs/{}/members/{}/role", org_url, org_id, user_id);
+    
+    let res = reqwest_client.get(&url)
+        .send()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to verify permissions: {}", e)))?;
+
+    if !res.status().is_success() {
+        return Err((StatusCode::FORBIDDEN, "User does not have access to this organization".to_string()));
+    }
+
+    let user_role = res.text().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    
+    // 3. Populate Cache
+    let _ = state.kv.put(&kv_key, user_role.clone().into()).await;
+
+    if allowed_roles.contains(&user_role.as_str()) {
+        Ok(())
+    } else {
+        Err((StatusCode::FORBIDDEN, format!("User role '{}' is not authorized for this action", user_role)))
+    }
+}
+
 async fn health_check() -> &'static str {
     "OK"
 }
@@ -126,6 +205,8 @@ async fn create_action(
     user: JwtUser,
     Json(payload): Json<CreateActionRequest>,
 ) -> Result<Json<Action>, (StatusCode, String)> {
+    check_permission(&state, &payload.org_id, &user.user_id, &["Owner", "Admin", "Editor"]).await?;
+
     let actions_collection = state.db.collection::<Action>("actions");
 
     let user_id = ObjectId::from_str(&user.user_id)
@@ -160,17 +241,35 @@ async fn create_action(
     Ok(Json(action))
 }
 
+use serde::Deserialize;
+#[derive(Deserialize)]
+pub struct ListQuery {
+    pub org_id: Option<String>,
+}
+
 async fn list_actions(
     State(state): State<AppState>,
     user: JwtUser,
+    axum::extract::Query(query): axum::extract::Query<ListQuery>,
 ) -> Result<Json<Vec<Action>>, (StatusCode, String)> {
     let actions_collection = state.db.collection::<Action>("actions");
 
-    let user_id = ObjectId::from_str(&user.user_id)
-        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid user ID".to_string()))?;
+    let mut filter = doc! {};
+    if let Some(org_id_str) = query.org_id {
+        // Enforce RBAC for the organization
+        check_permission(&state, &org_id_str, &user.user_id, &["Owner", "Admin", "Editor", "Invoker", "Viewer"]).await?;
+        if let Ok(org_oid) = ObjectId::from_str(&org_id_str) {
+            filter.insert("org_id", org_oid);
+        }
+    } else {
+        // Fallback to only actions created by this user if no org selected
+        let user_id = ObjectId::from_str(&user.user_id)
+            .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid user ID".to_string()))?;
+        filter.insert("user_id", user_id);
+    }
 
     let mut cursor = actions_collection
-        .find(doc! { "user_id": user_id })
+        .find(filter)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -182,6 +281,88 @@ async fn list_actions(
     }
 
     Ok(Json(actions))
+}
+
+async fn delete_action(
+    State(state): State<AppState>,
+    user: JwtUser,
+    Path(action_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let actions_collection = state.db.collection::<Action>("actions");
+    let user_id = ObjectId::from_str(&user.user_id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid user ID".to_string()))?;
+    let aid = ObjectId::from_str(&action_id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid action ID".to_string()))?;
+
+    let result = actions_collection
+        .delete_one(doc! { "_id": aid, "user_id": user_id })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if result.deleted_count == 0 {
+        return Err((StatusCode::NOT_FOUND, "Action not found".to_string()));
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn update_action(
+    State(state): State<AppState>,
+    user: JwtUser,
+    Path(action_id): Path<String>,
+    Json(payload): Json<UpdateActionRequest>,
+) -> Result<Json<Action>, (StatusCode, String)> {
+    let actions_collection = state.db.collection::<Action>("actions");
+    let user_id = ObjectId::from_str(&user.user_id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid user ID".to_string()))?;
+    let aid = ObjectId::from_str(&action_id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid action ID".to_string()))?;
+
+    let action = actions_collection
+        .find_one(doc! { "_id": aid })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "Action not found".to_string()))?;
+
+    check_permission(&state, &action.org_id.to_hex(), &user.user_id, &["Owner", "Admin", "Editor"]).await?;
+
+    // Validate cron expression if provided
+    if let Some(ref cron) = payload.cron_expression {
+        Schedule::from_str(cron).map_err(|_| (StatusCode::BAD_REQUEST, "Invalid cron expression".to_string()))?;
+    }
+
+    let mut update_doc = doc! {};
+    if let Some(action_type) = payload.action_type {
+        update_doc.insert("action_type", action_type);
+    }
+    if let Some(p) = payload.payload {
+        update_doc.insert("payload", to_bson(&p).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?);
+    }
+    if let Some(trigger_type) = payload.trigger_type {
+        let tt_str = serde_json::to_string(&trigger_type).unwrap().replace("\"", "");
+        update_doc.insert("trigger_type", tt_str);
+    }
+    if let Some(cron_expression) = payload.cron_expression {
+        update_doc.insert("cron_expression", cron_expression);
+    }
+
+    if update_doc.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "No fields to update".to_string()));
+    }
+
+    let result = actions_collection
+        .find_one_and_update(
+            doc! { "_id": aid, "user_id": user_id },
+            doc! { "$set": update_doc }
+        )
+        .return_document(mongodb::options::ReturnDocument::After)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    match result {
+        Some(action) => Ok(Json(action)),
+        None => Err((StatusCode::NOT_FOUND, "Action not found".to_string())),
+    }
 }
 
 async fn trigger_action(
@@ -198,14 +379,17 @@ async fn trigger_action(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid action ID".to_string()))?;
 
     let action = actions_collection
-        .find_one(doc! { "_id": aid, "user_id": user_id })
+        .find_one(doc! { "_id": aid })
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or((StatusCode::NOT_FOUND, "Action not found".to_string()))?;
 
+    check_permission(&state, &action.org_id.to_hex(), &user.user_id, &["Owner", "Admin", "Editor", "Invoker"]).await?;
+
     let execution = Execution {
         id: None,
         action_id: action.id.unwrap(),
+        org_id: action.org_id,
         user_id,
         status: ExecutionStatus::Pending,
         started_at: Utc::now(),
@@ -239,17 +423,39 @@ async fn trigger_action(
     Ok(Json(execution))
 }
 
+#[derive(Deserialize)]
+pub struct ExecQuery {
+    pub action_id: Option<String>,
+    pub org_id: Option<String>,
+}
+
 async fn list_executions(
     State(state): State<AppState>,
     user: JwtUser,
+    axum::extract::Query(query): axum::extract::Query<ExecQuery>,
 ) -> Result<Json<Vec<Execution>>, (StatusCode, String)> {
     let executions_collection = state.db.collection::<Execution>("executions");
 
-    let user_id = ObjectId::from_str(&user.user_id)
-        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid user ID".to_string()))?;
+    let mut filter = doc! {};
+    if let Some(act_id_str) = query.action_id {
+        if let Ok(act_oid) = ObjectId::from_str(&act_id_str) {
+            filter.insert("action_id", act_oid);
+        }
+    }
+    
+    if let Some(org_id_str) = query.org_id {
+        check_permission(&state, &org_id_str, &user.user_id, &["Owner", "Admin", "Editor", "Invoker", "Viewer"]).await?;
+        if let Ok(org_oid) = ObjectId::from_str(&org_id_str) {
+            filter.insert("org_id", org_oid);
+        }
+    } else if filter.is_empty() {
+        let user_id = ObjectId::from_str(&user.user_id)
+            .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid user ID".to_string()))?;
+        filter.insert("user_id", user_id);
+    }
 
     let mut cursor = executions_collection
-        .find(doc! { "user_id": user_id })
+        .find(filter)
         .sort(doc! { "started_at": -1 })
         .limit(50)
         .await
@@ -283,6 +489,7 @@ async fn evaluate_crons(state: &AppState) -> anyhow::Result<()> {
                     let execution = Execution {
                         id: None,
                         action_id: action.id.unwrap(),
+                        org_id: action.org_id,
                         user_id: action.user_id,
                         status: ExecutionStatus::Pending,
                         started_at: Utc::now(),

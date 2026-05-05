@@ -1,5 +1,5 @@
 # Multi-stage Dockerfile for Rust Microservices
-FROM rust:1.80-slim as builder
+FROM rust:latest AS builder
 
 WORKDIR /usr/src/app
 
@@ -29,4 +29,4 @@ COPY --from=builder /usr/src/app/services/${SERVICE_NAME}/config ./config
 
 # Set the binary as the entrypoint
 ENV BINARY=${SERVICE_NAME}
-CMD ./${BINARY}
+CMD ["sh", "-c", "./${BINARY}"]
