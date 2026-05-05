@@ -30,6 +30,7 @@ async fn main() -> anyhow::Result<()> {
 
     let settings = AppConfig::load().map_err(|e| anyhow::anyhow!("Failed to load config: {}", e))?;
     
+    // Connect to NATS with retry
     let nats_client = {
         let mut retry_count = 0;
         loop {
@@ -46,6 +47,7 @@ async fn main() -> anyhow::Result<()> {
     };
     tracing::info!("Connected to NATS at {}", settings.nats.url);
     
+    // Setup NATS KV for rate limiting
     let js = async_nats::jetstream::new(nats_client.clone());
     let kv = js.create_key_value(async_nats::jetstream::kv::Config {
         bucket: "RATE_LIMITS".to_string(),
@@ -98,19 +100,28 @@ async fn proxy_handler(
 
     let _ = state.kv.put(&kv_key, (current_count + 1).to_string().into()).await;
 
+    let query_string = req.uri().query().map(|q| format!("?{}", q)).unwrap_or_default();
+
     // 2. Routing
-    let internal_url = if path.starts_with("auth") {
+    let mut internal_url = if path.starts_with("auth") {
+        // Auth service expects /login, /register (strip "auth")
         let base = std::env::var("AUTH_SERVICE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
         format!("{}{}", base, &path[4..])
     } else if path.starts_with("orgs") {
-        let base = std::env::var("ORG_SERVICE_URL").unwrap_or_else(|_| "http://localhost:3001".to_string());
+        // Org service expects /orgs (DO NOT STRIP)
+        let base = std::env::var("ORG_SERVICE_URL").unwrap_or_else(|_| "http://localhost:3001/orgs".to_string());
         format!("{}/{}", base.trim_end_matches('/'), path)
     } else if path.starts_with("actions") || path.starts_with("executions") {
+        // Scheduler expects /actions, /executions (DO NOT STRIP)
         let base = std::env::var("SCHEDULER_SERVICE_URL").unwrap_or_else(|_| "http://localhost:3002".to_string());
         format!("{}/{}", base.trim_end_matches('/'), path)
     } else {
         return (StatusCode::NOT_FOUND, "Service not found").into_response();
     };
+
+    internal_url.push_str(&query_string);
+
+    tracing::info!("PROXY: {} /api/{} -> {}", req.method(), path, internal_url);
 
     // 3. Forward
     let method = req.method().clone();
@@ -124,7 +135,7 @@ async fn proxy_handler(
         }
     };
 
-    let mut proxy_req = state.http_client.request(method.clone(), &internal_url);
+    let mut proxy_req = state.http_client.request(method, &internal_url);
     for (key, value) in headers.iter() {
         if key != "host" {
             proxy_req = proxy_req.header(key, value);
@@ -134,7 +145,7 @@ async fn proxy_handler(
     let res = match proxy_req.body(body_bytes).send().await {
         Ok(res) => res,
         Err(e) => {
-            tracing::error!("Proxy error for {} {}: {}", method, path, e);
+            tracing::error!("Proxy error for {}: {}", path, e);
             return (StatusCode::BAD_GATEWAY, format!("Internal service unavailable: {}", e)).into_response();
         }
     };
