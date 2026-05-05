@@ -32,15 +32,13 @@ export function Scheduler({ token, org, currentRole }: { token: string, org: Org
   const [cron, setCron] = useState('')
   const { toast } = useToast()
   
-  const apiHost = window.location.hostname === 'localhost' ? 'localhost:8080' : `${window.location.hostname}:8081`;
-
   const fetchData = async () => {
     if (!org) return
     try {
       const orgQuery = `?org_id=${org._id.$oid}`
       const [actionsRes, execsRes] = await Promise.all([
-        fetch(`http://${apiHost}/api/actions${orgQuery}`, { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch(`http://${apiHost}/api/executions${orgQuery}`, { headers: { 'Authorization': `Bearer ${token}` } })
+        fetch(`/api/actions${orgQuery}`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`/api/executions${orgQuery}`, { headers: { 'Authorization': `Bearer ${token}` } })
       ])
       if (actionsRes.ok) {
          const fetchedActions = await actionsRes.json();
@@ -67,7 +65,7 @@ export function Scheduler({ token, org, currentRole }: { token: string, org: Org
   const createAction = async (type: 'Manual' | 'Cron') => {
     if (!org) return
     try {
-      const response = await fetch(`http://${apiHost}/api/actions`, {
+      const response = await fetch(`/api/actions`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -93,7 +91,7 @@ export function Scheduler({ token, org, currentRole }: { token: string, org: Org
 
   const triggerAction = async (id: string) => {
     try {
-      const response = await fetch(`http://${apiHost}/api/actions/${id}/trigger`, {
+      const response = await fetch(`/api/actions/${id}/trigger`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       })
@@ -108,7 +106,7 @@ export function Scheduler({ token, org, currentRole }: { token: string, org: Org
 
   const deleteAction = async (id: string) => {
     try {
-      const response = await fetch(`http://${apiHost}/api/actions/${id}`, {
+      const response = await fetch(`/api/actions/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       })

@@ -27,6 +27,24 @@ services:
     networks:
       - nats-net
 
+  auth:
+    build:
+      context: .
+      dockerfile: Dockerfile.service
+      args:
+        SERVICE_NAME: auth
+    container_name: auth
+    ports:
+      - "3000:3000"
+    environment:
+      - APP_NATS__URL=nats://nats:4222
+      - APP_MONGODB__URL=mongodb://admin:password@mongodb:27017
+    depends_on:
+      - nats
+      - mongodb
+    networks:
+      - nats-net
+
   gateway:
     build:
       context: .
@@ -39,9 +57,11 @@ services:
     environment:
       - APP_NATS__URL=nats://nats:4222
       - APP_MONGODB__URL=mongodb://mongodb:27017
+      - AUTH_SERVICE_URL=http://auth:3000
     depends_on:
       - nats
       - mongodb
+      - auth
     networks:
       - nats-net
 
