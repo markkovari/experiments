@@ -2,11 +2,17 @@ import { useState, useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Play, Calendar, History, Clock, Trash2 } from 'lucide-react'
 import { Organization } from '../App'
 import { useToast } from "@/hooks/use-toast"
+
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion"
 
 interface Action {
   _id: { $oid: string };
@@ -188,47 +194,59 @@ export function Scheduler({ token, org, currentRole }: { token: string, org: Org
           <CardDescription>Track the outcome of scheduled and manual events.</CardDescription>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Action</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Started</TableHead>
-                <TableHead className="text-right">Result</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {executions.map((ex) => (
-                <TableRow key={ex._id.$oid}>
-                  <TableCell className="font-medium">
-                    {actions.find(a => a._id.$oid === ex.action_id.$oid)?.action_type || 'Unknown'}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={
-                      ex.status === 'Completed' ? 'default' : 
-                      ex.status === 'Running' ? 'secondary' : 
-                      ex.status === 'Failed' ? 'destructive' : 'outline'
-                    }>
-                      {ex.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-zinc-500 text-xs">
-                    {new Date(ex.started_at).toLocaleString()}
-                  </TableCell>
-                  <TableCell className="text-right text-xs truncate max-w-[200px] text-zinc-400">
-                    {ex.result ? JSON.stringify(ex.result) : '-'}
-                  </TableCell>
-                </TableRow>
-              ))}
-              {executions.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={4} className="text-center py-12 text-zinc-400">
-                    No executions yet
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+          <Accordion type="single" collapsible className="w-full">
+            {executions.map((ex) => (
+              <AccordionItem key={ex._id.$oid} value={ex._id.$oid}>
+                <AccordionTrigger className="hover:no-underline py-2">
+                  <div className="flex items-center justify-between w-full pr-4">
+                    <div className="flex items-center gap-4">
+                      <span className="font-medium">
+                        {actions.find(a => a._id.$oid === ex.action_id.$oid)?.action_type || 'Unknown'}
+                      </span>
+                      <Badge variant={
+                        ex.status === 'Completed' ? 'default' : 
+                        ex.status === 'Running' ? 'secondary' : 
+                        ex.status === 'Failed' ? 'destructive' : 'outline'
+                      }>
+                        {ex.status}
+                      </Badge>
+                    </div>
+                    <span className="text-zinc-500 text-xs">
+                      {new Date(ex.started_at).toLocaleString()}
+                    </span>
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="pt-2 pb-4 px-1">
+                  <div className="space-y-4 text-xs font-mono bg-zinc-50 p-4 rounded-lg border border-zinc-100">
+                    <div>
+                      <p className="text-[10px] uppercase font-bold text-zinc-400 mb-1">Payload</p>
+                      <pre className="overflow-auto whitespace-pre-wrap break-all">
+                        {JSON.stringify(actions.find(a => a._id.$oid === ex.action_id.$oid)?.payload, null, 2)}
+                      </pre>
+                    </div>
+                    {ex.result && (
+                      <div>
+                        <p className="text-[10px] uppercase font-bold text-zinc-400 mb-1">Result</p>
+                        <pre className="text-primary overflow-auto whitespace-pre-wrap break-all">
+                          {JSON.stringify(ex.result, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                    {ex.completed_at && (
+                      <p className="text-[10px] text-zinc-400">
+                        Completed at: {new Date(ex.completed_at).toLocaleString()}
+                      </p>
+                    )}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            ))}
+          </Accordion>
+          {executions.length === 0 && (
+            <div className="text-center py-12 text-zinc-400 border-2 border-dashed rounded-lg">
+              No executions yet
+            </div>
+          )}
         </CardContent>
       </Card>
 
