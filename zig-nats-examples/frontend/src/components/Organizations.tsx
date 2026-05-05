@@ -18,11 +18,9 @@ export function Organizations({ token, onSelectOrg, selectedOrg }: OrgsProps) {
   const [newOrgName, setNewOrgName] = useState('')
   const { toast } = useToast()
   
-  const apiHost = window.location.hostname === 'localhost' ? 'localhost:8080' : `${window.location.hostname}:8081`;
-
   const fetchOrgs = async () => {
     try {
-      const response = await fetch(`http://${apiHost}/api/orgs`, {
+      const response = await fetch(`/api/orgs`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       if (response.ok) {
@@ -44,7 +42,7 @@ export function Organizations({ token, onSelectOrg, selectedOrg }: OrgsProps) {
   const createOrg = async () => {
     if (!newOrgName) return
     try {
-      const response = await fetch(`http://${apiHost}/api/orgs`, {
+      const response = await fetch(`/api/orgs`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',

@@ -20,12 +20,10 @@ export function Members({ token, org, currentRole }: { token: string, org: Organ
   const [inviteRole, setInviteRole] = useState('Viewer')
   const { toast } = useToast()
   
-  const apiHost = window.location.hostname === 'localhost' ? 'localhost:8080' : `${window.location.hostname}:8081`;
-
   const fetchMembers = async () => {
     if (!org) return
     try {
-      const response = await fetch(`http://${apiHost}/api/orgs/${org._id.$oid}/members`, {
+      const response = await fetch(`/api/orgs/${org._id.$oid}/members`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       if (response.ok) {
@@ -44,7 +42,7 @@ export function Members({ token, org, currentRole }: { token: string, org: Organ
   const inviteUser = async () => {
     if (!org || !inviteEmail) return
     try {
-      const response = await fetch(`http://${apiHost}/api/orgs/${org._id.$oid}/members`, {
+      const response = await fetch(`/api/orgs/${org._id.$oid}/members`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -68,7 +66,7 @@ export function Members({ token, org, currentRole }: { token: string, org: Organ
   const removeUser = async (userId: string) => {
     if (!org) return
     try {
-      const response = await fetch(`http://${apiHost}/api/orgs/${org._id.$oid}/members/${userId}`, {
+      const response = await fetch(`/api/orgs/${org._id.$oid}/members/${userId}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       })
@@ -87,7 +85,7 @@ export function Members({ token, org, currentRole }: { token: string, org: Organ
   const updateRole = async (userId: string, newRole: string) => {
     if (!org) return
     try {
-      const response = await fetch(`http://${apiHost}/api/orgs/${org._id.$oid}/members/${userId}`, {
+      const response = await fetch(`/api/orgs/${org._id.$oid}/members/${userId}`, {
         method: 'PUT',
         headers: { 
           'Content-Type': 'application/json',

@@ -1,0 +1,30 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# wasmcloud / WASM
+*.wasm
+.wash/
+build/
+
+# wasmcloud wit deps (generated)
+wit/deps/
+
+# ruvector
+*.db
+*.db-shm
+*.db-wal
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# env
+.env
+.env.local
