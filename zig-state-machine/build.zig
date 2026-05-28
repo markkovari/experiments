@@ -49,6 +49,16 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
+    // --- Use-case layer: app logic over a repo interface. Depends on domain. ---
+    const usecases = b.addModule("usecases", .{
+        .root_source_file = b.path("modules/usecases/usecases.zig"),
+        .target = target,
+    });
+    // This addImport is the ONLY thing that lets usecases.zig @import("domain").
+    // No edge to sqlite/http is ever added here -> usecases physically cannot
+    // reach them. Layering enforced by the build graph.
+    usecases.addImport("domain", domain);
+
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
     // to the module defined above, it's sometimes preferable to split business
@@ -150,10 +160,14 @@ pub fn build(b: *std.Build) void {
     const domain_tests = b.addTest(.{ .root_module = domain });
     const run_domain_tests = b.addRunArtifact(domain_tests);
 
+    const usecases_tests = b.addTest(.{ .root_module = usecases });
+    const run_usecases_tests = b.addRunArtifact(usecases_tests);
+
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_domain_tests.step);
+    test_step.dependOn(&run_usecases_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
