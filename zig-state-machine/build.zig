@@ -59,6 +59,20 @@ pub fn build(b: *std.Build) void {
     // reach them. Layering enforced by the build graph.
     usecases.addImport("domain", domain);
 
+    // --- In-memory repo: concrete TodoRepo impl. Depends on usecases. ---
+    const memory = b.addModule("memory", .{
+        .root_source_file = b.path("modules/memory/memory.zig"),
+        .target = target,
+    });
+    memory.addImport("usecases", usecases);
+
+    // --- HTTP layer: request -> use case -> JSON. Depends on usecases. ---
+    const http = b.addModule("http", .{
+        .root_source_file = b.path("modules/http/http.zig"),
+        .target = target,
+    });
+    http.addImport("usecases", usecases);
+
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
     // to the module defined above, it's sometimes preferable to split business
@@ -90,13 +104,13 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             // List of modules available for import in source files part of the
             // root module.
+            // The composition root sees the outer layers: the concrete repo
+            // (memory) and the request dispatcher (http). usecases/domain come
+            // in transitively through those.
             .imports = &.{
-                // Here "zig_state_machine" is the name you will use in your source code to
-                // import this module (e.g. `@import("zig_state_machine")`). The name is
-                // repeated because you are allowed to rename your imports, which
-                // can be extremely useful in case of collisions (which can happen
-                // importing modules from different packages).
-                .{ .name = "zig_state_machine", .module = mod },
+                .{ .name = "memory", .module = memory },
+                .{ .name = "http", .module = http },
+                .{ .name = "usecases", .module = usecases },
             },
         }),
     });
@@ -163,11 +177,36 @@ pub fn build(b: *std.Build) void {
     const usecases_tests = b.addTest(.{ .root_module = usecases });
     const run_usecases_tests = b.addRunArtifact(usecases_tests);
 
+    const memory_tests = b.addTest(.{ .root_module = memory });
+    const run_memory_tests = b.addRunArtifact(memory_tests);
+
+    const http_tests = b.addTest(.{ .root_module = http });
+    const run_http_tests = b.addRunArtifact(http_tests);
+
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_domain_tests.step);
     test_step.dependOn(&run_usecases_tests.step);
+    test_step.dependOn(&run_memory_tests.step);
+    test_step.dependOn(&run_http_tests.step);
+
+    // --- E2E: spawns the real built binary and hits it over TCP. Separate
+    // step (`zig build e2e`) since it depends on the installed exe and is
+    // slower than the unit tests. ---
+    const e2e_mod = b.createModule(.{
+        .root_source_file = b.path("tests/e2e.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const e2e_tests = b.addTest(.{ .root_module = e2e_mod });
+    const run_e2e_tests = b.addRunArtifact(e2e_tests);
+    // The test execs zig-out/bin/<exe> relative to cwd, so the exe must be
+    // installed first and the test must run from the build root.
+    run_e2e_tests.step.dependOn(b.getInstallStep());
+    run_e2e_tests.has_side_effects = true; // always re-run; spawns a server
+    const e2e_step = b.step("e2e", "Run end-to-end tests against the real binary");
+    e2e_step.dependOn(&run_e2e_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
