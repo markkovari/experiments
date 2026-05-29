@@ -45,13 +45,14 @@ const json_headers = &[_]std.http.Header{
     .{ .name = "content-type", .value = "application/json" },
 };
 
-/// One-shot JSON response. keep_alive=false: we serve one request per
-/// connection, so std.http never needs to discard an unread request body
-/// (which would block on POSTs that sent no content-length).
+/// JSON response with HTTP/1.1 keep-alive: the connection is reused for the
+/// next request. std.http discards any unread request body before sending,
+/// which is safe as long as the client framed it (Content-Length / chunked) —
+/// all real HTTP clients do.
 fn respondJson(req: *std.http.Server.Request, status: std.http.Status, body: []const u8) !void {
     return req.respond(body, .{
         .status = status,
-        .keep_alive = false,
+        .keep_alive = true,
         .extra_headers = json_headers,
     });
 }
