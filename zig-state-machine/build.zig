@@ -73,6 +73,22 @@ pub fn build(b: *std.Build) void {
     });
     http.addImport("usecases", usecases);
 
+    // --- SQLite-backed repo: same TodoRepo interface, persists to disk. ---
+    // The sqlite3 C amalgamation is vendored and compiled directly into any
+    // artifact that uses this module. Needs libc + the header include path.
+    const sqlite = b.addModule("sqlite", .{
+        .root_source_file = b.path("modules/sqlite/sqlite.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    sqlite.addImport("usecases", usecases);
+    sqlite.addIncludePath(b.path("vendor/sqlite"));
+    sqlite.addCSourceFile(.{
+        .file = b.path("vendor/sqlite/sqlite3.c"),
+        .flags = &.{ "-DSQLITE_THREADSAFE=0", "-DSQLITE_DQS=0" },
+    });
+
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
     // to the module defined above, it's sometimes preferable to split business
@@ -109,6 +125,7 @@ pub fn build(b: *std.Build) void {
             // in transitively through those.
             .imports = &.{
                 .{ .name = "memory", .module = memory },
+                .{ .name = "sqlite", .module = sqlite },
                 .{ .name = "http", .module = http },
                 .{ .name = "usecases", .module = usecases },
             },
@@ -183,6 +200,9 @@ pub fn build(b: *std.Build) void {
     const http_tests = b.addTest(.{ .root_module = http });
     const run_http_tests = b.addRunArtifact(http_tests);
 
+    const sqlite_tests = b.addTest(.{ .root_module = sqlite });
+    const run_sqlite_tests = b.addRunArtifact(sqlite_tests);
+
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
@@ -190,6 +210,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_usecases_tests.step);
     test_step.dependOn(&run_memory_tests.step);
     test_step.dependOn(&run_http_tests.step);
+    test_step.dependOn(&run_sqlite_tests.step);
 
     // --- E2E: spawns the real built binary and hits it over TCP. Separate
     // step (`zig build e2e`) since it depends on the installed exe and is
