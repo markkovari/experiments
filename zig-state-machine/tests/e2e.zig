@@ -61,9 +61,17 @@ fn bodyOf(response: []const u8) []const u8 {
 test "e2e: full todo lifecycle over real HTTP" {
     const alloc = testing.allocator;
 
+    // --- Config the server via env (12-factor): in-memory backend on our
+    // test port, so the e2e leaves no db file behind. ---
+    var env = std.process.Environ.Map.init(alloc);
+    defer env.deinit();
+    try env.put("TODO_BACKEND", "memory");
+    try env.put("PORT", comptimePort());
+
     // --- Spawn the real server. ---
     var child = try std.process.spawn(io, .{
-        .argv = &.{ exe_path, comptimePort() },
+        .argv = &.{exe_path},
+        .environ_map = &env,
         .stdout = .ignore,
         .stderr = .ignore,
     });

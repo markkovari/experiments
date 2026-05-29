@@ -1,0 +1,7 @@
+.zig-cache/
+zig-out/
+data/
+todos.db
+ruvector.db
+.git/
+*.md

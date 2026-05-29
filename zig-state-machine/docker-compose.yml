@@ -1,0 +1,23 @@
+# Two ways to run the same image, differing only by environment (12-factor):
+#   docker compose up todo          -> sqlite, persisted to ./data volume
+#   docker compose up todo-memory   -> in-memory, ephemeral, no volume
+services:
+  todo:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      TODO_BACKEND: sqlite
+      TODO_DB_PATH: /data/todos.db
+      PORT: "8080"
+    volumes:
+      - ./data:/data # state as an attached resource; survives container restarts
+
+  todo-memory:
+    build: .
+    ports:
+      - "8081:8080"
+    environment:
+      TODO_BACKEND: memory
+      PORT: "8080"
+    # no volume: state is intentionally ephemeral
