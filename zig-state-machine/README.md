@@ -62,3 +62,28 @@ docker compose up todo-memory   # in-memory, ephemeral
 Note: the build pins a specific Zig **dev** tarball (this project uses
 0.17.0-dev-only stdlib API). Dev tarballs are transient — if the build 404s,
 bump `ZIG_VERSION` in the `Dockerfile` to a current dev build.
+
+## Status & known limitations
+
+This is a learning project (Zig sub-packages + clean architecture). The
+architecture is the point and it holds up: domain / usecases / repo-interface /
+http / composition-root are cleanly separated, and swapping the in-memory repo
+for sqlite touched only `main`. Unit tests and the e2e test (real binary over
+real TCP) pass. HTTP/1.1 keep-alive and graceful shutdown (SIGINT/SIGTERM drain)
+work.
+
+What does **not** work, and why we stopped here:
+
+- **Concurrency is broken under load.** The server handles sequential requests
+  fine (`oha -c 1` → 100%, ~1k req/s on a single connection) but collapses with
+  even 2 concurrent connections (kernel "connection refused"). The single
+  acceptor task built on `std.Io.Threaded` does not offload connections fast
+  enough / the listen backlog isn't tuned, and the new `std.Io` runtime is too
+  young and undocumented to wire a real event-loop server cleanly.
+- This reflects the state of Zig itself (`0.17.0-dev`): the language is
+  excellent for the architecture lessons here, but the server runtime/ecosystem
+  story is years from production. Treat this repo as a clean-architecture
+  reference, not a deployable server.
+
+> Use 127.0.0.1 (not `localhost`) when load-testing — the server binds IPv4
+> only, and some clients resolve `localhost` to `::1` first.

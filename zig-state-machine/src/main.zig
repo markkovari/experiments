@@ -16,6 +16,30 @@ const sqlite = @import("sqlite");
 const http = @import("http");
 const usecases = @import("usecases");
 
+// --- Graceful shutdown plumbing ---
+// A signal handler runs on an arbitrary thread with almost nothing safe to
+// touch, so it only does two async-signal-safe things: set an atomic flag and
+// close the listening fd. Closing the fd interrupts the blocked accept() so the
+// loop wakes, sees the flag, stops accepting, and drains in-flight work.
+var shutting_down = std.atomic.Value(bool).init(false);
+
+fn onSignal(_: std.posix.SIG, _: *const std.posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
+    // Only thing safe in a handler: set the flag. A watcher task notices it and
+    // cancels the acceptor through the io layer (the sanctioned way to interrupt
+    // a blocked accept — closing the fd directly trips a BADF panic in debug).
+    shutting_down.store(true, .seq_cst);
+}
+
+fn installSignalHandlers() void {
+    var act = std.posix.Sigaction{
+        .handler = .{ .sigaction = onSignal },
+        .mask = std.posix.sigemptyset(),
+        .flags = std.posix.SA.SIGINFO,
+    };
+    std.posix.sigaction(.INT, &act, null);
+    std.posix.sigaction(.TERM, &act, null);
+}
+
 /// Holds whichever concrete repo we built so it outlives the accept loop, and
 /// hands out the type-erased interface. Adding a backend = one more variant.
 const Backend = union(enum) {
@@ -61,33 +85,66 @@ pub fn main(init: std.process.Init) !void {
     var server = try addr.listen(io, .{ .reuse_address = true });
     defer server.deinit(io);
 
-    // Announce readiness on stdout so an e2e harness knows we are up.
-    var stdout_buf: [64]u8 = undefined;
+    installSignalHandlers();
+
+    var stdout_buf: [80]u8 = undefined;
     var stdout: std.Io.File.Writer = .init(.stdout(), io, &stdout_buf);
     try stdout.interface.print("listening on {s}:{d} (backend={s})\n", .{ host, port, backend_name });
     try stdout.interface.flush();
 
-    // --- Accept loop. One request per connection (keep_alive off for simplicity). ---
-    // A per-request arena: http allocates freely, we reset after each response.
-    var req_arena = std.heap.ArenaAllocator.init(gpa);
-    defer req_arena.deinit();
+    // Two task groups:
+    //  * accept_group runs the single acceptor task. Cancelling it interrupts a
+    //    blocked accept() through the io layer — the clean way to wake it.
+    //  * conn_group tracks in-flight connections, each handled concurrently so a
+    //    slow client can't block others.
+    var conn_group: std.Io.Group = .init;
+    var accept_group: std.Io.Group = .init;
+    accept_group.concurrent(io, acceptLoop, .{ io, &server, repo, gpa, &conn_group }) catch {
+        // No concurrency available: fall back to a serial inline loop.
+        acceptLoop(io, &server, repo, gpa, &conn_group);
+        return;
+    };
 
+    // Watcher: wait for a shutdown signal, then cancel the acceptor and drain.
+    while (!shutting_down.load(.seq_cst)) {
+        std.Io.sleep(io, .fromMilliseconds(100), .awake) catch break;
+    }
+
+    try stdout.interface.print("shutting down, draining in-flight requests...\n", .{});
+    try stdout.interface.flush();
+    accept_group.cancel(io); // interrupt the blocked accept()
+    conn_group.await(io) catch {}; // let outstanding requests finish
+    // defers run: server.deinit (close listener), backend.deinit (flush+close db).
+}
+
+/// Accept connections until cancelled, handing each to a concurrent task.
+fn acceptLoop(
+    io: std.Io,
+    server: *std.Io.net.Server,
+    repo: usecases.TodoRepo,
+    gpa: std.mem.Allocator,
+    conn_group: *std.Io.Group,
+) void {
     while (true) {
-        const stream = server.accept(io) catch continue;
-        // Serve exactly one request, then close so the client sees EOF
-        // (we respond with keep_alive=false). Closing also frees the fd.
-        serveOne(io, repo, req_arena.allocator(), stream);
-        _ = req_arena.reset(.retain_capacity);
+        const stream = server.accept(io) catch return; // cancellation lands here
+        conn_group.concurrent(io, handleConn, .{ io, repo, gpa, stream }) catch {
+            handleConn(io, repo, gpa, stream); // inline fallback
+        };
     }
 }
 
-fn serveOne(
+/// Handle one connection: serve a single request, then close. Owns its own
+/// arena so concurrent connections never share allocator state.
+fn handleConn(
     io: std.Io,
     repo: usecases.TodoRepo,
-    alloc: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     stream: std.Io.net.Stream,
 ) void {
     defer stream.close(io);
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
 
     var in_buf: [8192]u8 = undefined;
     var out_buf: [8192]u8 = undefined;
@@ -95,8 +152,13 @@ fn serveOne(
     var writer = stream.writer(io, &out_buf);
 
     var hs = std.http.Server.init(&reader.interface, &writer.interface);
-    var req = hs.receiveHead() catch return;
 
-    http.handle(alloc, repo, &req) catch {};
-    writer.interface.flush() catch {};
+    // HTTP/1.1 keep-alive: serve requests on this connection until the client
+    // closes it (receiveHead returns an error) or we fail to respond.
+    while (true) {
+        var req = hs.receiveHead() catch return; // EndOfStream / closed by peer
+        http.handle(arena.allocator(), repo, &req) catch return;
+        writer.interface.flush() catch return;
+        _ = arena.reset(.retain_capacity);
+    }
 }
