@@ -1,71 +1,72 @@
-const std = @import("std");
-const Io = std.Io;
+//! Composition root. The ONE place that sees every layer: it constructs the
+//! concrete MemoryRepo, erases it to the usecases.TodoRepo interface, and hands
+//! that interface to the http dispatcher inside the accept loop. domain,
+//! usecases and http never name a concrete repo — only main does the wiring.
+//!
+//! Swap MemoryRepo for a SqliteRepo here and nothing else changes.
 
-const zig_state_machine = @import("zig_state_machine");
+const std = @import("std");
+const memory = @import("memory");
+const http = @import("http");
+const usecases = @import("usecases");
 
 pub fn main(init: std.process.Init) !void {
-    // Prints to stderr, unbuffered, ignoring potential errors.
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-
-    // This is appropriate for anything that lives as long as the process.
-    const arena: std.mem.Allocator = init.arena.allocator();
-
-    // Accessing command line arguments:
-    const args = try init.minimal.args.toSlice(arena);
-    for (args) |arg| {
-        std.log.info("arg: {s}", .{arg});
-    }
-
-    // In order to do I/O operations need an `Io` instance.
     const io = init.io;
+    const gpa = init.arena.allocator(); // process-lifetime allocator
 
-    // Stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    var stdout_buffer: [1024]u8 = undefined;
-    var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
-    const stdout_writer = &stdout_file_writer.interface;
+    // Port: first CLI arg, else 8080. (e2e passes 0? no — we pass a fixed port.)
+    const args = try init.minimal.args.toSlice(gpa);
+    const port: u16 = if (args.len > 1)
+        std.fmt.parseInt(u16, args[1], 10) catch 8080
+    else
+        8080;
 
-    try zig_state_machine.printAnotherMessage(stdout_writer);
+    // --- Build the concrete repo, expose it as the interface. ---
+    var repo_impl = memory.MemoryRepo.init(gpa);
+    defer repo_impl.deinit();
+    const repo = repo_impl.repo();
 
-    try stdout_writer.flush(); // Don't forget to flush!
+    // --- Listen. ---
+    const addr = try std.Io.net.IpAddress.parse("127.0.0.1", port);
+    var server = try addr.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
+
+    // Announce readiness on stdout so an e2e harness knows we are up.
+    var stdout_buf: [64]u8 = undefined;
+    var stdout: std.Io.File.Writer = .init(.stdout(), io, &stdout_buf);
+    try stdout.interface.print("listening on {d}\n", .{port});
+    try stdout.interface.flush();
+
+    // --- Accept loop. One request per connection (keep_alive off for simplicity). ---
+    // A per-request arena: http allocates freely, we reset after each response.
+    var req_arena = std.heap.ArenaAllocator.init(gpa);
+    defer req_arena.deinit();
+
+    while (true) {
+        const stream = server.accept(io) catch continue;
+        // Serve exactly one request, then close so the client sees EOF
+        // (we respond with keep_alive=false). Closing also frees the fd.
+        serveOne(io, repo, req_arena.allocator(), stream);
+        _ = req_arena.reset(.retain_capacity);
+    }
 }
 
-test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
-    defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(gpa, 42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
+fn serveOne(
+    io: std.Io,
+    repo: usecases.TodoRepo,
+    alloc: std.mem.Allocator,
+    stream: std.Io.net.Stream,
+) void {
+    defer stream.close(io);
 
-test "fuzz example" {
-    try std.testing.fuzz({}, testOne, .{});
-}
+    var in_buf: [8192]u8 = undefined;
+    var out_buf: [8192]u8 = undefined;
+    var reader = stream.reader(io, &in_buf);
+    var writer = stream.writer(io, &out_buf);
 
-fn testOne(context: void, smith: *std.testing.Smith) !void {
-    _ = context;
-    // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
+    var hs = std.http.Server.init(&reader.interface, &writer.interface);
+    var req = hs.receiveHead() catch return;
 
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(u8) = .empty;
-    defer list.deinit(gpa);
-    while (!smith.eos()) switch (smith.value(enum { add_data, dup_data })) {
-        .add_data => {
-            const slice = try list.addManyAsSlice(gpa, smith.value(u4));
-            smith.bytes(slice);
-        },
-        .dup_data => {
-            if (list.items.len == 0) continue;
-            if (list.items.len > std.math.maxInt(u32)) return error.SkipZigTest;
-            const len = smith.valueRangeAtMost(u32, 1, @min(32, list.items.len));
-            const off = smith.valueRangeAtMost(u32, 0, @intCast(list.items.len - len));
-            try list.appendSlice(gpa, list.items[off..][0..len]);
-            try std.testing.expectEqualSlices(
-                u8,
-                list.items[off..][0..len],
-                list.items[list.items.len - len ..],
-            );
-        },
-    };
+    http.handle(alloc, repo, &req) catch {};
+    writer.interface.flush() catch {};
 }
