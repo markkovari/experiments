@@ -67,6 +67,19 @@ curl localhost:3000/auth/me     -H "Authorization: Bearer $TOK"   # 401 (revoked
 needs a role assignment (`rbac.assign-role` in the contract) and a role→permission
 mapping; expose those via an admin route or seed them to wire up the 200 path.
 
+## Tests
+
+E2E suite (`test/e2e.test.ts`, `node:test` via `tsx`) drives the full guarded
+flow through `app.inject` against the **real** auth backend:
+
+```bash
+AUTH_BASE_URL=http://localhost:8001 npm test
+```
+
+If the backend is unreachable the suite **skips** (not fails), so it's CI-safe
+without the cluster. With the auth stack up it runs 8 real e2e assertions
+(public/401/register/409/login/me/403/logout→401).
+
 ## Config
 
 | Env | Default | Meaning |

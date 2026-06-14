@@ -63,6 +63,18 @@ curl -XPOST $B/auth/logout -H "Authorization: Bearer $TOK"   # 204
 curl $B/auth/me -H "Authorization: Bearer $TOK"     # 401 expired
 ```
 
+## Tests
+
+Fully self-contained E2E suite (`test/e2e.test.ts`) — the component runs
+in-process with the in-memory kv shim, so **no cluster / NATS / network**:
+
+```bash
+npm test    # runs `jco transpile` then 9 e2e assertions
+```
+
+Covers register/409/login/401-bad-creds/me/403-RBAC/401-no-token/logout→401 plus
+the config-driven password-min-len (from the config shim). Ideal for CI.
+
 ## Gotchas (learned building this)
 
 - WIT `u64` (expires-at / expires-in) arrives as JS **BigInt**; `JSON.stringify`

@@ -7,7 +7,8 @@
   "scripts": {
     "transpile": "jco transpile auth_guard.wasm -o gen --map wasi:keyvalue/store@0.2.0-draft=../src/shims/keyvalue.js --map wasi:config/runtime@0.2.0-draft=../src/shims/config.js",
     "start": "npm run transpile && tsx src/server.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run transpile && tsx --test test/**/*.test.ts"
   },
   "dependencies": {
     "@bytecodealliance/jco": "^1.23.0",
