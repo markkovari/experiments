@@ -31,6 +31,9 @@ npm run plot   # -> bench-inproc.png, bench-http.png, bench-overhead.png
 ## Results (representative)
 
 ### In-process (mean)
+
+![In-process op latency](bench-inproc.png)
+
 | op | mean | ops/sec |
 |----|------|---------|
 | register (argon2) | ~26 ms | ~39 |
@@ -43,12 +46,19 @@ npm run plot   # -> bench-inproc.png, bench-http.png, bench-overhead.png
 | cache.get (miss) | ~15 µs | ~66k |
 
 ### HTTP roundtrip (mean / p99)
+
+![HTTP roundtrip latency](bench-http.png)
+
 | op | mean | p99 | req/sec |
 |----|------|-----|---------|
 | POST /register | ~27 ms | ~55 ms | ~37 |
 | POST /login | ~58 ms | ~90 ms | ~17 |
 | GET /me | ~26 ms | ~49 ms | ~39 |
 | POST /verify | ~26 ms | ~50 ms | ~38 |
+
+### In-process vs HTTP (same op)
+
+![In-process vs HTTP overhead](bench-overhead.png)
 
 ## Takeaways
 
