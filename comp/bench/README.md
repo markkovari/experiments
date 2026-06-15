@@ -20,6 +20,7 @@ npm install
 (cd ../examples/jco-cache        && npm install && npm run transpile)
 (cd ../examples/jco-idempotency  && npm install && npm run transpile)
 (cd ../examples/jco-featureflags && npm install && npm run transpile)
+(cd ../examples/jco-blob         && npm install && npm run transpile)
 AUDIT_ENABLED=false npm run bench:inproc      # -> results-inproc.json
 
 # HTTP: a single wasmCloud host must be up (see `just k8s-collapse`). The

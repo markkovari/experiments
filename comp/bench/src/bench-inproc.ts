@@ -17,6 +17,8 @@ import { cache } from "../../examples/jco-cache/gen/cache.js";
 import { store as idem } from "../../examples/jco-idempotency/gen/idempotency_guard.js";
 // featureflags:guard/evaluator
 import { evaluator as flags } from "../../examples/jco-featureflags/gen/feature_flags.js";
+// blob:store/blobstore
+import { blobstore as blob } from "../../examples/jco-blob/gen/blob_store.js";
 
 const enc = (s: string) => new TextEncoder().encode(s);
 
@@ -103,6 +105,20 @@ async function main() {
   // list-flags walks the keyspace — seed a handful of rules first.
   for (let i = 0; i < 8; i++) flags.setRule(`seeded-${i}`, "bench", { tag: "disabled" });
   results.push(await measure("flags.listFlags", () => flags.listFlags("bench"), { iters: 5000 }));
+
+  // --- blob:store ---
+  const obj1k = new Uint8Array(1024).fill(65); // a 1 KiB object
+  blob.put("bench", "fixed", obj1k, "application/octet-stream");
+  results.push(
+    await measure("blob.get(1KiB)", () => blob.get("bench", "fixed"), { iters: 20000 }),
+  );
+  let bn = 0;
+  results.push(
+    await measure("blob.put(1KiB)", () => blob.put("bench", `o${bn++}`, obj1k, ""), {
+      iters: 20000,
+    }),
+  );
+  results.push(await measure("blob.head", () => blob.head("bench", "fixed"), { iters: 20000 }));
 
   const out = { kind: "in-process", node: process.version, when: Date.now(), results };
   writeFileSync(new URL("../results-inproc.json", import.meta.url), JSON.stringify(out, null, 2));
