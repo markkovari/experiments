@@ -1,0 +1,37 @@
+[package]
+name = "jobrunner-server"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "jobrunner-server"
+path = "src/main.rs"
+
+[dependencies]
+connectrpc = { version = "0.7", features = ["axum", "server", "client"] }
+
+# Protobuf runtime for the generated message types.
+buffa = "0.7"
+buffa-types = "0.7"
+
+# Serialization (generated message types derive serde).
+serde = "1"
+serde_json = "1"
+
+# HTTP types referenced by generated client/server bounds.
+http = "1"
+http-body = "1"
+
+# Async runtime + stream combinators.
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# Web framework + CORS for the browser client.
+axum = { version = "0.8", features = ["tokio", "http1"] }
+tower-http = { version = "0.6", features = ["cors"] }
+
+# Job ids.
+uuid = { version = "1", features = ["v4"] }
+
+[build-dependencies]
+connectrpc-build = "0.7"
