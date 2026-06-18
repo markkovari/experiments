@@ -202,6 +202,42 @@ export function buildApp(opts: { logger?: boolean; serveStatic?: boolean } = {})
     return { notes: domain.notesFor(id) };
   });
 
+  // ---- deletes (owner-scoped, with business rules) ----------------------
+
+  // Delete a pet — only when it has no active bookings.
+  app.delete("/pets/:id", async (request, reply) => {
+    const p = require(request, reply, "pets", "write");
+    if (!p) return;
+    const { id } = request.params as { id: string };
+    const r = domain.deletePet(id, p.subject);
+    if (r.ok) return reply.code(204).send();
+    const map: Record<string, [number, string]> = {
+      not_found: [404, "pet_not_found"],
+      forbidden: [403, "not_your_pet"],
+      has_active_bookings: [409, "pet_has_active_bookings"],
+    };
+    const [code, error] = map[r.reason] ?? [400, r.reason];
+    return reply.code(code).send({ error });
+  });
+
+  // Cancel an appointment — only when it's more than 24h away.
+  app.delete("/appointments/:id", async (request, reply) => {
+    const p = require(request, reply, "appointments", "write");
+    if (!p) return;
+    const { id } = request.params as { id: string };
+    const now = Math.floor(Date.now() / 1000);
+    const r = domain.deleteAppointment(id, p.subject, now);
+    if (r.ok) return reply.code(204).send();
+    const map: Record<string, [number, string]> = {
+      not_found: [404, "appointment_not_found"],
+      forbidden: [403, "not_your_appointment"],
+      within_24h: [409, "within_24h_no_cancel"],
+      bad_datetime: [400, "bad_datetime"],
+    };
+    const [code, error] = map[r.reason] ?? [400, r.reason];
+    return reply.code(code).send({ error });
+  });
+
   // ---- admin ------------------------------------------------------------
 
   app.get("/admin/audit", async (request, reply) => {

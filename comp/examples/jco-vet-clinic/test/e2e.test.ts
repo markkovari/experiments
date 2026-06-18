@@ -116,4 +116,36 @@ describe("vet-clinic e2e (composed components, in-process)", () => {
     const res = await app.inject({ method: "GET", url: "/admin/audit", headers: auth(token) });
     assert.equal(res.statusCode, 403, "owner lacks audit:read");
   });
+
+  it("cannot delete a pet that has an active booking; can after the booking is gone", async () => {
+    const token = await login("alice@acme-vet.test", "alicepass1");
+    // a fresh pet + a far-future booking
+    const pet = (await app.inject({ method: "POST", url: "/pets", headers: auth(token), payload: { name: "Milo", species: "dog" } }).then((r) => r.json())) as { id: string };
+    const far = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 16); // +30d
+    const appt = (await app.inject({ method: "POST", url: "/appointments", headers: auth(token), payload: { pet: pet.id, datetime: far } }).then((r) => r.json())) as { id: string };
+
+    const blocked = await app.inject({ method: "DELETE", url: `/pets/${pet.id}`, headers: auth(token) });
+    assert.equal(blocked.statusCode, 409, "pet with active booking can't be deleted");
+
+    // cancel the booking (far future => allowed), then the pet deletes
+    const cancel = await app.inject({ method: "DELETE", url: `/appointments/${appt.id}`, headers: auth(token) });
+    assert.equal(cancel.statusCode, 204, cancel.body);
+    const ok = await app.inject({ method: "DELETE", url: `/pets/${pet.id}`, headers: auth(token) });
+    assert.equal(ok.statusCode, 204, "pet deletes once it has no active bookings");
+  });
+
+  it("cannot cancel an appointment within 24h, can when >24h away", async () => {
+    const token = await login("alice@acme-vet.test", "alicepass1");
+    const pet = (await app.inject({ method: "POST", url: "/pets", headers: auth(token), payload: { name: "Bea", species: "cat" } }).then((r) => r.json())) as { id: string };
+
+    const soon = new Date(Date.now() + 2 * 3600e3).toISOString().slice(0, 16); // +2h
+    const soonAppt = (await app.inject({ method: "POST", url: "/appointments", headers: auth(token), payload: { pet: pet.id, datetime: soon } }).then((r) => r.json())) as { id: string };
+    const within = await app.inject({ method: "DELETE", url: `/appointments/${soonAppt.id}`, headers: auth(token) });
+    assert.equal(within.statusCode, 409, "appointment within 24h can't be cancelled");
+
+    const far = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 16); // +3d
+    const farAppt = (await app.inject({ method: "POST", url: "/appointments", headers: auth(token), payload: { pet: pet.id, datetime: far } }).then((r) => r.json())) as { id: string };
+    const okCancel = await app.inject({ method: "DELETE", url: `/appointments/${farAppt.id}`, headers: auth(token) });
+    assert.equal(okCancel.statusCode, 204, ">24h appointment cancels");
+  });
 });

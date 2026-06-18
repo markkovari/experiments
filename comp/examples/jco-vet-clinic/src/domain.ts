@@ -134,6 +134,44 @@ export function getAppointment(apptId: string): Appointment | undefined {
   return read<Appointment>(`appt_${apptId}`);
 }
 
+/** Active (not cancelled) appointments referencing a pet. */
+export function activeAppointmentsForPet(petId: string): Appointment[] {
+  return scan<Appointment>("appt_").filter((a) => a.pet === petId && a.status !== "cancelled");
+}
+
+export type DeleteResult = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Delete a pet — only if it has no active bookings. `owner` scopes the action
+ * (an owner may only delete their own pet).
+ */
+export function deletePet(petId: string, owner: string): DeleteResult {
+  const pet = getPet(petId);
+  if (!pet) return { ok: false, reason: "not_found" };
+  if (pet.owner !== owner) return { ok: false, reason: "forbidden" };
+  const active = activeAppointmentsForPet(petId);
+  if (active.length > 0) return { ok: false, reason: "has_active_bookings" };
+  bucket.delete(`pet_${petId}`);
+  search.remove(petId); // keep the index in sync
+  return { ok: true };
+}
+
+/**
+ * Delete (cancel) an appointment — only if it's more than 24h away. `owner`
+ * scopes the action. `nowSeconds` is injected so the rule is testable.
+ */
+export function deleteAppointment(apptId: string, owner: string, nowSeconds: number): DeleteResult {
+  const appt = getAppointment(apptId);
+  if (!appt) return { ok: false, reason: "not_found" };
+  if (appt.owner !== owner) return { ok: false, reason: "forbidden" };
+  const when = Date.parse(appt.datetime); // ms, NaN if unparseable
+  if (Number.isNaN(when)) return { ok: false, reason: "bad_datetime" };
+  const hoursAway = (when - nowSeconds * 1000) / 3_600_000;
+  if (hoursAway < 24) return { ok: false, reason: "within_24h" };
+  bucket.delete(`appt_${apptId}`);
+  return { ok: true };
+}
+
 // ---- visit notes ---------------------------------------------------------
 
 export function addNote(input: { appointment: string; author: string; text: string }): VisitNote {
