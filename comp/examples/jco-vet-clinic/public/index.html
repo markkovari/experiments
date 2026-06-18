@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>🐾 Acme Vet Clinic</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>🐾 Acme Vet Clinic</h1>
+      <div id="whoami" class="whoami hidden">
+        <span id="who"></span>
+        <button id="logout">Log out</button>
+      </div>
+    </header>
+
+    <!-- Login -->
+    <section id="login-view">
+      <h2>Sign in</h2>
+      <form id="login-form">
+        <input id="email" type="email" placeholder="email" autocomplete="username" required />
+        <input id="password" type="password" placeholder="password" autocomplete="current-password" required />
+        <button type="submit">Sign in</button>
+      </form>
+      <details class="demo">
+        <summary>Demo logins</summary>
+        <ul>
+          <li><b>owner</b> — owner@acme-vet.test / ownerpass1</li>
+          <li><b>doctor</b> — doctor@acme-vet.test / doctorpass1</li>
+          <li><b>admin</b> — admin@acme-vet.test / adminpass1</li>
+        </ul>
+        <p>Or register a new pet-owner:</p>
+        <form id="register-form">
+          <input id="r-email" type="email" placeholder="email" required />
+          <input id="r-password" type="password" placeholder="password (min 8)" required />
+          <button type="submit">Register as pet-owner</button>
+        </form>
+      </details>
+      <p id="login-error" class="error"></p>
+    </section>
+
+    <!-- Owner -->
+    <section id="owner-view" class="hidden">
+      <h2>My pets</h2>
+      <form id="pet-form" class="row">
+        <input id="pet-name" placeholder="name" required />
+        <input id="pet-species" placeholder="species" required />
+        <button type="submit">Add pet</button>
+      </form>
+      <form id="pet-search" class="row">
+        <input id="pet-q" placeholder="search pets…" />
+        <button type="submit">Search</button>
+        <button type="button" id="pet-clear">Clear</button>
+      </form>
+      <ul id="pets"></ul>
+
+      <h2>Book an appointment</h2>
+      <form id="appt-form" class="row">
+        <select id="appt-pet"></select>
+        <input id="appt-when" placeholder="2026-07-01T10:00" required />
+        <button type="submit">Book</button>
+      </form>
+      <h2>My appointments</h2>
+      <ul id="owner-appts"></ul>
+    </section>
+
+    <!-- Doctor -->
+    <section id="doctor-view" class="hidden">
+      <h2>Appointments</h2>
+      <ul id="doctor-appts"></ul>
+      <h2>Write a visit note</h2>
+      <form id="note-form" class="row">
+        <input id="note-appt" placeholder="appointment id" required />
+        <input id="note-text" placeholder="visit note…" required />
+        <button type="submit">Save note</button>
+      </form>
+    </section>
+
+    <!-- Admin -->
+    <section id="admin-view" class="hidden">
+      <h2>Assign a role</h2>
+      <form id="role-form" class="row">
+        <input id="role-subject" placeholder="user subject id" required />
+        <select id="role-name">
+          <option>pet-owner</option>
+          <option>doctor</option>
+          <option>admin</option>
+        </select>
+        <button type="submit">Assign</button>
+      </form>
+      <h2>Audit log</h2>
+      <button id="audit-refresh">Refresh</button>
+      <table id="audit"><thead><tr><th>time</th><th>event</th><th>outcome</th><th>subject</th><th>detail</th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

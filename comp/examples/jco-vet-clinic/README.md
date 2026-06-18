@@ -1,0 +1,86 @@
+# jco-vet-clinic — a full-stack app built only from comp components
+
+A small **veterinary-clinic** app — browser frontend + HTTP backend — assembled
+entirely from the `comp/` capability components running **in-process via jco**.
+There is no business-logic crate: every cross-cutting concern (auth, RBAC,
+sessions, audit, search, validation, notifications) is an unmodified comp
+component, and the domain (pets, appointments, visit notes) is thin JS glue over
+the same in-memory key-value store the components share.
+
+Three roles:
+
+| Role | Can |
+|---|---|
+| **pet-owner** | register/login, add + search **their own** pets, book appointments |
+| **doctor** | see appointments, write **visit notes** (`notes:write`) |
+| **admin** | assign roles, read the **audit log** (`*:*`) |
+
+## Components used (all unmodified)
+
+| Feature | Component | How it's included |
+|---|---|---|
+| accounts, login, 3-role **RBAC**, sessions, **audit** | **auth-guard** (composed with rate-limiter + audit-log) | `just compose` → `auth_guard.composed.wasm`, transpiled |
+| pet full-text **search** | **search-index** | transpiled |
+| request-body **validation** | **validate** | transpiled |
+| appointment **notifications** | **notify-dispatch** | transpiled (config points at a local sink) |
+| runtime **config** | **config-store** | transpiled |
+| server-side **sessions** | **session-store** | transpiled (available to the auth layer) |
+
+This is the **hybrid composition** pattern: the auth/RBAC/audit half is one
+`wac`-composed wasm; the rest are transpiled separately and wired in TypeScript.
+All six share **one** `wasi:keyvalue` store (the shim in `src/shims/keyvalue.js`),
+so a pet the backend writes under `pet_*` is indexed by search-index and sits
+beside the sessions and audit events auth-guard writes — one process, one Map.
+
+## Run
+
+```bash
+npm install
+npm start          # transpiles all 6 wasms, boots Fastify on :3000
+# open http://localhost:3000  — log in with a demo account (printed on boot):
+#   pet-owner  owner@acme-vet.test   / ownerpass1
+#   doctor     doctor@acme-vet.test  / doctorpass1
+#   admin      admin@acme-vet.test   / adminpass1
+```
+
+The SPA (`public/`, plain HTML/CSS/ES-modules, no build) shows a different panel
+per role based on the principal returned by `GET /auth/me`.
+
+## Test
+
+```bash
+npm test           # e2e via Fastify app.inject (no network) — 8 cases
+```
+
+The suite walks the full stack: seed 3 roles → register an owner → add a pet
+(validated + indexed) → search finds it → book an appointment (notify fires) →
+**owner is 403 on `notes:write`** → doctor writes the note → admin reads the
+audit trail → **owner is 403 on the admin route**. Every `authorize` decision is
+recorded by the composed audit-log (visible as the JSON lines in test output).
+
+## Backend routes
+
+| Method + path | Guard (`authorize`) | Component path |
+|---|---|---|
+| `POST /auth/register` | — | `accounts.register` + `rbac.assignRole` |
+| `POST /auth/login` | — | `accounts.login` |
+| `GET /auth/me` | — | `authorizer.introspect` |
+| `POST /auth/logout` | — | `session.revoke` |
+| `GET /pets[?q=]` | `pets:read` | `search-index.query` / KV scan (owners see own) |
+| `POST /pets` | `pets:write` | `validate.validate` → KV → `search-index.indexDoc` |
+| `GET /appointments` | `appointments:read` | KV scan, role-filtered |
+| `POST /appointments` | `appointments:write` | `validate` → KV → `notify-dispatch.send` |
+| `POST /appointments/:id/notes` | `notes:write` | KV (doctor only) |
+| `GET /admin/audit` | `audit:read` | reads audit-log's `al_*` keys |
+| `POST /admin/assign-role` | `rbac:admin` | `rbac.assignRole` |
+
+## Notes
+
+- **No new Rust / no new WIT.** The only new code is JS/TS glue + the SPA.
+- The composed auth-guard wires `audit:log/recorder` internally but does not
+  re-export the audit `query` interface, so the admin view reads the raw `al_*`
+  audit keys the recorder wrote to the shared store.
+- `notify-dispatch` is configured against a local sink, so booking an
+  appointment exercises the dispatch path without a live email vendor.
+- In-process jco only (like `jco-embed`); the same `.wasm` bytes would run on
+  wasmCloud behind an http-server provider in production.
