@@ -43,8 +43,27 @@ npm start          # transpiles all 6 wasms, boots Fastify on :3000
 #   admin      admin@acme-vet.test   / adminpass1
 ```
 
-The SPA (`public/`, plain HTML/CSS/ES-modules, no build) shows a different panel
-per role based on the principal returned by `GET /auth/me`.
+The SPA shows a different panel per role based on the principal returned by
+`GET /auth/me`.
+
+### Frontend (React + shadcn/ui)
+
+The UI is a **Vite + React + TypeScript + Tailwind v4 + shadcn/ui** app in
+`frontend/`, built to `public/` (which the Fastify backend serves). The built
+bundle is committed — same convention as the `.wasm` files — so `npm start`
+runs the whole stack with no extra build. To change the UI:
+
+```bash
+npm run build:frontend   # cd frontend && npm install && npm run build  -> ../public
+# or, live-reload dev (proxies /auth,/pets,/appointments,/admin to :3000):
+npm start &              # backend on :3000
+npm run dev:frontend     # Vite dev server
+```
+
+shadcn components used: Card, Tabs, Input, Label, Button, Select, Table, Badge,
+Sonner (toasts). Three role views (`owner-view`, `doctor-view`, `admin-view`) +
+an `auth-card` (login/register tabs with a role picker), all calling the backend
+over relative `fetch` paths with the bearer token from localStorage.
 
 ## Test
 

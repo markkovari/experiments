@@ -12,7 +12,9 @@
     "transpile:config": "jco transpile config_store.wasm -o gen/config --map wasi:keyvalue/store@0.2.0-draft=../../src/shims/keyvalue.js",
     "transpile:notify": "jco transpile notify_dispatch.wasm -o gen/notify --map wasi:config/runtime@0.2.0-draft=../../src/shims/config.js",
     "transpile": "npm run transpile:auth && npm run transpile:session && npm run transpile:search && npm run transpile:validate && npm run transpile:config && npm run transpile:notify",
+    "build:frontend": "cd frontend && npm install && npm run build",
     "start": "npm run transpile && tsx src/server.ts",
+    "dev:frontend": "cd frontend && npm run dev",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run transpile && tsx --test test/**/*.test.ts"
   },
