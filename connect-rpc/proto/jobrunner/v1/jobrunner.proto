@@ -1,0 +1,54 @@
+edition = "2023";
+
+package jobrunner.v1;
+
+// JobRunnerService simulates a multi-step background job and demonstrates
+// two ways a Connect client can observe progress over the same protocol:
+//
+//   * RunJobStreaming - server-streaming RPC: the server pushes one
+//     JobUpdate per step as the work happens (server push).
+//   * StartJob + GetJobStatus - a unary pair the client polls on a timer
+//     until the job reports DONE (client pull).
+service JobRunnerService {
+  // Server streaming: run a job of `steps` steps, emitting a JobUpdate
+  // after each step and a final update with done=true.
+  rpc RunJobStreaming(JobRequest) returns (stream JobUpdate);
+
+  // Kick off a background job; returns a handle to poll.
+  rpc StartJob(JobRequest) returns (JobHandle);
+
+  // Read the current status of a previously started job.
+  rpc GetJobStatus(JobHandle) returns (JobStatus);
+}
+
+message JobRequest {
+  // Human label shown in the UI.
+  string label = 1;
+  // Number of steps to simulate.
+  int32 steps = 2;
+}
+
+message JobUpdate {
+  int32 step = 1;
+  int32 total = 2;
+  string message = 3;
+  bool done = 4;
+}
+
+message JobHandle {
+  string id = 1;
+}
+
+enum JobPhase {
+  JOB_PHASE_UNSPECIFIED = 0;
+  JOB_PHASE_RUNNING = 1;
+  JOB_PHASE_DONE = 2;
+}
+
+message JobStatus {
+  string id = 1;
+  JobPhase phase = 2;
+  int32 step = 3;
+  int32 total = 4;
+  string message = 5;
+}
