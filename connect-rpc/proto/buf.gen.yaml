@@ -1,0 +1,13 @@
+version: v2
+# Connect-ES v2: a single plugin (@bufbuild/protoc-gen-es) emits both the
+# message types and the service descriptors. The client is created at
+# runtime with createClient(Service, transport) from @connectrpc/connect —
+# no separate connect-es codegen plugin is needed anymore.
+plugins:
+  - local: protoc-gen-es
+    out: ../web/src/gen
+    opt:
+      - target=ts
+      - import_extension=js
+inputs:
+  - directory: .
