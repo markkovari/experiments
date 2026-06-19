@@ -157,11 +157,20 @@ export function buildApp(opts: { logger?: boolean; serveStatic?: boolean } = {})
   app.get("/appointments", async (request, reply) => {
     const p = require(request, reply, "appointments", "read");
     if (!p) return;
-    let filter: { owner?: string; doctor?: string } = {};
-    if (p.roles.includes("admin")) filter = {};
-    else if (p.roles.includes("doctor")) filter = { doctor: p.subject };
-    else filter = { owner: p.subject };
-    return { appointments: domain.listAppointments(filter), viewer: p.subject };
+    let appointments;
+    if (p.roles.includes("admin")) {
+      appointments = domain.listAppointments({}); // all
+    } else if (p.roles.includes("doctor")) {
+      // A doctor sees their own assigned appointments PLUS the unassigned queue
+      // (there's no per-doctor assignment at booking time, so the clinic shares
+      // a pool; writing a note claims one — see the notes route).
+      appointments = domain
+        .listAppointments({})
+        .filter((a) => a.doctor === p.subject || a.doctor === "");
+    } else {
+      appointments = domain.listAppointments({ owner: p.subject }); // own
+    }
+    return { appointments, viewer: p.subject };
   });
 
   app.post("/appointments", async (request, reply) => {
@@ -191,6 +200,8 @@ export function buildApp(opts: { logger?: boolean; serveStatic?: boolean } = {})
     if (!appt) return reply.code(404).send({ error: "appointment_not_found" });
     const { text } = request.body as { text?: string };
     if (!text || text.length < 1) return reply.code(400).send({ error: "empty_note" });
+    // Writing a note claims the appointment for this doctor (if unassigned).
+    domain.assignDoctor(id, p.subject);
     const note = domain.addNote({ appointment: id, author: p.subject, text });
     return reply.code(201).send(note);
   });

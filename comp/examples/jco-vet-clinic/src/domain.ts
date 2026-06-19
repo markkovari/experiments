@@ -134,6 +134,17 @@ export function getAppointment(apptId: string): Appointment | undefined {
   return read<Appointment>(`appt_${apptId}`);
 }
 
+/** Assign a doctor to an appointment (claim it). No-op if already that doctor. */
+export function assignDoctor(apptId: string, doctor: string): Appointment | undefined {
+  const appt = getAppointment(apptId);
+  if (!appt) return undefined;
+  if (appt.doctor !== doctor) {
+    appt.doctor = doctor;
+    put(`appt_${apptId}`, appt);
+  }
+  return appt;
+}
+
 /** Active (not cancelled) appointments referencing a pet. */
 export function activeAppointmentsForPet(petId: string): Appointment[] {
   return scan<Appointment>("appt_").filter((a) => a.pet === petId && a.status !== "cancelled");
