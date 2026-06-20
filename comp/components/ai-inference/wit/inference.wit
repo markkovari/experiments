@@ -1,4 +1,4 @@
-// ai:assist — domain-level AI verbs over a provider-agnostic LLM.
+// ai:inference — domain-level AI verbs over a provider-agnostic LLM.
 //
 // Apps don't want "call an LLM"; they want "summarize this", "classify that",
 // "pull these fields". This component is those VERBS — it builds the right
@@ -9,10 +9,10 @@
 // Imports `llm:inference/inference` — satisfied by composing a provider (mock,
 // openai, anthropic, ollama, …) with `wac`, the same way auth-guard composes
 // rate-limiter. Pure orchestration over that one import.
-package ai:assist@0.1.0;
+package ai:inference@0.1.0;
 
 /// High-level AI helpers: summarize, classify, extract, generate, rewrite, embed.
-interface assistant {
+interface inference {
     /// Why an assist call failed.
     variant assist-error {
         /// The underlying inference call failed; carries the provider's reason.
@@ -74,7 +74,7 @@ interface assistant {
 /// `ai-assist` exports the verbs and imports the inference boundary. Compose a
 /// provider for `llm:inference/inference` (mock for tests; a real vendor client
 /// in production) with `wac` — the verbs work the same either way.
-world ai-assist {
-    export assistant;
+world ai-inference {
+    export inference;
     import llm:inference/inference@0.1.0;
 }

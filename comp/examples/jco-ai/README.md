@@ -1,13 +1,13 @@
 # jco-ai
 
-`ai:assist` is a set of **domain AI verbs** — `summarize`, `classify`, `extract`,
+`ai:inference` is a set of **domain AI verbs** — `summarize`, `classify`, `extract`,
 `generate`, `rewrite`, `embed` — expressed over the provider-agnostic
-`llm:inference` boundary. The `ai-assist` component builds prompts and validates
+`llm:inference` boundary. The `ai-inference` component builds prompts and validates
 results; it never talks to a specific model. Any component that exports
 `llm:inference` can satisfy it.
 
 This example runs the **MOCK** provider: a deterministic, offline
-`llm-inference` component composed into `ai-assist` with
+`llm-inference` component composed into `ai-inference` with
 [`wac plug`](../../justfile) via:
 
 ```sh
@@ -15,7 +15,7 @@ just compose-ai   # ai_assist.wasm + llm_inference.wasm -> ai_assist.composed.wa
 ```
 
 The result, `ai_assist.composed.wasm`, exports **only**
-`ai:assist/assistant@0.1.0` — the `llm:inference` import is satisfied internally.
+`ai:inference/assistant@0.1.0` — the `llm:inference` import is satisfied internally.
 Because the provider is the mock, every call is deterministic:
 
 - `summarize` → `"Summary: " + first 80 chars`
@@ -25,7 +25,7 @@ Because the provider is the mock, every call is deterministic:
 - `embed` → a fixed 8-dim `f32` vector
 
 Swap in a real provider component (e.g. one wrapping an HTTP LLM) and recompose:
-nothing in `ai-assist` or the calling app changes.
+nothing in `ai-inference` or the calling app changes.
 
 ## Run
 

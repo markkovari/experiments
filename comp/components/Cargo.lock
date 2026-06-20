@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ai-assist"
+name = "ai-inference"
 version = "0.1.0"
 dependencies = [
  "serde",

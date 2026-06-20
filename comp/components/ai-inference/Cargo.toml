@@ -1,6 +1,6 @@
 [package]
-name = "ai-assist"
-description = "Domain-level AI verbs (summarize/classify/extract/...) over llm:inference (ai:assist)"
+name = "ai-inference"
+description = "Domain-level AI verbs (summarize/classify/extract/...) over llm:inference (ai:inference)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -19,7 +19,7 @@ package = "ai:component"
 
 [package.metadata.component.target]
 path = "wit"
-world = "ai-assist"
+world = "ai-inference"
 
 [package.metadata.component.target.dependencies]
 "llm:inference" = { path = "../llm-inference/wit" }

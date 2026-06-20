@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-// The composed component exports ONLY ai:assist/assistant@0.1.0.
+// The composed component exports ONLY ai:inference/inference@0.1.0.
 // The llm:inference import is satisfied internally by the wac-plugged MOCK
 // provider, so output here is fully deterministic and offline.
-import { assistant as ai } from "../gen/ai_assist.composed.js";
+import { inference as ai } from "../gen/ai_inference.composed.js";
 
 test("summarize a pet evaluation for a doctor (mock -> 'Summary: ...')", () => {
   const out = ai.summarize(

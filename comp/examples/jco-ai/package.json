@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Exercise ai:assist (domain AI verbs) over a composed mock llm provider, in-process via jco",
+  "description": "Exercise ai:inference (domain AI verbs) over a composed mock llm provider, in-process via jco",
   "scripts": {
-    "transpile": "jco transpile ai_assist.composed.wasm -o gen",
+    "transpile": "jco transpile ai_inference.composed.wasm -o gen",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run transpile && tsx --test test/ai.test.ts"
   },

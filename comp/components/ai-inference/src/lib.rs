@@ -16,7 +16,7 @@
 #[allow(warnings)]
 mod bindings;
 
-use bindings::exports::ai::assist::assistant::{
+use bindings::exports::ai::inference::inference::{
     AssistError, Guest, LabelScore, Length,
 };
 use bindings::llm::inference::inference::{
