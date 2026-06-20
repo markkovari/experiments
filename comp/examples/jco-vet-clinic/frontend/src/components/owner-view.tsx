@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react"
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useState,
+  type FormEvent,
+} from "react"
 import {
   Card,
   CardContent,
@@ -32,8 +38,10 @@ import {
   ApiError,
   type Appointment,
   type AppointmentsResponse,
+  type NotesResponse,
   type Pet,
   type PetsResponse,
+  type VisitNote,
 } from "@/lib/api"
 
 function describe(err: unknown): string {
@@ -41,10 +49,22 @@ function describe(err: unknown): string {
   return String(err)
 }
 
+// Format a VisitNote.at (unix-seconds, possibly stringified) as a locale
+// timestamp; falls back to the raw value when it isn't a usable number.
+function formatNoteTime(at: number | string): string {
+  const secs = Number(at)
+  if (Number.isNaN(secs)) return String(at)
+  return new Date(secs * 1000).toLocaleString()
+}
+
 export function OwnerView() {
   const [pets, setPets] = useState<Pet[]>([])
   const [appts, setAppts] = useState<Appointment[]>([])
   const [error, setError] = useState("")
+
+  // visit notes, loaded lazily per appointment on expand
+  const [notes, setNotes] = useState<Record<string, VisitNote[]>>({})
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   // add-pet form
   const [petName, setPetName] = useState("")
@@ -145,6 +165,31 @@ export function OwnerView() {
     } catch (err) {
       setError(describe(err))
     }
+  }
+
+  // Toggle a row's notes panel, lazily fetching the notes the first time it's
+  // opened. A 403 (someone else's appointment) or any failure just shows an
+  // empty list — never an error banner.
+  function toggleNotes(apptId: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(apptId)) {
+        next.delete(apptId)
+      } else {
+        next.add(apptId)
+        if (!(apptId in notes)) {
+          void api<NotesResponse>(
+            "GET",
+            `/appointments/${encodeURIComponent(apptId)}/notes`,
+          )
+            .then(({ notes: loaded }) =>
+              setNotes((m) => ({ ...m, [apptId]: loaded })),
+            )
+            .catch(() => setNotes((m) => ({ ...m, [apptId]: [] })))
+        }
+      }
+      return next
+    })
   }
 
   // a pet can be deleted only if it has no active (non-cancelled) bookings
@@ -315,26 +360,70 @@ export function OwnerView() {
               <TableBody>
                 {appts.map((a) => {
                   const cancellable = apptCancellable(a)
+                  const isOpen = expanded.has(a.id)
+                  const loaded = notes[a.id]
+                  const count = loaded?.length
                   return (
-                    <TableRow key={a.id}>
-                      <TableCell className="font-mono text-xs">{a.id}</TableCell>
-                      <TableCell>{a.pet}</TableCell>
-                      <TableCell>{a.datetime}</TableCell>
-                      <TableCell>
-                        <Badge variant="secondary">{a.status}</Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          disabled={!cancellable}
-                          title={cancellable ? "Cancel appointment" : "Too late — within 24h of the appointment"}
-                          onClick={() => handleCancelAppt(a.id)}
-                        >
-                          Cancel
-                        </Button>
-                      </TableCell>
-                    </TableRow>
+                    <Fragment key={a.id}>
+                      <TableRow>
+                        <TableCell className="font-mono text-xs">{a.id}</TableCell>
+                        <TableCell>{a.pet}</TableCell>
+                        <TableCell>{a.datetime}</TableCell>
+                        <TableCell>
+                          <Badge variant="secondary">{a.status}</Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => toggleNotes(a.id)}
+                              aria-expanded={isOpen}
+                            >
+                              {count === undefined
+                                ? "Notes"
+                                : `Notes (${count})`}{" "}
+                              {isOpen ? "▾" : "▸"}
+                            </Button>
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              disabled={!cancellable}
+                              title={cancellable ? "Cancel appointment" : "Too late — within 24h of the appointment"}
+                              onClick={() => handleCancelAppt(a.id)}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                      {isOpen && (
+                        <TableRow className="hover:bg-transparent">
+                          <TableCell colSpan={5} className="bg-muted/30">
+                            {loaded === undefined ? (
+                              <p className="text-sm text-muted-foreground">
+                                Loading notes…
+                              </p>
+                            ) : loaded.length === 0 ? (
+                              <p className="text-sm text-muted-foreground">
+                                No notes yet.
+                              </p>
+                            ) : (
+                              <ul className="space-y-2">
+                                {loaded.map((n) => (
+                                  <li key={n.id} className="text-sm">
+                                    <p className="whitespace-pre-wrap">{n.text}</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {n.author} · {formatNoteTime(n.at)}
+                                    </p>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </Fragment>
                   )
                 })}
               </TableBody>

@@ -167,7 +167,8 @@ export interface VisitNote {
   appointment: string
   author: string
   text: string
-  at: string
+  // unix-seconds from the backend; tolerate a string form too
+  at: number | string
 }
 
 export interface NotesResponse {

@@ -255,6 +255,13 @@ export function buildApp(opts: { logger?: boolean; serveStatic?: boolean } = {})
     const p = require(request, reply, "appointments", "read");
     if (!p) return;
     const { id } = request.params as { id: string };
+    // Owners may only read notes on their own appointments; doctors/admins any.
+    const appt = domain.getAppointment(id);
+    if (!appt) return reply.code(404).send({ error: "appointment_not_found" });
+    const privileged = p.roles.includes("admin") || p.roles.includes("doctor");
+    if (!privileged && appt.owner !== p.subject) {
+      return reply.code(403).send({ error: "not_your_appointment" });
+    }
     return { notes: domain.notesFor(id) };
   });
 

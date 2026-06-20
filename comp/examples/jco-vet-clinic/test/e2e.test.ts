@@ -186,6 +186,34 @@ describe("vet-clinic e2e (composed components, in-process)", () => {
     assert.equal(res.statusCode, 415, `expected type_not_allowed, got ${res.statusCode} ${res.body}`);
   });
 
+  it("owner sees the doctor's visit notes on their own appointment", async () => {
+    const owner = await login("alice@acme-vet.test", "alicepass1");
+    const pet = (await app.inject({ method: "POST", url: "/pets", headers: auth(owner), payload: { name: "Notable", species: "dog" } }).then((r) => r.json())) as { id: string };
+    const far = new Date(Date.now() + 10 * 864e5).toISOString().slice(0, 16);
+    const appt = (await app.inject({ method: "POST", url: "/appointments", headers: auth(owner), payload: { pet: pet.id, datetime: far } }).then((r) => r.json())) as { id: string };
+    // doctor writes a note
+    const doc = await login("doctor@acme-vet.test", "doctorpass1");
+    await app.inject({ method: "POST", url: `/appointments/${appt.id}/notes`, headers: auth(doc), payload: { text: "All good." } });
+    // owner can read it
+    const res = await app.inject({ method: "GET", url: `/appointments/${appt.id}/notes`, headers: auth(owner) });
+    assert.equal(res.statusCode, 200, res.body);
+    const notes = (res.json() as { notes: { text: string }[] }).notes;
+    assert.ok(notes.some((n) => n.text === "All good."), "owner sees the doctor's note");
+  });
+
+  it("an owner cannot read notes on someone else's appointment", async () => {
+    // bob's appointment
+    await app.inject({ method: "POST", url: "/auth/register", payload: { email: "bob@acme-vet.test", password: "bobpass12", role: "pet-owner" } });
+    const bob = await login("bob@acme-vet.test", "bobpass12");
+    const bobPet = (await app.inject({ method: "POST", url: "/pets", headers: auth(bob), payload: { name: "BobDog", species: "dog" } }).then((r) => r.json())) as { id: string };
+    const far = new Date(Date.now() + 11 * 864e5).toISOString().slice(0, 16);
+    const bobAppt = (await app.inject({ method: "POST", url: "/appointments", headers: auth(bob), payload: { pet: bobPet.id, datetime: far } }).then((r) => r.json())) as { id: string };
+    // alice tries to read bob's appointment notes
+    const alice = await login("alice@acme-vet.test", "alicepass1");
+    const res = await app.inject({ method: "GET", url: `/appointments/${bobAppt.id}/notes`, headers: auth(alice) });
+    assert.equal(res.statusCode, 403, "owner can't read another owner's appointment notes");
+  });
+
   it("rejects an oversized photo (upload:policy max-size)", async () => {
     const token = await login("alice@acme-vet.test", "alicepass1");
     const pet = (await app.inject({ method: "POST", url: "/pets", headers: auth(token), payload: { name: "Big", species: "horse" } }).then((r) => r.json())) as { id: string };
