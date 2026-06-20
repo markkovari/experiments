@@ -58,6 +58,55 @@ export async function api<T = unknown>(
   return data as T
 }
 
+// Fetch a path as raw bytes (e.g. a pet photo) with the bearer token attached,
+// returning the response Blob. Throws ApiError on a non-2xx status, parsing the
+// JSON `{ error }` body when present.
+export async function apiBlob(path: string): Promise<Blob> {
+  const headers: Record<string, string> = {}
+  const token = getToken()
+  if (token) headers["authorization"] = `Bearer ${token}`
+
+  const res = await fetch(path, { method: "GET", headers })
+  if (!res.ok) {
+    let errMsg = res.statusText
+    try {
+      const data = (await res.clone().json()) as unknown
+      if (data && typeof data === "object" && "error" in data) {
+        errMsg = String((data as { error: unknown }).error)
+      }
+    } catch {
+      // body wasn't JSON; keep statusText
+    }
+    throw new ApiError(errMsg, res.status, null)
+  }
+  return res.blob()
+}
+
+// Upload raw bytes (a File/Blob) to a path. Sends the body as-is with the
+// blob's content-type and the bearer token. Mirrors api()'s error handling.
+export async function apiUpload<T = unknown>(
+  path: string,
+  file: Blob,
+): Promise<T> {
+  const headers: Record<string, string> = { "content-type": file.type }
+  const token = getToken()
+  if (token) headers["authorization"] = `Bearer ${token}`
+
+  const res = await fetch(path, { method: "POST", headers, body: file })
+
+  const text = await res.text()
+  const data = text ? (JSON.parse(text) as unknown) : null
+
+  if (!res.ok) {
+    const errMsg =
+      (data && typeof data === "object" && "error" in data
+        ? String((data as { error: unknown }).error)
+        : null) ?? res.statusText
+    throw new ApiError(errMsg, res.status, data)
+  }
+  return data as T
+}
+
 // ---- API contract types ----
 
 export type Role = "pet-owner" | "doctor" | "admin"
@@ -90,6 +139,8 @@ export interface Pet {
   species: string
   owner: string
   notes?: string
+  // when present, the stored content-type of the pet's photo (e.g. "image/png")
+  photo?: string
 }
 
 export interface PetsResponse {

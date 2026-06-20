@@ -19,6 +19,12 @@ const values = {
   // as "queued"; it never depends on a real upstream.
   "notify:email-url": process.env.NOTIFY_EMAIL_URL ?? "http://localhost:9/sink",
   "notify:sms-url": process.env.NOTIFY_SMS_URL ?? "http://localhost:9/sink",
+
+  // --- upload-policy (pet photos) ---
+  "allowed-types": process.env.UPLOAD_TYPES ?? "image/png,image/jpeg,image/webp,image/gif",
+  "max-size": process.env.UPLOAD_MAX ?? "2097152", // 2 MiB
+  "ticket-ttl": "300",
+  "ticket-secret": process.env.UPLOAD_SECRET ?? "vet-upload-secret",
 };
 
 export function get(key) {

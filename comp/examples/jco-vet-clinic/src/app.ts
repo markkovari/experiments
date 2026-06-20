@@ -46,11 +46,21 @@ export interface BuildResult {
 }
 
 export function buildApp(opts: { logger?: boolean; serveStatic?: boolean } = {}): BuildResult {
-  const app = Fastify({ logger: opts.logger ?? false });
+  // bodyLimit above the upload-policy max-size (2 MiB) so the POLICY rejects an
+  // oversized image (413 too_large), not Fastify's framework limit.
+  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 8 * 1024 * 1024 });
 
   // WIT u64 (expires-in / timestamps) arrives as BigInt; coerce on the way out.
   app.setReplySerializer((payload) =>
     JSON.stringify(payload, (_k, v) => (typeof v === "bigint" ? Number(v) : v)),
+  );
+
+  // Raw-bytes body parser for image uploads (every image/* content-type) — the
+  // photo route receives a Buffer rather than parsed JSON.
+  app.addContentTypeParser(
+    /^image\//,
+    { parseAs: "buffer" },
+    (_req, body, done) => done(null, body),
   );
 
   // Seed the 3 roles + demo users once, at construction.
@@ -150,6 +160,41 @@ export function buildApp(opts: { logger?: boolean; serveStatic?: boolean } = {})
       notes: body.notes ?? "",
     });
     return reply.code(201).send(pet);
+  });
+
+  // Upload a pet photo: raw image bytes in the body, content-type header set.
+  // upload-policy validates type+size and mints/redeems a signed ticket;
+  // blob-store holds the bytes. Owner-scoped.
+  app.post("/pets/:id/photo", async (request, reply) => {
+    const p = require(request, reply, "pets", "write");
+    if (!p) return;
+    const { id } = request.params as { id: string };
+    const ct = request.headers["content-type"] ?? "application/octet-stream";
+    const body = request.body as Buffer; // raw bytes (see content-type parser below)
+    if (!body || !body.length) return reply.code(400).send({ error: "empty_body" });
+    const r = domain.putPetPhoto(id, p.subject, ct, new Uint8Array(body));
+    if (r.ok) return reply.code(201).send({ ok: true });
+    const map: Record<string, [number, string]> = {
+      not_found: [404, "pet_not_found"],
+      forbidden: [403, "not_your_pet"],
+      "type-not-allowed": [415, "type_not_allowed"],
+      "too-large": [413, "too_large"],
+      invalid_ticket: [400, "invalid_ticket"],
+    };
+    const [code, error] = map[r.reason ?? ""] ?? [400, r.reason ?? "rejected"];
+    return reply.code(code).send({ error });
+  });
+
+  // Serve a pet photo (public-ish read: any authed user with pets:read).
+  app.get("/pets/:id/photo", async (request, reply) => {
+    const p = require(request, reply, "pets", "read");
+    if (!p) return;
+    const { id } = request.params as { id: string };
+    const photo = domain.getPetPhoto(id);
+    if (!photo) return reply.code(404).send({ error: "no_photo" });
+    reply.header("content-type", photo.contentType);
+    reply.header("cache-control", "no-cache");
+    return reply.send(Buffer.from(photo.data));
   });
 
   // ---- appointments -----------------------------------------------------

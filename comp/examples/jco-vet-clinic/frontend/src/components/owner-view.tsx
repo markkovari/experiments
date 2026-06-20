@@ -26,6 +26,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { DateTimePicker } from "@/components/datetime-picker"
+import { PetPhoto } from "@/components/pet-photo"
 import {
   api,
   ApiError,
@@ -213,6 +214,7 @@ export function OwnerView() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead>Photo</TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>Species</TableHead>
                   <TableHead>Notes</TableHead>
@@ -224,6 +226,17 @@ export function OwnerView() {
                   const blocked = petHasActiveBooking(p.id)
                   return (
                     <TableRow key={p.id}>
+                      <TableCell>
+                        <PetPhoto
+                          pet={p}
+                          onUploaded={() => {
+                            void loadPets(query || undefined).catch((e) =>
+                              setError(describe(e)),
+                            )
+                          }}
+                          onError={setError}
+                        />
+                      </TableCell>
                       <TableCell className="font-medium">{p.name}</TableCell>
                       <TableCell>{p.species}</TableCell>
                       <TableCell className="text-muted-foreground">

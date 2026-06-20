@@ -25,6 +25,13 @@ Three roles:
 | appointment **notifications** | **notify-dispatch** | transpiled (config points at a local sink) |
 | runtime **config** | **config-store** | transpiled |
 | server-side **sessions** | **session-store** | transpiled (available to the auth layer) |
+| pet **photo** upload validation (type/size) + signed ticket | **upload-policy** | transpiled |
+| pet **photo** object storage | **blob-store** | transpiled |
+
+Pet photos: an owner uploads an image (`POST /pets/:id/photo`, raw bytes);
+**upload-policy** validates the content-type + size against the config policy and
+mints/redeems a signed ticket, then **blob-store** holds the bytes (durable in the
+same shared KV). `GET /pets/:id/photo` serves it back. Eight components total.
 
 This is the **hybrid composition** pattern: the auth/RBAC/audit half is one
 `wac`-composed wasm; the rest are transpiled separately and wired in TypeScript.

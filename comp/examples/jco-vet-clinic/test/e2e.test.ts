@@ -148,4 +148,54 @@ describe("vet-clinic e2e (composed components, in-process)", () => {
     const okCancel = await app.inject({ method: "DELETE", url: `/appointments/${farAppt.id}`, headers: auth(token) });
     assert.equal(okCancel.statusCode, 204, ">24h appointment cancels");
   });
+
+  it("owner uploads a pet photo (validated + stored in blob:store) and it serves back", async () => {
+    const token = await login("alice@acme-vet.test", "alicepass1");
+    const pet = (await app.inject({ method: "POST", url: "/pets", headers: auth(token), payload: { name: "Pixel", species: "cat" } }).then((r) => r.json())) as { id: string };
+    // a tiny valid PNG (1x1)
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      "base64",
+    );
+
+    const up = await app.inject({
+      method: "POST",
+      url: `/pets/${pet.id}/photo`,
+      headers: { ...auth(token), "content-type": "image/png" },
+      payload: png,
+    });
+    assert.equal(up.statusCode, 201, `upload: ${up.body}`);
+
+    const got = await app.inject({ method: "GET", url: `/pets/${pet.id}/photo`, headers: auth(token) });
+    assert.equal(got.statusCode, 200);
+    assert.equal(got.headers["content-type"], "image/png");
+    assert.deepEqual(got.rawPayload, png, "served bytes match what was uploaded");
+  });
+
+  it("rejects a disallowed photo type (upload:policy)", async () => {
+    const token = await login("alice@acme-vet.test", "alicepass1");
+    const pet = (await app.inject({ method: "POST", url: "/pets", headers: auth(token), payload: { name: "Doc", species: "dog" } }).then((r) => r.json())) as { id: string };
+    // image/* parser only fires for image content-types; a non-image is rejected
+    // before policy, but an allowed-list miss (e.g. image/tiff) is the policy path.
+    const res = await app.inject({
+      method: "POST",
+      url: `/pets/${pet.id}/photo`,
+      headers: { ...auth(token), "content-type": "image/tiff" },
+      payload: Buffer.from("II* ", "binary"),
+    });
+    assert.equal(res.statusCode, 415, `expected type_not_allowed, got ${res.statusCode} ${res.body}`);
+  });
+
+  it("rejects an oversized photo (upload:policy max-size)", async () => {
+    const token = await login("alice@acme-vet.test", "alicepass1");
+    const pet = (await app.inject({ method: "POST", url: "/pets", headers: auth(token), payload: { name: "Big", species: "horse" } }).then((r) => r.json())) as { id: string };
+    const huge = Buffer.alloc(3 * 1024 * 1024, 1); // 3 MiB > 2 MiB cap
+    const res = await app.inject({
+      method: "POST",
+      url: `/pets/${pet.id}/photo`,
+      headers: { ...auth(token), "content-type": "image/png" },
+      payload: huge,
+    });
+    assert.equal(res.statusCode, 413, `expected too_large, got ${res.statusCode}`);
+  });
 });

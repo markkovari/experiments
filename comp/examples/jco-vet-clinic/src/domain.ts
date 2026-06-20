@@ -10,8 +10,13 @@ import { open } from "./shims/keyvalue.js";
 // search:index/index and validate:schema/validator, transpiled to JS.
 import { index as search } from "../gen/search/search_index.js";
 import { validator as validate } from "../gen/validate/validate.js";
+// blob:store/blobstore (pet photos) + upload:policy/gate (type+size validation
+// and a signed upload ticket) — two more comp components, no new storage code.
+import { blobstore as blob } from "../gen/blob/blob_store.js";
+import { gate as upload } from "../gen/upload/upload_policy.js";
 
 const bucket = open("default");
+const PHOTO_CONTAINER = "pet-photos";
 const enc = (s: string) => new TextEncoder().encode(s);
 const dec = (b: Uint8Array) => new TextDecoder().decode(b);
 
@@ -45,6 +50,7 @@ export interface Pet {
   species: string;
   owner: string; // owner subject id
   notes: string;
+  photo?: string; // content-type of the stored photo, or absent
 }
 export interface Appointment {
   id: string;
@@ -110,6 +116,63 @@ export function getPet(petId: string): Pet | undefined {
   return read<Pet>(`pet_${petId}`);
 }
 
+// ---- pet photos (upload:policy + blob:store) -----------------------------
+// upload-policy validates the declared content-type + size against the policy
+// (config-driven) and mints a signed ticket; we redeem it, then blob-store
+// holds the bytes. The pet record only remembers the content-type — the image
+// itself lives in blob:store, durable in the same KV the components share.
+
+export interface PhotoResult {
+  ok: boolean;
+  reason?: string;
+}
+
+export function putPetPhoto(
+  petId: string,
+  owner: string,
+  contentType: string,
+  data: Uint8Array,
+): PhotoResult {
+  const pet = getPet(petId);
+  if (!pet) return { ok: false, reason: "not_found" };
+  if (pet.owner !== owner) return { ok: false, reason: "forbidden" };
+
+  // 1) upload:policy — validate + mint a signed ticket (proves the gate path).
+  let ticket;
+  try {
+    ticket = upload.authorize(`pet/${petId}`, contentType, BigInt(data.length), 0n);
+  } catch (e) {
+    const tag = (e as { payload?: { tag?: string } })?.payload?.tag ?? "rejected";
+    return { ok: false, reason: tag };
+  }
+  // 2) upload:policy — redeem the ticket (signature + expiry check).
+  try {
+    upload.redeem(ticket.token);
+  } catch {
+    return { ok: false, reason: "invalid_ticket" };
+  }
+  // 3) blob:store — store the bytes under the pet id.
+  try {
+    blob.put(PHOTO_CONTAINER, petId, data, contentType);
+  } catch (e) {
+    return { ok: false, reason: `blob: ${String(e)}` };
+  }
+  pet.photo = contentType;
+  put(`pet_${petId}`, pet);
+  return { ok: true };
+}
+
+export function getPetPhoto(petId: string): { contentType: string; data: Uint8Array } | undefined {
+  const pet = getPet(petId);
+  if (!pet || !pet.photo) return undefined;
+  try {
+    const data = blob.get(PHOTO_CONTAINER, petId) as Uint8Array;
+    return { contentType: pet.photo, data };
+  } catch {
+    return undefined;
+  }
+}
+
 // ---- appointments --------------------------------------------------------
 
 export function createAppointment(input: { pet: string; owner: string; doctor?: string; datetime: string }): Appointment {
@@ -164,6 +227,13 @@ export function deletePet(petId: string, owner: string): DeleteResult {
   if (active.length > 0) return { ok: false, reason: "has_active_bookings" };
   bucket.delete(`pet_${petId}`);
   search.remove(petId); // keep the index in sync
+  if (pet.photo) {
+    try {
+      blob.delete(PHOTO_CONTAINER, petId);
+    } catch {
+      /* best-effort photo cleanup */
+    }
+  }
   return { ok: true };
 }
 
