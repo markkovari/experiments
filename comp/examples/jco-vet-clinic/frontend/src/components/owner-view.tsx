@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/table"
 import { DateTimePicker } from "@/components/datetime-picker"
 import { PetPhoto } from "@/components/pet-photo"
+import { PetDetailView } from "@/components/pet-detail"
 import {
   api,
   ApiError,
@@ -65,6 +66,10 @@ export function OwnerView() {
   // visit notes, loaded lazily per appointment on expand
   const [notes, setNotes] = useState<Record<string, VisitNote[]>>({})
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+
+  // lightweight state-based navigation: when set, the detail page replaces
+  // the list view instead of using a router
+  const [selectedPetId, setSelectedPetId] = useState<string | null>(null)
 
   // add-pet form
   const [petName, setPetName] = useState("")
@@ -203,6 +208,15 @@ export function OwnerView() {
     return when - Date.now() > 24 * 3_600_000
   }
 
+  if (selectedPetId !== null) {
+    return (
+      <PetDetailView
+        petId={selectedPetId}
+        onBack={() => setSelectedPetId(null)}
+      />
+    )
+  }
+
   return (
     <div className="space-y-6">
       {error && <p className="text-sm text-destructive">{error}</p>}
@@ -282,21 +296,38 @@ export function OwnerView() {
                           onError={setError}
                         />
                       </TableCell>
-                      <TableCell className="font-medium">{p.name}</TableCell>
+                      <TableCell className="font-medium">
+                        <button
+                          type="button"
+                          className="text-left font-medium underline-offset-4 hover:underline"
+                          onClick={() => setSelectedPetId(p.id)}
+                        >
+                          {p.name}
+                        </button>
+                      </TableCell>
                       <TableCell>{p.species}</TableCell>
                       <TableCell className="text-muted-foreground">
                         {p.notes ?? "—"}
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          disabled={blocked}
-                          title={blocked ? "Pet has an active booking — cancel it first" : "Delete pet"}
-                          onClick={() => handleDeletePet(p.id)}
-                        >
-                          Delete
-                        </Button>
+                        <div className="flex items-center justify-end gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setSelectedPetId(p.id)}
+                          >
+                            View
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            disabled={blocked}
+                            title={blocked ? "Pet has an active booking — cancel it first" : "Delete pet"}
+                            onClick={() => handleDeletePet(p.id)}
+                          >
+                            Delete
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   )

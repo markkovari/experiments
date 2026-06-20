@@ -185,6 +185,21 @@ export function buildApp(opts: { logger?: boolean; serveStatic?: boolean } = {})
     return reply.code(code).send({ error });
   });
 
+  // Full detail for one pet: the pet + its appointments, each with visit notes.
+  // Owner-scoped (own pet); doctors/admins may view any.
+  app.get("/pets/:id", async (request, reply) => {
+    const p = require(request, reply, "pets", "read");
+    if (!p) return;
+    const { id } = request.params as { id: string };
+    const detail = domain.petDetail(id);
+    if (!detail) return reply.code(404).send({ error: "pet_not_found" });
+    const privileged = p.roles.includes("admin") || p.roles.includes("doctor");
+    if (!privileged && detail.owner !== p.subject) {
+      return reply.code(403).send({ error: "not_your_pet" });
+    }
+    return detail;
+  });
+
   // Serve a pet photo (public-ish read: any authed user with pets:read).
   app.get("/pets/:id/photo", async (request, reply) => {
     const p = require(request, reply, "pets", "read");

@@ -186,6 +186,28 @@ describe("vet-clinic e2e (composed components, in-process)", () => {
     assert.equal(res.statusCode, 415, `expected type_not_allowed, got ${res.statusCode} ${res.body}`);
   });
 
+  it("pet detail returns the pet + its appointments with notes", async () => {
+    const owner = await login("alice@acme-vet.test", "alicepass1");
+    const pet = (await app.inject({ method: "POST", url: "/pets", headers: auth(owner), payload: { name: "Detailed", species: "dog" } }).then((r) => r.json())) as { id: string };
+    const far = new Date(Date.now() + 12 * 864e5).toISOString().slice(0, 16);
+    const appt = (await app.inject({ method: "POST", url: "/appointments", headers: auth(owner), payload: { pet: pet.id, datetime: far } }).then((r) => r.json())) as { id: string };
+    const doc = await login("doctor@acme-vet.test", "doctorpass1");
+    await app.inject({ method: "POST", url: `/appointments/${appt.id}/notes`, headers: auth(doc), payload: { text: "Detail note." } });
+
+    const res = await app.inject({ method: "GET", url: `/pets/${pet.id}`, headers: auth(owner) });
+    assert.equal(res.statusCode, 200, res.body);
+    const d = res.json() as { name: string; appointments: { id: string; notes: { text: string }[] }[] };
+    assert.equal(d.name, "Detailed");
+    assert.equal(d.appointments.length, 1);
+    assert.ok(d.appointments[0].notes.some((n) => n.text === "Detail note."), "detail embeds the note");
+
+    // another owner can't view it
+    await app.inject({ method: "POST", url: "/auth/register", payload: { email: "carol@acme-vet.test", password: "carolpass1", role: "pet-owner" } });
+    const carol = await login("carol@acme-vet.test", "carolpass1");
+    const forbidden = await app.inject({ method: "GET", url: `/pets/${pet.id}`, headers: auth(carol) });
+    assert.equal(forbidden.statusCode, 403, "non-owner blocked from pet detail");
+  });
+
   it("owner sees the doctor's visit notes on their own appointment", async () => {
     const owner = await login("alice@acme-vet.test", "alicepass1");
     const pet = (await app.inject({ method: "POST", url: "/pets", headers: auth(owner), payload: { name: "Notable", species: "dog" } }).then((r) => r.json())) as { id: string };

@@ -116,6 +116,33 @@ export function getPet(petId: string): Pet | undefined {
   return read<Pet>(`pet_${petId}`);
 }
 
+// ---- pet detail (pet + its appointments, each with visit notes) ----------
+
+export interface AppointmentWithNotes extends Appointment {
+  notes: VisitNote[];
+}
+export interface PetDetail extends Pet {
+  appointments: AppointmentWithNotes[];
+}
+
+/** All appointments for a pet (any status), newest datetime first. */
+export function appointmentsForPet(petId: string): Appointment[] {
+  return scan<Appointment>("appt_")
+    .filter((a) => a.pet === petId)
+    .sort((a, b) => (a.datetime < b.datetime ? 1 : -1));
+}
+
+/** Aggregate a pet with its appointments + each appointment's notes. */
+export function petDetail(petId: string): PetDetail | undefined {
+  const pet = getPet(petId);
+  if (!pet) return undefined;
+  const appointments = appointmentsForPet(petId).map((a) => ({
+    ...a,
+    notes: notesFor(a.id),
+  }));
+  return { ...pet, appointments };
+}
+
 // ---- pet photos (upload:policy + blob:store) -----------------------------
 // upload-policy validates the declared content-type + size against the policy
 // (config-driven) and mints a signed ticket; we redeem it, then blob-store

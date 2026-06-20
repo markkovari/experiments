@@ -175,6 +175,12 @@ export interface NotesResponse {
   notes: VisitNote[]
 }
 
+// Full pet detail: the pet plus its appointments, each with its visit notes
+// inlined (returned by GET /pets/:id).
+export type PetDetail = Pet & {
+  appointments: (Appointment & { notes: VisitNote[] })[]
+}
+
 export interface AuditEvent {
   id: string
   timestamp: string
