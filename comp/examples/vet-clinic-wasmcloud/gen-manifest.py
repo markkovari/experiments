@@ -106,7 +106,7 @@ spec:
 dom = ["""    - name: vet-domain
       type: component
       properties:
-        image: oci://%s/vet-vet-domain:0.2.0
+        image: oci://%s/vet-vet-domain:0.3.0
       traits:
         - type: spreadscaler
           properties:

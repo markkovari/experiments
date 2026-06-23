@@ -209,6 +209,16 @@ fn emit(response_out: ResponseOutparam, result: Outcome) {
 // ---- boot seeding (fsm machine + i18n catalog) --------------------------
 
 fn ensure_seeded() {
+    // Seed ONCE, not per request. On a single-process host (jco/native) the
+    // per-request seeding was free (in-process calls); on wasmCloud each
+    // fsm::define + i18n::set_message is a wrpc-over-NATS round-trip, so
+    // re-seeding ~15 hops on every request tanked throughput (and tripped the
+    // wrpc deadline). Gate on one cheap KV read: a marker in a `meta`
+    // collection. Non-empty -> already seeded, skip the ~15 calls.
+    if records::count("meta").map(|n| n > 0).unwrap_or(false) {
+        return; // already seeded
+    }
+
     // appointment lifecycle: booked -> confirmed -> completed | cancel.
     let def = fsm::Definition {
         states: vec![
@@ -231,6 +241,9 @@ fn ensure_seeded() {
     for (locale, key, value) in ui_strings() {
         let _ = i18n::set_message(locale, key, value);
     }
+
+    // mark seeded so subsequent requests skip all of the above (one record).
+    let _ = records::create("meta", "{\"seeded\":true}", &[]);
 }
 
 const APPT_EVENTS: [&str; 3] = ["confirm", "complete", "cancel"];

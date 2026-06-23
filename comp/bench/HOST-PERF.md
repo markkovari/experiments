@@ -33,11 +33,14 @@ every case — what differs is the host and (for jco) the domain language.
 | **Node + jco** (TS domain) | **3876** | 38 | 278 | 48 MB | 273 MB `node_modules` |
 | **Rust host — on-demand alloc** | 503 | 165 | 514 | **24 MB** | 18.8 MB bin + 2.6 MB wasm |
 | **Rust host — pooling alloc** (`--pool`) | 2957 | 175 | 1793 | 427 MB | 18.8 MB bin + 2.6 MB wasm |
-| **wasmCloud (k8s, full app, LINKED)** | **2.6** | — | — | per-host reservation | 21 OCI images |
+| **wasmCloud (k8s, full app, LINKED)** | ~6 (GET /) / ~2.6 (/pets) | — | — | per-host reservation | 21 OCI images |
 
 (The wasmCloud row is the **full 21-component app** as a linked lattice — it
-deploys + runs every feature; ~2.6 rps reflects multi-hop wrpc-over-NATS per
-request, not the runtime. See the deploy findings below.)
+deploys + serves UI + every feature. The low rps is **per-request component
+instantiation on the on-demand allocator** (~95 ms floor even for a static
+response), NOT a wasmCloud ceiling — see "Why only ~6–10 rps?" below. The local
+**pooling** row is what this becomes with the allocator a production wasmCloud
+host uses.)
 
 (Latency tracks throughput inversely: e.g. GET /pets mean was ~13 ms Node,
 ~100 ms Rust on-demand, ~17 ms Rust pooled.)
@@ -200,6 +203,54 @@ as pure wasm on wasmCloud in k8s. Same Rust components also run, fused, on jco
 and the native wasmtime host. One set of components, three hosts; only the
 *shape* (fuse for single-process, link for the lattice) and the *exposure*
 differ.
+
+### Why only ~6–10 rps? — latency breakdown (NOT a wasmCloud ceiling)
+
+10 rps for a wasm app looks absurd. It is — and it's a stack of fixable,
+environment-specific costs, not wasmCloud's ceiling. Measured layer by layer:
+
+| measurement | value | what it tells us |
+|---|--:|---|
+| raw NATS RTT, in-cluster | **~1 ms** | transport is fast — not the bottleneck |
+| `GET /` (static UI: no KV, no auth, no seed) | **~96 ms** | the floor is the *invocation itself* |
+| 96 ms ÷ 1 ms | ~95× | ~95 ms is spent NOT in transport |
+
+The ~95 ms floor on a *static* response (just return embedded bytes) means the
+cost is **per-request component instantiation on the wasmCloud host**. Every
+HTTP request, the host builds a fresh wasmtime `Store` and instantiates the
+composed component — here ~100 core-module instances, ~900 KB (the embedded SPA
+bloated it) — on the host's **on-demand allocator** (this host build exposes no
+pooling flag; `--max-components`/`--max-linear-memory-bytes` exist, an allocator
+knob does not). Instantiating that per request ≈ 95 ms ⇒ ~10 rps, serialized at
+`instances: 1`.
+
+This is the SAME per-request-instantiation cost measured on the local native
+host — where the default on-demand allocator gave 503 rps and **`--pool`
+(wasmtime's pooling allocator, the strategy a production wasmCloud host uses)
+took it to 2957 rps, ~6×**. The local pooling row is the proxy for what this
+would do with pooling enabled.
+
+**Three contributing causes, worst first — all addressable, none fundamental:**
+1. **Per-request instantiation on the on-demand allocator** (~95 ms). Fix:
+   pooling allocator (local `--pool` proved ~6×); a production wasmCloud host
+   pools by default.
+2. **Oversized fused component** (~900 KB / ~100 core instances) — the embedded
+   SPA + fusing everything into one artifact inflate instantiation. Fix: serve
+   the UI from a separate small static component (don't embed); the linked
+   topology already splits the capabilities.
+3. **Self-inflicted hot-path work — FIXED.** The domain re-seeded the i18n
+   catalog + fsm machine (~15 wrpc-over-NATS hops) on EVERY request
+   (`ensure_seeded()` in the handler). Free in-process (jco/native), brutal on
+   the lattice — it even tripped the wrpc deadline (`data transmission timed
+   out`). Now gated on a one-read KV check (seed once). This fixed the API
+   paths; `GET /` was unaffected (it never seeded), which is exactly how the
+   ~95 ms instantiation floor became visible.
+
+`instances: 1` + orbstack-in-a-VM are minor next to instantiation. So: the
+deploy works and serves everything; throughput is dominated by per-request
+instantiation of an oversized component on an allocator-unoptimized host — the
+documented next steps (pool, slim, scale replicas) are the path to the
+local-pooled numbers.
 
 ### 2. The shallow auth slice deploys + runs, but is provider-hop-bound
 The **auth backend** (accounts-app + the composed auth-guard — a 2–3 component
