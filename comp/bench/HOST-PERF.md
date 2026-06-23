@@ -246,11 +246,33 @@ would do with pooling enabled.
    paths; `GET /` was unaffected (it never seeded), which is exactly how the
    ~95 ms instantiation floor became visible.
 
-`instances: 1` + orbstack-in-a-VM are minor next to instantiation. So: the
-deploy works and serves everything; throughput is dominated by per-request
-instantiation of an oversized component on an allocator-unoptimized host — the
-documented next steps (pool, slim, scale replicas) are the path to the
-local-pooled numbers.
+So: the deploy works and serves everything; throughput is dominated by
+per-request instantiation of an oversized component on an allocator-unoptimized
+host.
+
+### Making it faster — replica scaling, measured
+
+The cheapest lever (no rebuild, no allocator change): scale the HTTP-facing
+`vet-domain` to N instances so requests run in parallel instead of serializing
+at `instances: 1`. Measured on the live cluster, GET / in-cluster:
+
+| vet-domain instances | concurrency | req/s | vs baseline |
+|--:|--:|--:|--:|
+| 1 (baseline) | 20 | **16** | 1× |
+| 5 | 50 | **~106–282** | **7–17×** |
+| 10 | 100 | — (host thrash, requests stalled) | — |
+
+`VET_REPLICAS=5 python3 gen-manifest.py` sets it. **Scaling to 5 gave a 7–17×
+jump** — confirming the ~10 rps was `instances: 1` serialization, not a hard
+limit. (The spread reflects single-host variance: 5 fat component instances + 18
+capabilities + NATS all contend on one orbstack VM.) **10 over-saturated** the
+single host (instantiation/memory thrash → stalls) — the per-request
+instantiation cost is exactly what caps how many fat instances one host holds;
+a real multi-node cluster, a pooling allocator, or a slimmer component all push
+this further. Two compounding levers not run here: the **pooling allocator**
+(~6× locally — cuts the per-instance ~50 ms instantiate) and **slimming the
+component** (drop the embedded SPA). With pooling even `instances: 1` would beat
+the scaled-but-on-demand number.
 
 ### 2. The shallow auth slice deploys + runs, but is provider-hop-bound
 The **auth backend** (accounts-app + the composed auth-guard — a 2–3 component

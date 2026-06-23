@@ -9,7 +9,7 @@ metadata:
   name: vet-domain
   namespace: vet-clinic
   annotations:
-    version: v0.1.0
+    version: v0.1.0-r5
     description: "Full vet-clinic, linked-component topology, on wasmCloud k8s"
 spec:
   components:
@@ -20,7 +20,7 @@ spec:
       traits:
         - type: spreadscaler
           properties:
-            instances: 1
+            instances: 5
         - type: link
           properties:
             namespace: auth
