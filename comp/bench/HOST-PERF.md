@@ -33,11 +33,11 @@ every case — what differs is the host and (for jco) the domain language.
 | **Node + jco** (TS domain) | **3876** | 38 | 278 | 48 MB | 273 MB `node_modules` |
 | **Rust host — on-demand alloc** | 503 | 165 | 514 | **24 MB** | 18.8 MB bin + 2.6 MB wasm |
 | **Rust host — pooling alloc** (`--pool`) | 2957 | 175 | 1793 | 427 MB | 18.8 MB bin + 2.6 MB wasm |
-| **wasmCloud (k8s, auth slice)** | — | **5.4** | — | per-host reservation | OCI image |
+| **wasmCloud (k8s, full app, LINKED)** | **2.6** | — | — | per-host reservation | 21 OCI images |
 
-(The wasmCloud row is the **auth backend** — accounts-app + auth-guard — not the
-full 19-component app; see the deploy findings below for why, and why 5.4 isn't
-a runtime number.)
+(The wasmCloud row is the **full 21-component app** as a linked lattice — it
+deploys + runs every feature; ~2.6 rps reflects multi-hop wrpc-over-NATS per
+request, not the runtime. See the deploy findings below.)
 
 (Latency tracks throughput inversely: e.g. GET /pets mean was ~13 ms Node,
 ~100 ms Rust on-demand, ~17 ms Rust pooled.)
@@ -94,21 +94,87 @@ write/auth throughput, a ~21 MB artifact, and a memory footprint you dial in.
 Deployed against the live in-cluster `wasmcloud-operator` host (v1.6.0,
 JetStream NATS), `examples/vet-clinic-wasmcloud/k8s`. Two concrete findings:
 
-### 1. The full 19-component app does NOT deploy on wasmCloud 1.6.0
+### 1. The full 19-component app does NOT deploy on the wasmCloud host
 ```
 failed to compile component:
   The component transitively contains 104 core module instances,
   which exceeds the configured maximum of 30
 ```
-`vet_domain.full.composed.wasm` (19 components wac-plugged) flattens to **104
-core module instances**, over the host's **hardcoded 30-instance cap**. That cap
-is not exposed by the `WasmCloudHostConfig` CRD nor by a host flag/env in this
-build (`--max-components`, `--max-linear-memory-bytes`, etc. exist; a
-max-core-instances knob does not) — so a deep wac composition needs a host built
-with a higher limit. **This is a real ceiling on composition depth for
-wasmCloud, and the most important prod-parity finding here:** the same wasm that
-runs fine under jco and the native wasmtime host is rejected by the wasmCloud
-host's instance limit.
+
+> **Version note.** "wasmCloud 2.x" elsewhere in this repo is shorthand for the
+> **Kubernetes-operator deployment model** (CRD-driven), NOT a 2.0 host. The
+> host BINARY is 1.x — `1.6.0` for this deploy, `1.4.1` on the standing
+> `comp-auth` host; the operator is `0.4.0` (`k8s.wasmcloud.dev/v1alpha1`).
+> There is no 2.0 host. The cap below is the same on 1.4.1 and 1.6.0.
+
+**Root cause — wrong topology, NOT a density limit.** This is the important
+correction: the "30" is **not** how many components a host can run. wasmCloud
+runs **1000s** of component instances per host — that's its whole pitch,
+governed by the pooling allocator's `total_component_instances` /
+`--max-components` (default 10000). That limit was nowhere near hit.
+
+The "30" is a **different** wasmtime knob: the max number of core-module
+instances **nested inside ONE component's graph** (`InstanceLimits`, default 30).
+The error says it exactly — the *single* `vet_domain.full.composed.wasm`
+"transitively contains 104 core module instances". The failure is that I
+`wac plug`'d **all 19 capabilities into one fused mega-component**, and that
+single artifact's internal graph is too deep — not that the host can't hold many
+components.
+
+Why one artifact is 104: each component, built independently by
+`cargo-component`, bundles its own WASI preview1 adapter + bindgen glue (~4 core
+modules); 19 fused = ~100. (`wac` doesn't dedupe the adapter.)
+
+| artifact | components | core modules |
+|---|--:|--:|
+| one component (e.g. record-store) | 1 | 4 |
+| auth-guard.composed | 3 | 12 |
+| vet_domain.full.composed | 19 | ~100 |
+
+**The fix is the idiomatic wasmCloud topology, and it's how the auth app already
+works.** The deployed auth app does NOT fuse its pieces — it runs `accounts-app`
+and `auth-guard` as **two separate components, linked by wadm** (`accounts-app`
+→ `auth:identity` → `auth-guard`). The host runs them as independent instances
+and wires them at the lattice. Applied to vet-domain: deploy **vet-domain as one
+component LINKED to ~18 separate capability components** (each small, ~4
+instances, far under 30), instead of one fused blob. Then nothing exceeds the
+per-component limit, and the host happily runs all 19 + their links — density is
+a non-issue.
+
+Fusing into one `.wasm` was a convenience for the **jco / native-host** path
+(one artifact, host satisfies WASI). That convenience is exactly what breaks the
+wasmCloud deploy — and ironically defeats wasmCloud's strength (per-component
+scaling, linking, hot-swap, density). **Same components, two deployment shapes:**
+fuse for a single-process host (jco/native), link for wasmCloud.
+
+So the full app on wasmCloud is a **manifest exercise** (linked components +
+their wadm links), not blocked by Rust, wasm, or any host limit.
+
+**Built + verified.** `examples/vet-clinic-wasmcloud/gen-manifest.py` generates
+the linked topology — **21 components** (vet-domain + 18 capabilities +
+http-server/http-client/keyvalue-nats providers), each pushed separately, wired
+by wadm links. It **deploys clean and the full app runs on wasmCloud k8s**:
+
+```
+seed RBAC 204 · register 201 · login token · pet (records:store→NATS KV) ULID
+fsm confirm 200 · invoice 45.00 (money) · note 201 (md:render + lock:mutex)
+i18n/es 200 (i18n:catalog) · AI summary 200 (ai:inference + cache)
+```
+
+GET /pets throughput: **~2.6 req/s**. That's the genuinely-distributed cost: a
+single request now fans out across **multiple wrpc hops over NATS** (vet-domain
+→ authorizer → auth-guard → keyvalue-nats; → records-store → keyvalue-nats; →
+search-index → keyvalue-nats), each a network round-trip, on one host replica
+through a port-forward. The trade vs the fused single-process hosts is explicit:
+you buy **independent per-component scaling / linking / hot-swap / density**
+(the lattice) and pay **inter-component + provider latency** for it. Tune by
+scaling `spreadscaler` replicas, co-locating hot links, and running load
+in-cluster.
+
+Two bugs found + fixed getting there: (1) the fused-blob instance-cap above;
+(2) a missing `i18n:catalog` wadm link → runtime wrpc trap on first invoke
+(wadm doesn't validate that every guest import has a link; it fails at call
+time). Both are manifest/composition issues, not runtime limits.
 
 ### 2. The shallow auth slice deploys + runs, but is provider-hop-bound
 The **auth backend** (accounts-app + the composed auth-guard — a 2–3 component
