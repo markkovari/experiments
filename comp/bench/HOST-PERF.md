@@ -176,6 +176,31 @@ Two bugs found + fixed getting there: (1) the fused-blob instance-cap above;
 (wadm doesn't validate that every guest import has a link; it fails at call
 time). Both are manifest/composition issues, not runtime limits.
 
+### Serving EVERYTHING from the lattice — UI + API, no Node
+
+The React SPA is **embedded into the vet-domain wasm** (`build.rs` →
+`include_bytes!` over `static/`, ~620 KB; the composed app is ~3.4 MB). The
+component serves its own UI: `GET /` → index.html, `GET /assets/*` → the bundle,
+everything else → API or SPA-fallback. So the http-server provider routes UI AND
+API to the one component — **no static-file provider, no Node, nothing outside
+the lattice.** Verified on the live k8s deploy: `GET /` → 200 html, `/assets/
+*.js` → 200, login/pet/fsm/invoice/i18n/ai all green.
+
+Exposed via a **NodePort Service** (`k8s/vet-domain-service.yaml`, `:30081` →
+host `:8081`) — reachable at `http://localhost:30081` with **no port-forward**
+(single requests verified). In-cluster throughput (oha pod → ClusterIP, the
+honest path without the orbstack localhost-NodePort quirk that refuses rapid
+new conns): **GET / ≈ 10.5 rps** (UI, static-from-wasm — even a static response
+pays the http-server↔component wrpc-over-NATS hop), **GET /pets ≈ 2.6 rps**
+(full lattice fan-out). Both reflect the distributed-lattice cost, not the
+runtime; scale `spreadscaler` replicas + co-locate hot links to improve.
+
+**Bottom line:** the entire vet-clinic — React UI + 19-capability domain — runs
+as pure wasm on wasmCloud in k8s. Same Rust components also run, fused, on jco
+and the native wasmtime host. One set of components, three hosts; only the
+*shape* (fuse for single-process, link for the lattice) and the *exposure*
+differ.
+
 ### 2. The shallow auth slice deploys + runs, but is provider-hop-bound
 The **auth backend** (accounts-app + the composed auth-guard — a 2–3 component
 graph, well under 30 instances) deploys cleanly: `register` → 201, `login` →
