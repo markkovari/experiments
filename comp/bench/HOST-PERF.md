@@ -714,6 +714,38 @@ first. wash-runtime's `wasi:http` path does incremental delivery, so
 LLM-token streaming (SSE) works on wasmCloud v2 as-is. (This was the go/no-go
 check for AI-harness workloads.)
 
+## Round 7 — Raspberry Pi 5 (malna): the native host on €80 hardware
+
+Same native Rust host + `vet_domain.full.composed.wasm`, cross-compiled from
+the Mac with `cargo zigbuild --target aarch64-unknown-linux-gnu.2.36` (~70 s
+build, 15.7 MB binary — scp'd with the 3.4 MB wasm + 620 KB SPA, nothing else
+installed on the Pi). malna = Pi 5 Model B, 4× Cortex-A76, 8 GiB, Debian
+bookworm. Loaded from the Mac over LAN (oha, ~1.8 ms RTT), in-memory KV,
+`oha -z 15s`, ALL rows 100 %:
+
+| op | on-demand | **pooling (`--pool`)** | picur Mac pooling (round 1) |
+|---|--:|--:|--:|
+| GET / (static) @ c50 | 2871 rps | **7653 rps @ p50 7 ms** | — |
+| GET /pets @ c50 | 1083 @ 46 ms | **1428 rps @ p50 35 ms** | 2957 |
+| POST /pets @ c10 | 660 @ 14 ms | **802 rps @ p50 12 ms** | 1793 |
+| POST /login @ c10 | 27 | **30 rps @ p50 349 ms** | 175 |
+| RSS after load | 134 MB | 141 MB | 427 MB |
+
+Reads and writes land at ~half the M-series Mac — in line with 4 small cores
+vs 10 big ones; the linear-with-hardware story extends down to a Pi. The two
+outliers tell the usual story: GET / never touches wasm (native static-file
+path — the Pi pushes 7.6k rps of SPA without breaking p50 7 ms), and login is
+argon2 — ~350 ms per hash on a Cortex-A76 vs ~30 ms on the M-series, so the
+Pi does 30 rps of logins and nothing will fix that but cheaper KDF params or
+bigger cores. Pooling's win over on-demand is smaller than on the Mac
+(+32 % on /pets vs +490 % round 1) — instantiation is a smaller slice of the
+budget when every core is slow and the KV work dominates.
+
+Takeaway: the whole vet-clinic — 28 wasm modules, UI + API, one binary — runs
+a four-digit read path on a Raspberry Pi at 141 MB RSS. A JetStream leaf node
+on the Pi (nats-server is already installed) is the missing piece to make it
+a real lattice edge node rather than an island.
+
 ## Reproduce
 
 ```bash
