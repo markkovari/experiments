@@ -18,6 +18,7 @@ use bindings::auth::identity::authorizer;
 use bindings::auth::identity::types::{AuthError, Principal};
 use bindings::event::bus::bus;
 use bindings::fsm::workflow::engine as fsm;
+use bindings::idempotency::guard::store as idem;
 use bindings::records::store::store as records;
 use bindings::wasi::clocks::wall_clock;
 use bindings::wasi::config::store as config;
@@ -301,15 +302,32 @@ fn pump() -> Outcome {
     let mut advanced = 0;
 
     // 1. checkout -> new submitted order (+ OrderStarted clears the basket).
+    // Order creation is the one non-idempotent consumer here (the FSM naturally
+    // dedupes everything else), so it's guarded per BUS EVENT ID: a duplicate
+    // delivery of the same publish must not mint a second order, while two
+    // distinct checkouts (distinct event ids) both must. The ack offset is a
+    // watermark, so the pass stops at the first skippable event.
     match bus::poll("UserCheckoutAccepted", GROUP, 32) {
         Ok(events) => {
+            let mut acked: Vec<String> = Vec::new();
             for ev in &events {
-                if let Ok(co) = serde_json::from_slice::<CheckoutEvent>(&ev.payload) {
-                    if start_order(&co) {
-                        created += 1;
+                let key = format!("checkout:{}", ev.id);
+                match idem::begin(&key, 300) {
+                    Ok(None) => {
+                        if let Ok(co) = serde_json::from_slice::<CheckoutEvent>(&ev.payload) {
+                            if start_order(&co) {
+                                created += 1;
+                            }
+                        }
+                        let _ = idem::complete(&key, 200, &[]);
+                        acked.push(ev.id.clone());
                     }
+                    Ok(Some(_)) => acked.push(ev.id.clone()),
+                    Err(_) => break,
                 }
-                let _ = bus::ack(&ev.topic, GROUP, &[ev.id.clone()]);
+            }
+            if !acked.is_empty() {
+                let _ = bus::ack("UserCheckoutAccepted", GROUP, &acked);
             }
         }
         Err(e) => return bus_err(e),

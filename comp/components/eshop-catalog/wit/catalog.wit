@@ -23,4 +23,7 @@ world catalog-service {
     import records:store/store@0.1.0;
     // integration events (Dapr pub/sub stand-in).
     import event:bus/bus@0.1.0;
+    // event:bus is at-least-once and stock decrements are not naturally
+    // idempotent (unlike ordering's FSM transitions) — dedup per order id.
+    import idempotency:guard/store@0.1.0;
 }

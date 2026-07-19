@@ -29,6 +29,7 @@ world = "ordering-service"
 "records:store" = { path = "../record-store/wit" }
 "fsm:workflow" = { path = "../fsm-workflow/wit" }
 "event:bus" = { path = "../event-bus/wit" }
+"idempotency:guard" = { path = "../idempotency-guard/wit" }
 "wasi:http" = { path = "../../wit/deps/wasi-http-0.2.0" }
 "wasi:io" = { path = "../../wit/deps/wasi-io-0.2.0" }
 "wasi:clocks" = { path = "../../wit/deps/wasi-clocks-0.2.0" }

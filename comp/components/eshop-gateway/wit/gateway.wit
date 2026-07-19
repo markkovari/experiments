@@ -1,9 +1,10 @@
 // eshop:gateway — the eShopOnDapr Envoy gateway + Blazor host, as one
 // WIT HTTP component.
 //
-// Serves the embedded storefront SPA and reverse-proxies the API surface to
-// the sibling services over wasi:http/outgoing-handler. The per-service base
-// URLs are wasi:config, so the same wasm fronts localhost native hosts and
+// Serves the embedded storefront SPA and forwards the API surface through the
+// proxy:route capability — the route table (prefixes -> sibling services,
+// plus the /pump/* fan-out targets) is deploy-time wasi:config on the
+// composed proxy, so the same wasm fronts localhost native hosts and
 // *.eshop.svc.cluster.local on Kubernetes.
 //
 //   /api/identity/*  -> identity  (prefix stripped: accounts-app serves /register &c.)
@@ -18,6 +19,6 @@ package eshop:gateway@0.1.0;
 world gateway-service {
     export wasi:http/incoming-handler@0.2.0;
 
-    import wasi:http/outgoing-handler@0.2.0;
-    import wasi:config/store@0.2.0-rc.1;
+    // route-table + forwarding (the Envoy stand-in).
+    import proxy:route/router@0.1.0;
 }

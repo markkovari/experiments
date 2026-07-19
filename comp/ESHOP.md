@@ -15,7 +15,7 @@ Kubernetes.
 | Dapr pub/sub (RabbitMQ) | `event:bus` — durable topic log, per-group offsets, shared KV bucket |
 | Dapr actors + reminders (order grace period) | `fsm:workflow` machine per order + pump-driven grace sweep |
 | IdentityServer (Identity.API) | `accounts-app` + composed `auth-guard` (sessions in the shared bucket, so every service introspects the same token) |
-| Envoy gateway + Blazor UI host | `eshop-gateway`: embedded single-file storefront + wasi:http reverse proxy |
+| Envoy gateway + Blazor UI host | `eshop-gateway`: embedded single-file storefront + `proxy:route` (config route table + forwarding as a capability) |
 | Dapr config/secrets | wasi:config (`grace-period-secs`, `payment-succeeds`, service URLs) |
 | SignalR order-status push | storefront polls `GET /api/orders` *(simplification)* |
 | per-service databases | one shared bucket, records-collection isolation *(simplification)* |
@@ -29,11 +29,17 @@ Integration event names are the original's, verbatim: `UserCheckoutAccepted`,
 | service | does | composes |
 |---|---|---|
 | **identity** | register/login/me/logout, roles | accounts-app + auth-guard (reused wholesale, zero new code) |
-| **catalog** | seeded demo catalog, paging + brand/type filters; answers stock validation, decrements on paid | records, event-bus |
+| **catalog** | seeded demo catalog, paging + brand/type filters; answers stock validation, decrements on paid (deduped per order) | records, event-bus, idempotency-guard |
 | **basket** | per-buyer basket document; checkout → `UserCheckoutAccepted` (202); cleared on `OrderStarted` | auth-guard, records, event-bus |
-| **ordering** | order aggregate; lifecycle = declarative FSM `submitted → awaitingStockValidation → validated → paid → shipped` (+ `cancelled`); grace-window cancel; list/get/cancel/ship | auth-guard, records, fsm, event-bus |
+| **ordering** | order aggregate; lifecycle = declarative FSM `submitted → awaitingStockValidation → validated → paid → shipped` (+ `cancelled`); grace-window cancel; list/get/cancel/ship; order creation deduped per bus event id | auth-guard, records, fsm, event-bus, idempotency-guard |
 | **payment** | consumes `...ToValidated`, answers success/failure per `payment-succeeds` | event-bus |
-| **gateway** | embedded storefront + `/api/*` reverse proxy + `/internal/pump` fan-out | (host interfaces only) |
+| **gateway** | embedded storefront + `/api/*` forwarding + `/internal/pump` fan-out | proxy-route (route table + outgoing HTTP as a contract) |
+
+At-least-once delivery is handled where it matters: the FSM naturally dedupes
+status transitions; the two non-idempotent consumers (order creation, stock
+decrement) compose `idempotency:guard` — verified exact-once under
+deliberately racing pump drivers (20 checkouts → exactly 20 orders / 20
+decrements).
 
 The checkout choreography, exactly as in the original:
 

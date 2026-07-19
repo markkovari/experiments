@@ -38,6 +38,10 @@ world ordering-service {
     import fsm:workflow/engine@0.1.0;
     // integration events (Dapr pub/sub stand-in).
     import event:bus/bus@0.1.0;
+    // at-least-once dedup for order creation: a duplicate UserCheckoutAccepted
+    // delivery would mint a second order (every other consumer is naturally
+    // idempotent through the FSM). Keyed on the bus event id.
+    import idempotency:guard/store@0.1.0;
 
     // grace-period sweep needs "now"; the window is deploy-time config.
     import wasi:clocks/wall-clock@0.2.0;

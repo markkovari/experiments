@@ -22,7 +22,9 @@ VET_TENANT=eshop CFG_GRACE_PERIOD_SECS=${GRACE:-15} \
   run $H --component $C/eshop_ordering.composed.wasm --addr 127.0.0.1:3103 --kv nats
 VET_TENANT=eshop CFG_PAYMENT_SUCCEEDS=${PAYMENT_SUCCEEDS:-true} \
   run $H --component $C/eshop_payment.composed.wasm --addr 127.0.0.1:3104 --kv nats
-run $H --component $C/wasm32-wasip1/release/eshop_gateway.wasm --addr 127.0.0.1:3100
+# gateway = SPA + proxy:route; the route table is deploy-time config.
+CFG_ROUTES="/api/identity=http://127.0.0.1:3105/,/api/catalog=http://127.0.0.1:3101,/api/basket=http://127.0.0.1:3102,/api/orders=http://127.0.0.1:3103,/pump/ordering=http://127.0.0.1:3103/internal/pump/,/pump/catalog=http://127.0.0.1:3101/internal/pump/,/pump/payment=http://127.0.0.1:3104/internal/pump/,/pump/basket=http://127.0.0.1:3102/internal/pump/" \
+  run $H --component $C/eshop_gateway.composed.wasm --addr 127.0.0.1:3100
 
 echo
 echo "eshop up — storefront http://127.0.0.1:3100 (the open page pumps the choreography itself)"

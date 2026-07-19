@@ -99,9 +99,13 @@ spec:
         - namespace: wasi
           package: keyvalue
           interfaces: [batch]
+        # idempotency-guard (composed in) reads its default-ttl from config.
+        - namespace: wasi
+          package: config
+          interfaces: [store]
       components:
         - name: catalog
-          image: registry.eshop.svc.cluster.local:5000/eshop-catalog:0.1.1
+          image: registry.eshop.svc.cluster.local:5000/eshop-catalog:0.1.2
           poolSize: 8
           maxInvocations: 200
 ---
@@ -199,7 +203,7 @@ spec:
           interfaces: [store]
       components:
         - name: ordering
-          image: registry.eshop.svc.cluster.local:5000/eshop-ordering:0.1.1
+          image: registry.eshop.svc.cluster.local:5000/eshop-ordering:0.1.2
           poolSize: 8
           maxInvocations: 200
           localResources:
@@ -288,18 +292,16 @@ spec:
           interfaces: [store]
       components:
         - name: gateway
-          image: registry.eshop.svc.cluster.local:5000/eshop-gateway:0.1.2
+          image: registry.eshop.svc.cluster.local:5000/eshop-gateway:0.1.3
           poolSize: 8
           maxInvocations: 200
           localResources:
             # egress is fail-closed; the proxy may only dial the sibling services.
             allowedHosts: ["*.eshop.svc.cluster.local"]
             config:
-              eshop-identity-url: "http://identity.eshop.svc.cluster.local"
-              eshop-catalog-url: "http://catalog.eshop.svc.cluster.local"
-              eshop-basket-url: "http://basket.eshop.svc.cluster.local"
-              eshop-ordering-url: "http://ordering.eshop.svc.cluster.local"
-              eshop-payment-url: "http://payment.eshop.svc.cluster.local"
+              # proxy:route table — prefix=upstream, longest prefix wins;
+              # upstream ending in / strips the matched prefix.
+              routes: "/api/identity=http://identity.eshop.svc.cluster.local/,/api/catalog=http://catalog.eshop.svc.cluster.local,/api/basket=http://basket.eshop.svc.cluster.local,/api/orders=http://ordering.eshop.svc.cluster.local,/pump/ordering=http://ordering.eshop.svc.cluster.local/internal/pump/,/pump/catalog=http://catalog.eshop.svc.cluster.local/internal/pump/,/pump/payment=http://payment.eshop.svc.cluster.local/internal/pump/,/pump/basket=http://basket.eshop.svc.cluster.local/internal/pump/"
 ---
 apiVersion: v1
 kind: Service

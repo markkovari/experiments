@@ -752,6 +752,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "proxy-route"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen-rt",
+]
+
+[[package]]
 name = "quota"
 version = "0.1.0"
 dependencies = [

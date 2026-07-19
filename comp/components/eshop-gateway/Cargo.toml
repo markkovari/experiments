@@ -20,6 +20,7 @@ path = "wit"
 world = "gateway-service"
 
 [package.metadata.component.target.dependencies]
+"proxy:route" = { path = "../proxy-route/wit" }
 "wasi:http" = { path = "../../wit/deps/wasi-http-0.2.0" }
 "wasi:io" = { path = "../../wit/deps/wasi-io-0.2.0" }
 "wasi:clocks" = { path = "../../wit/deps/wasi-clocks-0.2.0" }

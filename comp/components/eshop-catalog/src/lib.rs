@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use bindings::event::bus::bus;
+use bindings::idempotency::guard::store as idem;
 use bindings::records::store::store as records;
 
 use bindings::exports::wasi::http::incoming_handler::Guest;
@@ -241,41 +242,67 @@ struct OrderStockEvent {
 }
 
 /// Drain this service's consumer group: answer stock-validation requests and
-/// apply paid-order decrements. At-least-once + ack after processing.
+/// apply paid-order decrements. At-least-once, so both consumers are deduped
+/// through idempotency:guard keyed on the order id — concurrent pump drivers
+/// polling the same unacked batch otherwise double-decrement (caught by the
+/// choreography bench, ESHOP-BENCH.md). Ack only what was handled or replayed;
+/// an in-progress or backend-failed event stays unacked for the next pass.
 fn pump() -> Outcome {
     if let Err(o) = ensure_seeded() {
         return o;
     }
-    let mut validated = 0;
-    let mut decremented = 0;
+    let validated = consume("OrderStatusChangedToAwaitingStockValidation", "stockval", |req| {
+        validate_stock(req);
+    });
+    let decremented = consume("OrderStatusChangedToPaid", "paid", |req| {
+        for item in &req.items {
+            adjust_stock(&item.product_id, item.units);
+        }
+    });
+    match (validated, decremented) {
+        (Ok(v), Ok(d)) => {
+            Outcome::Json(200, json!({"validated": v, "decremented": d}).to_string())
+        }
+        (Err(e), _) | (_, Err(e)) => e,
+    }
+}
 
-    match bus::poll("OrderStatusChangedToAwaitingStockValidation", GROUP, 32) {
-        Ok(events) => {
-            for ev in &events {
-                if let Ok(req) = serde_json::from_slice::<OrderStockEvent>(&ev.payload) {
-                    validate_stock(&req);
-                    validated += 1;
-                }
-                let _ = bus::ack(&ev.topic, GROUP, &[ev.id.clone()]);
+/// Poll one topic and run `handle` exactly once per order id. The bus offset
+/// is a watermark (ack advances past everything below the highest id), so
+/// events are handled strictly in order and the pass STOPS at the first
+/// skippable event — acking only the contiguous handled prefix.
+fn consume(
+    topic: &str,
+    kind: &str,
+    handle: impl Fn(&OrderStockEvent),
+) -> Result<u32, Outcome> {
+    let events = bus::poll(topic, GROUP, 32).map_err(|e| bus_err(e))?;
+    let mut handled = 0;
+    let mut acked: Vec<String> = Vec::new();
+    for ev in &events {
+        let Ok(req) = serde_json::from_slice::<OrderStockEvent>(&ev.payload) else {
+            acked.push(ev.id.clone()); // permanently unparseable: drop it
+            continue;
+        };
+        match idem::begin(&format!("{kind}:{}", req.order_id), 300) {
+            Ok(None) => {
+                handle(&req);
+                let _ = idem::complete(&format!("{kind}:{}", req.order_id), 200, &[]);
+                handled += 1;
+                acked.push(ev.id.clone());
             }
+            // already handled by an earlier delivery: just advance the offset.
+            Ok(Some(_)) => acked.push(ev.id.clone()),
+            // a concurrent twin holds the key, or the backend hiccuped —
+            // stop here so the watermark can't pass this event; a later pass
+            // retries it (the reservation expires).
+            Err(_) => break,
         }
-        Err(e) => return bus_err(e),
     }
-    match bus::poll("OrderStatusChangedToPaid", GROUP, 32) {
-        Ok(events) => {
-            for ev in &events {
-                if let Ok(req) = serde_json::from_slice::<OrderStockEvent>(&ev.payload) {
-                    for item in &req.items {
-                        adjust_stock(&item.product_id, item.units);
-                    }
-                    decremented += 1;
-                }
-                let _ = bus::ack(&ev.topic, GROUP, &[ev.id.clone()]);
-            }
-        }
-        Err(e) => return bus_err(e),
+    if !acked.is_empty() {
+        bus::ack(topic, GROUP, &acked).map_err(|e| bus_err(e))?;
     }
-    Outcome::Json(200, json!({"validated": validated, "decremented": decremented}).to_string())
+    Ok(handled)
 }
 
 fn validate_stock(req: &OrderStockEvent) {

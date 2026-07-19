@@ -46,10 +46,15 @@ failures*:
    standing `eshop-pump` + the bench loop) polled the same unacked
    `OrderStatusChangedToPaid` batch; `event:bus` is at-least-once and the
    catalog's decrement is not idempotent per event. The original eShop has the
-   same semantics over Dapr pub/sub. The repo already ships the fix —
-   `idempotency:guard` keyed on `orderId` — it just isn't composed into the
-   catalog consumer. One `wac plug` away. *(ponytail: left as the documented
-   ceiling of v1.)*
+   same semantics over Dapr pub/sub. **RESOLVED** (follow-up commit):
+   `idempotency:guard` is now composed into both non-idempotent consumers —
+   catalog (keyed per order) and ordering's order creation (keyed per bus
+   event id; a naïve retest showed duplicate *deliveries* minting duplicate
+   *orders*, which per-order keys can't see). Exact-once verified under
+   deliberately racing pumps: 20 checkouts → exactly 20 orders / 20 paid /
+   20 decrements. Watermark caveat encoded too: `event:bus` ack advances past
+   everything below the highest id, so consumers process in order and stop at
+   the first skippable event.
 3. **Drain rate is KV-op-bound, single-file** — each order costs ~4 pump
    stages × a dozen ~3–4 ms NATS KV ops, and the gateway pump fans out to the
    four services sequentially. Levers, in order: parallelize the fan-out,
@@ -104,9 +109,11 @@ counting Dapr component yaml, IdentityServer config, and Envoy config.
    runtime WARN logs, not at deploy admission.
 4. **No gateway/proxy capability.** The Envoy role was ~200 hand-written lines,
    half of it wasi:http outgoing boilerplate (build request → write body →
-   subscribe → block → drain). A reusable `proxy:route` component (path-prefix
-   → upstream table from config) would have made the gateway ~30 lines. This
-   is the one genuinely missing component in the catalog.
+   subscribe → block → drain). **RESOLVED** (follow-up commit): extracted as
+   `components/proxy-route` (`proxy:route@0.1.0`) — config route table
+   (`routes` key, longest-prefix, trailing-`/` strips the prefix) + the whole
+   outgoing round trip behind one `forward()` call. The gateway is glue again
+   and the capability is reusable by any future edge component.
 5. **Consumer boilerplate**: every consuming service repeats the same
    poll → deserialize → handle → ack loop per topic. A `bus:subscriber` helper
    contract (topic+group table → one callback export) would collapse ~40 lines
