@@ -44,15 +44,19 @@ cd golem-agent && ../.bin/golem build && ../.bin/golem deploy -Y && cd ..
 GOLEM_E2E=1 cargo test bridge_invokes_a_real_durable_golem_worker
 ```
 
-### Why the binary, not docker?
+### Binary vs docker
 
-Golem 1.5's docker path is a multi-service `compose` (postgres + component /
-worker / shard-manager / worker-executor services + nginx). The single `golem`
-binary runs that whole platform in one process with embedded sqlite — it's
-Golem's own quickstart path, starts in seconds, and there's no clean all-in-one
-Golem image. For a reproducible CI-style run you can instead use Golem's
-`docker-examples/published-postgres/compose.yaml`; the provider only needs the
-gateway URL (`GOLEM_URL`) + `Host` header, so either backend works.
+Both are here. The **verified** e2e above uses Golem's single `golem server run`
+binary — one process, embedded sqlite, **zero auth**, Golem's own quickstart path.
+
+Golem's docker path is vendored in [`golem-docker/`](golem-docker) (their
+official 9-service `published-postgres` compose). It **stands up cleanly**, but
+driving the e2e through it also needs the CLI authenticated against the
+production registry-service, which hit `AUTH_UNAUTHORIZED: Token not found` here
+(a CLI-v1.5.5 ↔ images-v1.5.0 skew — see `golem-docker/README.md`). That extra
+auth/version ops is precisely why the dev binary is the default: one process, no
+token dance. The provider itself is backend-agnostic — it only needs `GOLEM_URL`
++ `Host` — so a version-matched compose works the same once seeded.
 
 ## Config (provider link-time)
 
