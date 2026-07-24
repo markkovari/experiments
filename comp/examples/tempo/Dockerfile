@@ -23,8 +23,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=build /src/host/target/release/vet-host /usr/local/bin/vet-host
 COPY components/target/tempo_domain.composed.wasm /app/tempo.wasm
 COPY examples/tempo/dist /app/dist
-# ADDR/KV overridable; REDIS_URL required at run time. VET_VAULT_KEY should be set
-# to a stable base64 32-byte key in production so sessions survive restarts.
-ENV ADDR=0.0.0.0:8080 KV=redis VET_TENANT=tempo
+# The ONLY runtime input tempo needs is REDIS_URL (rediss://… for managed TLS).
+# The session-signing secret lives in the KV store (Redis), so sessions survive
+# restarts on their own — no key env needed. (VET_* is vet-host's legacy env
+# prefix; tempo uses none of the vet-specific knobs.)
+ENV ADDR=0.0.0.0:8080 KV=redis
 EXPOSE 8080
 CMD ["/bin/sh", "-lc", "exec vet-host --component /app/tempo.wasm --addr ${ADDR} --kv ${KV} --redis-url \"${REDIS_URL}\" --static-dir /app/dist"]
