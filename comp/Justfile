@@ -267,10 +267,14 @@ compose-tempo: compose
 # Run the worktime logger on the native host + serve the SPA. Open
 # http://127.0.0.1:3040: register (pick admin to create projects/categories),
 # log time or run a pomodoro timer, and see your charts; managers/admins see all.
-host-tempo: compose-tempo
+# Build the React + shadcn SPA (Vite) to examples/tempo/dist.
+build-tempo-ui:
+    cd examples/tempo/ui && npm ci && npm run build
+
+host-tempo: compose-tempo build-tempo-ui
     cd host && VET_TENANT=tempo cargo run --release --bin vet-host -- \
       --component ../{{tempo_composed}} --addr 0.0.0.0:3040 \
-      --static-dir ../examples/tempo/public
+      --static-dir ../examples/tempo/dist
 
 # Worktime e2e: compose + build host + a Rust test — admin creates projects +
 # categories, members log entries + a pomodoro timer, and the report aggregates

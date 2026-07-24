@@ -1,9 +1,12 @@
 //! tempo:app — a multi-person worktime logger over composed contracts.
 //!
-//! Accounts + RBAC come from the composed auth-guard (`auth:identity`): three
-//! global roles — admin (creates projects/categories, sees all), manager (sees
-//! all), member (logs + sees own). Projects, categories, time entries, and the
-//! per-user running timer are `record:store` collections. A time entry carries a
+//! Accounts + RBAC come from the composed auth-guard (`auth:identity`). Two
+//! global roles — admin (creates projects/categories, manages membership, sees
+//! all) and member (default) — and per-project **memberships** (member | lead):
+//! you log only against projects you belong to, and a project **lead** sees that
+//! project's whole distribution (its managerial view). Projects, categories,
+//! time entries, memberships, and the per-user running timer are `record:store`
+//! collections. Owners (and admins) can edit/delete entries. A time entry carries a
 //! `day` (YYYY-MM-DD, so a range filter is a string compare — the client owns
 //! the calendar), denormalized project/category names for reporting, and
 //! minutes. `GET /report` sums minutes grouped by project, category,
@@ -38,6 +41,7 @@ const CATEGORIES: &str = "categories";
 const ENTRIES: &str = "entries";
 const TIMERS: &str = "timers";
 const USERS: &str = "users";
+const MEMBERS: &str = "memberships"; // {project, user, email, role: member|lead}
 
 impl Guest for Component {
     fn handle(request: IncomingRequest, response_out: ResponseOutparam) {
@@ -54,12 +58,16 @@ impl Guest for Component {
             (Method::Get, ["api", "me"]) => me(&request),
 
             (Method::Post, ["api", "projects"]) => create_project(&request),
-            (Method::Get, ["api", "projects"]) => list_named(&request, PROJECTS),
+            (Method::Get, ["api", "projects"]) => list_projects(&request),
+            (Method::Post, ["api", "projects", id, "members"]) => add_member(&request, id),
+            (Method::Get, ["api", "projects", id, "members"]) => list_members(&request, id),
             (Method::Post, ["api", "categories"]) => create_category(&request),
             (Method::Get, ["api", "categories"]) => list_named(&request, CATEGORIES),
 
             (Method::Post, ["api", "entries"]) => create_entry(&request),
             (Method::Get, ["api", "entries"]) => list_entries(&request, &path),
+            (Method::Patch, ["api", "entries", id]) => edit_entry(&request, id),
+            (Method::Delete, ["api", "entries", id]) => delete_entry(&request, id),
 
             (Method::Post, ["api", "timer", "start"]) => timer_start(&request),
             (Method::Post, ["api", "timer", "stop"]) => timer_stop(&request),
@@ -119,9 +127,62 @@ fn has_role(p: &Principal, role: &str) -> bool {
 fn is_admin(p: &Principal) -> bool {
     has_role(p, "admin")
 }
-/// admin + manager see the whole org; a member sees only their own.
-fn sees_all(p: &Principal) -> bool {
-    is_admin(p) || has_role(p, "manager")
+
+// ---- project membership -----------------------------------------------------
+// A regular user's reach is defined by per-project memberships (member | lead),
+// not a global role. Admin transcends all of it.
+
+/// This user's membership rows.
+fn my_memberships(subject: &str) -> Vec<Value> {
+    records::find_by(MEMBERS, "user", &json!(subject).to_string())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok())
+        .collect()
+}
+
+/// Project ids the user may log against: None = all (admin), else the set.
+fn logging_projects(p: &Principal) -> Option<Vec<String>> {
+    if is_admin(p) {
+        return None;
+    }
+    Some(my_memberships(&p.subject).iter().filter_map(|m| m["project"].as_str().map(String::from)).collect())
+}
+
+/// Project ids the user leads (sees the whole distribution of): None = all (admin).
+fn led_projects(p: &Principal) -> Option<Vec<String>> {
+    if is_admin(p) {
+        return None;
+    }
+    Some(
+        my_memberships(&p.subject)
+            .iter()
+            .filter(|m| m["role"].as_str() == Some("lead"))
+            .filter_map(|m| m["project"].as_str().map(String::from))
+            .collect(),
+    )
+}
+
+fn can_log(p: &Principal, project: &str) -> bool {
+    match logging_projects(p) {
+        None => true, // admin
+        Some(ids) => ids.iter().any(|id| id == project),
+    }
+}
+
+/// May the user see beyond their own time? admin, or a lead of ≥1 project.
+fn can_see_all(p: &Principal) -> bool {
+    match led_projects(p) {
+        None => true,
+        Some(ids) => !ids.is_empty(),
+    }
+}
+
+fn is_lead_of(p: &Principal, project: &str) -> bool {
+    match led_projects(p) {
+        None => true,
+        Some(ids) => ids.iter().any(|id| id == project),
+    }
 }
 
 fn register(request: &IncomingRequest) -> Outcome {
@@ -135,13 +196,14 @@ fn register(request: &IncomingRequest) -> Outcome {
         Ok(p) => p,
         Err(e) => return Outcome::Auth(e),
     };
-    // demo self-assign among the three roles (an admin would grant these in prod).
+    // demo self-assign of the global role (an admin would grant this in prod).
+    // managerial reach is per-project (lead), not a global role.
     let wanted = body["role"].as_str().unwrap_or("member");
-    let role = if ["member", "manager", "admin"].contains(&wanted) { wanted } else { "member" };
+    let role = if ["member", "admin"].contains(&wanted) { wanted } else { "member" };
     let _ = rbac::assign_role(&p.tenant, &p.subject, role);
     // remember the email for human-readable reports.
     let u = json!({ "subject": p.subject, "email": email });
-    let _ = records::create(USERS, &u.to_string(), &["subject".to_string()]);
+    let _ = records::create(USERS, &u.to_string(), &["subject".to_string(), "email".to_string()]);
     Outcome::Json(201, json!({ "subject": p.subject, "roles": [role] }).to_string())
 }
 
@@ -163,7 +225,10 @@ fn login(request: &IncomingRequest) -> Outcome {
 
 fn me(request: &IncomingRequest) -> Outcome {
     match introspect(request) {
-        Ok(p) => Outcome::Json(200, json!({ "subject": p.subject, "roles": p.roles, "email": email_of(&p.subject) }).to_string()),
+        Ok(p) => Outcome::Json(
+            200,
+            json!({ "subject": p.subject, "roles": p.roles, "email": email_of(&p.subject), "can_see_all": can_see_all(&p) }).to_string(),
+        ),
         Err(o) => o,
     }
 }
@@ -249,6 +314,105 @@ fn list_named(request: &IncomingRequest, collection: &str) -> Outcome {
     Outcome::Json(200, json!({ "items": items }).to_string())
 }
 
+/// Projects the caller belongs to (admin: all), each annotated with the caller's
+/// role on it (`admin` | `lead` | `member`).
+fn list_projects(request: &IncomingRequest) -> Outcome {
+    let p = match introspect(request) {
+        Ok(p) => p,
+        Err(o) => return o,
+    };
+    let allow = logging_projects(&p); // None = admin (all)
+    let leads = led_projects(&p);
+    let items: Vec<Value> = load_all(PROJECTS)
+        .into_iter()
+        .filter(|d| {
+            let id = d["id"].as_str().unwrap_or("");
+            allow.as_ref().map(|ids| ids.iter().any(|x| x == id)).unwrap_or(true)
+        })
+        .map(|mut d| {
+            let id = d["id"].as_str().unwrap_or("").to_string();
+            let role = if is_admin(&p) {
+                "admin"
+            } else if leads.as_ref().map(|ids| ids.iter().any(|x| *x == id)).unwrap_or(false) {
+                "lead"
+            } else {
+                "member"
+            };
+            d["my_role"] = json!(role);
+            d
+        })
+        .collect();
+    Outcome::Json(200, json!({ "items": items }).to_string())
+}
+
+fn subject_for_email(email: &str) -> Option<String> {
+    records::find_by(USERS, "email", &json!(email).to_string())
+        .ok()?
+        .into_iter()
+        .next()
+        .and_then(|e| serde_json::from_str::<Value>(&e.data).ok())
+        .and_then(|d| d["subject"].as_str().map(String::from))
+}
+
+/// Admin or a project lead adds a user (by email) to the project as member|lead.
+fn add_member(request: &IncomingRequest, project: &str) -> Outcome {
+    let p = match introspect(request) {
+        Ok(p) => p,
+        Err(o) => return o,
+    };
+    if !is_admin(&p) && !is_lead_of(&p, project) {
+        return Outcome::Err(403, "admin or project lead only".into());
+    }
+    if !name_map(PROJECTS).contains_key(project) {
+        return Outcome::Err(404, "no such project".into());
+    }
+    let b = match body(request) {
+        Ok(v) => v,
+        Err(o) => return o,
+    };
+    let email = b["email"].as_str().unwrap_or("").trim().to_string();
+    let role = match b["role"].as_str().unwrap_or("member") {
+        "lead" => "lead",
+        _ => "member",
+    };
+    let subject = match subject_for_email(&email) {
+        Some(s) => s,
+        None => return Outcome::Err(404, "no user with that email (they must register first)".into()),
+    };
+    // upsert: one membership row per (project, user).
+    let existing = records::find_by(MEMBERS, "user", &json!(subject).to_string())
+        .unwrap_or_default()
+        .into_iter()
+        .find(|e| serde_json::from_str::<Value>(&e.data).ok().and_then(|d| d["project"].as_str().map(|x| x == project)).unwrap_or(false));
+    let d = json!({ "project": project, "user": subject, "email": email, "role": role, "created": now() });
+    match existing {
+        Some(e) => {
+            let _ = records::update(MEMBERS, &e.id, &d.to_string(), 0);
+        }
+        None => {
+            let _ = records::create(MEMBERS, &d.to_string(), &["user".to_string(), "project".to_string()]);
+        }
+    }
+    Outcome::Json(200, d.to_string())
+}
+
+fn list_members(request: &IncomingRequest, project: &str) -> Outcome {
+    let p = match introspect(request) {
+        Ok(p) => p,
+        Err(o) => return o,
+    };
+    if !is_admin(&p) && !is_lead_of(&p, project) {
+        return Outcome::Err(403, "admin or project lead only".into());
+    }
+    let members: Vec<Value> = records::find_by(MEMBERS, "project", &json!(project).to_string())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok())
+        .map(|d| json!({ "email": d["email"], "role": d["role"] }))
+        .collect();
+    Outcome::Json(200, json!({ "members": members }).to_string())
+}
+
 fn load_all(collection: &str) -> Vec<Value> {
     records::list_records(collection, 1000, "")
         .map(|p| p.entries)
@@ -286,6 +450,9 @@ fn build_entry(subject: &str, b: &Value) -> Result<Value, Outcome> {
     let minutes = b["minutes"].as_u64().unwrap_or(0);
     let day = b["day"].as_str().unwrap_or("").to_string();
     let note = b["note"].as_str().unwrap_or("").to_string();
+    // optional time-of-day (minutes from midnight) for the calendar grid; -1 =
+    // unscheduled.
+    let start = b["start"].as_i64().unwrap_or(-1);
     if minutes == 0 {
         return Err(Outcome::Err(422, "minutes must be > 0".into()));
     }
@@ -308,7 +475,7 @@ fn build_entry(subject: &str, b: &Value) -> Result<Value, Outcome> {
         "email": email_of(subject),
         "project": project, "project_name": pname,
         "category": category, "category_name": cname,
-        "minutes": minutes, "day": day, "note": note,
+        "minutes": minutes, "day": day, "note": note, "start": start,
         "created": now(),
     }))
 }
@@ -322,9 +489,81 @@ fn create_entry(request: &IncomingRequest) -> Outcome {
         Ok(v) => v,
         Err(o) => return o,
     };
+    if !can_log(&p, b["project"].as_str().unwrap_or("")) {
+        return Outcome::Err(403, "you are not a member of this project".into());
+    }
     match build_entry(&p.subject, &b) {
         Ok(d) => save_indexed_entry(d),
         Err(o) => o,
+    }
+}
+
+/// Edit own entry (owner or admin): minutes / category / day / note.
+fn edit_entry(request: &IncomingRequest, id: &str) -> Outcome {
+    let p = match introspect(request) {
+        Ok(p) => p,
+        Err(o) => return o,
+    };
+    let (mut d, rev) = match records::get(ENTRIES, id).ok().and_then(|e| serde_json::from_str::<Value>(&e.data).ok().map(|d| (d, e.revision))) {
+        Some(x) => x,
+        None => return Outcome::Err(404, "no such entry".into()),
+    };
+    if d["user"].as_str() != Some(&p.subject) && !is_admin(&p) {
+        return Outcome::Err(403, "not your entry".into());
+    }
+    let b = match body(request) {
+        Ok(v) => v,
+        Err(o) => return o,
+    };
+    if let Some(m) = b["minutes"].as_u64() {
+        if m == 0 {
+            return Outcome::Err(422, "minutes must be > 0".into());
+        }
+        d["minutes"] = json!(m);
+    }
+    if let Some(day) = b["day"].as_str() {
+        if !valid_day(day) {
+            return Outcome::Err(422, "day must be YYYY-MM-DD".into());
+        }
+        d["day"] = json!(day);
+    }
+    if let Some(cat) = b["category"].as_str() {
+        match name_map(CATEGORIES).get(cat) {
+            Some(n) => {
+                d["category"] = json!(cat);
+                d["category_name"] = json!(n);
+            }
+            None => return Outcome::Err(422, "unknown category".into()),
+        }
+    }
+    if let Some(note) = b["note"].as_str() {
+        d["note"] = json!(note);
+    }
+    if let Some(st) = b["start"].as_i64() {
+        d["start"] = json!(st);
+    }
+    match records::update(ENTRIES, id, &d.to_string(), rev) {
+        Ok(_) => Outcome::Json(200, d.to_string()),
+        Err(e) => store_err(e),
+    }
+}
+
+fn delete_entry(request: &IncomingRequest, id: &str) -> Outcome {
+    let p = match introspect(request) {
+        Ok(p) => p,
+        Err(o) => return o,
+    };
+    let owner = records::get(ENTRIES, id)
+        .ok()
+        .and_then(|e| serde_json::from_str::<Value>(&e.data).ok())
+        .and_then(|d| d["user"].as_str().map(String::from));
+    match owner {
+        Some(u) if u == p.subject || is_admin(&p) => {
+            let _ = records::delete(ENTRIES, id);
+            Outcome::Json(200, json!({ "ok": true }).to_string())
+        }
+        Some(_) => Outcome::Err(403, "not your entry".into()),
+        None => Outcome::Err(404, "no such entry".into()),
     }
 }
 
@@ -338,14 +577,26 @@ fn save_indexed_entry(mut d: Value) -> Outcome {
     Outcome::Json(201, d.to_string())
 }
 
-/// All entries in [from,to] visible to the caller (own, unless they see all).
+/// Entries in [from,to] visible to the caller:
+///   scope=me → own; scope=all → admin: everything, lead: their led projects'
+///   entries (all users). A member asking for `all` falls back to own.
 fn visible_entries(p: &Principal, from: &str, to: &str, scope_all: bool) -> Vec<Value> {
-    let all = scope_all && sees_all(p);
+    let team = scope_all && can_see_all(p);
+    let led = if team { led_projects(p) } else { Some(Vec::new()) }; // None = admin (all)
     load_all(ENTRIES)
         .into_iter()
         .filter(|e| {
             let day = e["day"].as_str().unwrap_or("");
-            day >= from && day <= to && (all || e["user"].as_str() == Some(&p.subject))
+            if day < from || day > to {
+                return false;
+            }
+            if !team {
+                return e["user"].as_str() == Some(&p.subject);
+            }
+            match &led {
+                None => true, // admin
+                Some(ids) => ids.iter().any(|id| Some(id.as_str()) == e["project"].as_str()),
+            }
         })
         .collect()
 }
@@ -492,14 +743,14 @@ fn report(request: &IncomingRequest, path: &str) -> Outcome {
     let mut out = Map::new();
     out.insert("from".into(), json!(from));
     out.insert("to".into(), json!(to));
-    out.insert("scope".into(), json!(if scope_all && sees_all(&p) { "all" } else { "me" }));
-    out.insert("can_see_all".into(), json!(sees_all(&p)));
+    out.insert("scope".into(), json!(if scope_all && can_see_all(&p) { "all" } else { "me" }));
+    out.insert("can_see_all".into(), json!(can_see_all(&p)));
     out.insert("total_minutes".into(), json!(total));
     out.insert("by_project".into(), json!(by_project_v));
     out.insert("by_category".into(), json!(arr_named(&by_category)));
     out.insert("by_day".into(), json!(by_day_v));
     out.insert("matrix".into(), json!(matrix_v));
-    if scope_all && sees_all(&p) {
+    if scope_all && can_see_all(&p) {
         out.insert("by_user".into(), json!(arr_named(&by_user)));
     }
     Outcome::Json(200, Value::Object(out).to_string())

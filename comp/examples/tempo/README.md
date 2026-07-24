@@ -1,30 +1,33 @@
 # tempo — multi-person worktime logger (TEMPO.md)
 
-Log time by project + category (or run a pomodoro timer); see your contribution
-over week/month/year/custom ranges, broken down by project and category — and as
-a manager, the whole team's distribution. Charts included. See
-[TEMPO.md](../../TEMPO.md) for the write-up.
+Log time by project + category (or a pomodoro timer); see your contribution over
+week/month/year/custom ranges, broken down by project and category — and as a
+project **lead**, that project's whole distribution. Logging is gated by
+**per-project membership**; owners edit/delete their own entries. See
+[TEMPO.md](../../TEMPO.md).
 
-A composed HTTP app on the native Rust host, so this directory holds the
-dashboard SPA + a Rust e2e (not a jco harness).
+A composed HTTP app on the native Rust host, with a **React + shadcn/ui** SPA.
 
 ```
-public/index.html        # the dashboard: log/timer, range + scope controls, charts
-tests/tempo.rs           # e2e: auth + RBAC, logging, timer, role-scoped range reports
+ui/                      # Vite + React + TS + Tailwind + shadcn/ui + recharts source
+public/ -> (built)       # `npm run build` emits ../dist, which the host serves
+tests/tempo.rs           # e2e: auth + membership + edit/delete + range reports + timer
 ```
 
 ## Run
 
 ```bash
 # from the repo root:
-just host-tempo          # composes tempo-domain (+ auth-guard + records); SPA on :3040
+just host-tempo          # builds the UI (Vite) + composes tempo-domain + serves on :3040
 ```
 
-Open `http://127.0.0.1:3040`: **register** (pick `admin` to create projects &
-categories, `manager` to see the whole team, `member` to log your own). Log time
-or hit **Start timer** for a pomodoro; use the range + **Everyone/Mine** controls
-to drive the charts.
+Open `http://127.0.0.1:3040`: **register** (`admin` to create projects/categories
+and assign membership; `member` to log). An admin adds you to a project as
+**member** (log) or **lead** (log + see the project's team view). Log time or hit
+**Start timer** for a pomodoro; the **Reports** tab has the charts.
 
 ```bash
-just e2e-tempo           # the auth + RBAC + aggregation + timer e2e (spawns the host)
+just e2e-tempo           # the auth + membership + aggregation + timer e2e (spawns the host)
+# work on the UI live:
+cd examples/tempo/ui && npm install && npm run dev   # (proxy /api to :3040)
 ```

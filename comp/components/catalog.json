@@ -1260,8 +1260,8 @@
       "records:store/store"
     ],
     "config_keys": [],
-    "wasm_size_bytes": 229958,
-    "wasm_sha256_12": "65107cfff3b4",
+    "wasm_size_bytes": 247146,
+    "wasm_sha256_12": "fb24d13fea48",
     "reusable_as_is": true
   },
   {
