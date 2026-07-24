@@ -241,8 +241,12 @@ function CalendarTab({ projects, cats, onChange }:
   const unscheduled = items.filter((e) => !(typeof e.start === "number" && e.start >= 0));
 
   function openAt(e: React.MouseEvent) {
-    const y = e.nativeEvent.offsetY;
-    const hour = Math.min(END_HR - 1, START_HR + Math.floor(y / ROW));
+    // measure against the grid container (currentTarget), not the child that was
+    // clicked — offsetY is relative to the hit element and would pin every click
+    // to the first hour.
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const hour = Math.min(END_HR - 1, START_HR + Math.max(0, Math.floor(y / ROW)));
     setAdd({ at: hour * 60 });
   }
   async function save() {
