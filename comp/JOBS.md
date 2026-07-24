@@ -95,6 +95,27 @@ board executes as a **real durable Golem worker**, on the v2 operator, with the
 queue component byte-identical to the local build. The native provider remains
 the option for a classic-host lattice.
 
+### Verified live (2026-07-24)
+
+Brought up end to end on the orbstack cluster: `runtime-operator` 2.5.2 (host +
+NATS) in `jobs`, the in-cluster registry, and the `jobs` WorkloadDeployment
+(READY 1/1). The board serves over cluster DNS
+(`http://jobs.jobs.svc.cluster.local`), enqueue persists via the host's
+NATS-backed `wasi:keyvalue`, and the `jobs-pump` drives ticks.
+
+The front-half is **confirmed live**: an enqueued job drove the composed
+component, on the v2 host, to make a real `wasi:http/outgoing-handler` call that
+**reached the laptop's Golem** (`host.docker.internal:9006` via orbstack) — proven
+by Golem's own `ROUTE_NOT_FOUND` response flowing back through the bridge into the
+job's error and the retry→dead-letter path. Transport, egress, and durable
+queue mechanics all work on-cluster.
+
+What's left for a **green** run is Golem-side only: deploy an agent at the route
+the bridge targets (`golem-path-template`) on the `:9006` instance and set
+`golem-host` to its gateway vhost — the demo job types don't map to the currently
+deployed `book:flight` agent. The bridge now sends `golem-host` as a distinct Host
+header (connecting to `golem-url`), which is what gateway subdomain routing needs.
+
 ## The demo jobs
 
 The in-process backend recognizes a few workflow ids so the lifecycle is

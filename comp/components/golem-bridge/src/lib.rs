@@ -46,14 +46,18 @@ fn golem_post(path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), RunError> {
 
     let headers = Fields::new();
     let _ = headers.set(&"content-type".to_string(), &[b"application/json".to_vec()]);
-    // Optional Host header for Golem gateway subdomain routing.
+    // Golem gateway subdomain routing: CONNECT to the golem-url authority, but
+    // send the agent's vhost as the Host header (e.g. golem-agent.localhost:9006).
+    // These are distinct — conflating them dials a name the pod can't resolve.
     let host = cfg("golem-host", "");
-    let auth_header = if host.is_empty() { authority.clone() } else { host };
+    if !host.is_empty() {
+        let _ = headers.set(&"host".to_string(), &[host.into_bytes()]);
+    }
 
     let req = OutgoingRequest::new(headers);
     req.set_method(&Method::Post).map_err(|_| net("set method"))?;
     req.set_scheme(Some(&scheme)).map_err(|_| net("set scheme"))?;
-    req.set_authority(Some(&auth_header)).map_err(|_| net("set authority"))?;
+    req.set_authority(Some(&authority)).map_err(|_| net("set authority"))?;
     req.set_path_with_query(Some(path)).map_err(|_| net("set path"))?;
 
     {
