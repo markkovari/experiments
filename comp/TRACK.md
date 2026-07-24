@@ -31,6 +31,13 @@ Plus the **UI axis**: the SPA is a Vite + TS build embedded in its own
 `ui:assets` component (`track-assets`) and served by `track-domain` — the wasm
 is self-contained, no `--static-dir`.
 
+The stream axis end-to-end, two boards side by side: the left files and moves
+issues, and the right — a **separate** board instance holding its own SSE
+connection — sees each change land in its activity feed and its board reload
+**live**, proving the `event:bus` fan-out (one component, no WebSocket):
+
+![Two track boards side by side: Alice (left) files two issues and moves one across the board; Bob (right), a separate session, watches issue.created and issue.moved events stream into his activity feed live over SSE and his board update in lockstep — the event-bus fan-out across independent clients](docs/media/track-sse.gif)
+
 ## Why it's still (almost) pure composition
 
 The `track-domain` crate is ~600 lines of *glue*: parse a request, introspect

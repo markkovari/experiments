@@ -30,6 +30,10 @@ issues**, **move** them across backlog → todo → in progress → done, **comm
 the **activity feed** stream every change live over SSE. The **sweep** button
 runs the background stale-issue tick.
 
+Open the board in **two tabs** (or watch `docs/media/track-sse.gif`): file or
+move an issue in one, and the other's activity feed + board update **live** over
+SSE — the `event:bus` fan-out across independent clients, no WebSocket.
+
 Swap the mock LLM for a real one: compose with `openai-provider` instead of the
 mock (`compose-ai-openai`) and set the `openai:*` config — `track-domain` is
 unchanged.
