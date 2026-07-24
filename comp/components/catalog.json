@@ -490,6 +490,35 @@
     "reusable_as_is": true
   },
   {
+    "name": "golem-bridge",
+    "package": "golem:bridge@0.1.0",
+    "description": "`golem-bridge` \u2014 durable:workflow/orchestrator over `wasi:http`, to Golem",
+    "exports": [
+      "durable:workflow/orchestrator@0.1.0"
+    ],
+    "capability_deps": [
+      "wasi:config/store",
+      "wasi:http/outgoing-handler"
+    ],
+    "config_keys": [
+      {
+        "name": "golem-url",
+        "description": ""
+      },
+      {
+        "name": "golem-host",
+        "description": ""
+      },
+      {
+        "name": "golem-path-template",
+        "description": ""
+      }
+    ],
+    "wasm_size_bytes": 98083,
+    "wasm_sha256_12": "97c72edaa0b0",
+    "reusable_as_is": true
+  },
+  {
     "name": "helpdesk-domain",
     "package": "helpdesk:app@0.1.0",
     "description": "helpdesk:app \u2014 support/ticketing SaaS domain over composed contracts",

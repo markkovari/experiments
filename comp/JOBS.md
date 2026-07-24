@@ -67,6 +67,34 @@ component is byte-for-byte unchanged — that's the point of the seam.
 > showcase, in-process) is fully runnable; the Golem path is composed + documented,
 > not claimed as verified live.
 
+## Live on Kubernetes (v2 operator) with the Golem backend
+
+The native `golem-workflow` provider needs a **classic** wasmCloud host + `wash
+par` — neither exists under `wash 2.3`. But the **v2 runtime operator** provides
+capabilities to a *component* as host interfaces (`wasi:http`, `wasi:keyvalue`),
+and the provider's Golem call is just an HTTP POST — so there's a v2-native way
+to run the front-half:
+
+- **`golem-bridge`** ([`components/golem-bridge`](components/golem-bridge)) — a
+  WASM component that satisfies the same `durable:workflow/orchestrator` contract
+  by POSTing to a durable Golem worker over `wasi:http/outgoing-handler`.
+- **`just compose-jobs-golem`** composes it into the queue in place of the
+  in-process backend → `jobs_domain.golem.wasm`, which now imports
+  `wasi:http/outgoing-handler` + `wasi:keyvalue` + `wasi:config` (all v2 host
+  interfaces). `durable:workflow` is fully satisfied in-wasm.
+- **`examples/jobs/k8s/jobs.yaml`** is the `WorkloadDeployment`: the fused
+  component with host interfaces (incoming/outgoing http, keyvalue, config), the
+  Golem address in `config`, and `allowedHosts` opened to the Golem gateway
+  (egress is fail-closed). `just k8s-jobs` pushes the image to the in-cluster
+  registry and applies it.
+
+The bridge dials `golem-url` (default `host.docker.internal:9006` — the Golem
+already running on the laptop, reachable from orbstack pods), targeting a
+`counters` demo agent that stands in for a durable job body. So a job on the
+board executes as a **real durable Golem worker**, on the v2 operator, with the
+queue component byte-identical to the local build. The native provider remains
+the option for a classic-host lattice.
+
 ## The demo jobs
 
 The in-process backend recognizes a few workflow ids so the lifecycle is
