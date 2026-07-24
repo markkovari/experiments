@@ -43,7 +43,7 @@ capabilities, so anything marked reusable drops into another app via
 | **id-generate** | `id:generate@0.1.0` | pure compute | — | 57 KiB | ✓ |
 | **idempotency-guard** | `idempotency:guard@0.1.0` | config/store, kv:store | `default-ttl` | 81 KiB | ✓ |
 | **inproc-workflow** | `inproc:workflow@0.1.0` | pure compute | — | 77 KiB | ✓ |
-| **jobs-domain** | `jobs:app@0.1.0` | cron:expr/parser, durable:workflow/orchestrator, idempotency:guard/store, outbox:dispatch/queue, records:store/store | — | 170 KiB | ✓ |
+| **jobs-domain** | `jobs:app@0.1.0` | cron:expr/parser, durable:workflow/orchestrator, idempotency:guard/store, outbox:dispatch/queue, records:store/store | — | 177 KiB | ✓ |
 | **jsonpatch** | `json:patch@0.1.0` | pure compute | — | 126 KiB | ✓ |
 | **link-shortener** | `shortlink:app@0.1.0` | cache:store/cache, id:generate/generator, ratelimit:guard/limiter, records:store/store, slug:generate/generator, kv:atomics, kv:store | — | 158 KiB | app/demo |
 | **llm-inference** | `llm:inference@0.1.0` | pure compute | — | 74 KiB | ✓ |
