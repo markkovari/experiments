@@ -1,6 +1,7 @@
 # tempo, self-contained on one host: Valkey (Redis-compatible) + the tempo
-# container + an optional Caddy for automatic HTTPS. No managed database, no
-# wasmCloud — cheapest turnkey (fits a $6 droplet).
+# container. No managed database, no wasmCloud, no TLS — a POC that fits a $6
+# droplet. (For HTTPS later, put a DigitalOcean Load Balancer or Cloudflare in
+# front of :8080 — no change here.)
 #
 # Prereqs to BUILD locally (produce the two artifacts the image copies in):
 #   just compose-tempo        # -> components/target/tempo_domain.composed.wasm
@@ -9,8 +10,6 @@
 # Run (HTTP on :8080):
 #   cp examples/tempo/.env.example examples/tempo/.env   # set REDIS_PASSWORD
 #   docker compose -f examples/tempo/docker-compose.yml --env-file examples/tempo/.env up -d --build
-# Run with HTTPS (needs a domain pointed at the host):
-#   ... up -d --build caddy   (set DOMAIN + ACME_EMAIL in .env)
 #
 # On a droplet you usually DON'T build: set TEMPO_IMAGE=ghcr.io/<you>/tempo-app:TAG
 # in .env and `docker compose ... pull && up -d` (skip --build).
@@ -39,27 +38,8 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "8080:8080" # remove this line if you only expose via Caddy
-    restart: unless-stopped
-
-  # Optional: automatic HTTPS. Started only with the `tls` profile.
-  caddy:
-    image: caddy:2-alpine
-    profiles: ["tls"]
-    depends_on: [tempo]
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      DOMAIN: "${DOMAIN}"
-      ACME_EMAIL: "${ACME_EMAIL}"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
+      - "8080:8080"
     restart: unless-stopped
 
 volumes:
   redis-data:
-  caddy-data:
-  caddy-config:
