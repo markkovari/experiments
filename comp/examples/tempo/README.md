@@ -36,13 +36,16 @@ cd examples/tempo/ui && npm install && npm run dev   # (proxy /api to :3040)
 
 No wasmCloud needed — `vet-host` runs the component + serves the SPA + provides
 Redis-backed storage in one process. `Dockerfile` builds that as one image;
-`docker-compose.yml` runs it next to a Valkey container — HTTP only, a POC that
-fits a $6 droplet:
+`docker-compose.yml` runs it pointed at any Redis via **`REDIS_URL`** — HTTP
+only, a POC that fits a $6 droplet:
 
 ```bash
 just compose-tempo && just build-tempo-ui            # produce the .wasm + dist
-cp .env.example .env                                 # set REDIS_PASSWORD
+cp .env.example .env                                 # set REDIS_URL
+# hosted Redis (Upstash / DO — TLS): REDIS_URL=rediss://default:PW@host:6379
 docker compose --env-file .env up -d --build         # -> http://localhost:8080
+# or a bundled local Valkey instead of a hosted one:
+docker compose --env-file .env --profile local-redis up -d --build   # REDIS_URL=redis://redis:6379
 ```
 
 For HTTPS later, put a DigitalOcean Load Balancer or Cloudflare in front of
