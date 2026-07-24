@@ -155,5 +155,15 @@ node arena.mjs
 bash to-gif.sh videos/arena/*.webm ../../docs/media/arena.gif 700 8
 ```
 
+**tempo** — worktime logger; seeds a team via the API, then drives the dashboard
+as a manager: team distribution (donut by project, category + per-person bars,
+per-day series), range + scope toggles, a live entry, and a pomodoro timer.
+
+```bash
+just host-tempo &                       # from repo root; dashboard on :3040
+node tempo.mjs                          # seeds data, then records the SPA
+bash to-gif.sh videos/tempo/*.webm ../../docs/media/tempo.gif 780 9
+```
+
 `node_modules/` and `videos/` are gitignored; only the scripts + the final gifs
 are tracked.

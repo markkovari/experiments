@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tempo — worktime logger on wasmCloud</title>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --ink:#1a202c; --muted:#64748b; --line:#e2e8f0;
+          --accent:#4f46e5; --accent-ink:#fff; --track:#eef1f6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1115; --panel:#171a21; --ink:#e5e9f0; --muted:#8b95a7; --line:#2a2f3a;
+            --accent:#818cf8; --accent-ink:#0f1115; --track:#0d1017; }
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; min-height:100%; }
+  body { font:14px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--ink); }
+  header { display:flex; align-items:center; gap:.6rem; padding:.7rem 1rem; background:var(--panel);
+           border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5; }
+  header h1 { font-size:1rem; margin:0; } header .dim { color:var(--muted); font-weight:400; }
+  .grow { flex:1; }
+  button, select, input { font:inherit; padding:.4rem .6rem; border:1px solid var(--line);
+          border-radius:8px; background:var(--bg); color:var(--ink); }
+  button { font-weight:600; cursor:pointer; } button:hover { border-color:var(--accent); }
+  button.pri { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+  main { max-width:1080px; margin:0 auto; padding:16px; display:grid; gap:16px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; }
+  .card h2 { font-size:.78rem; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin:0 0 .8rem; }
+  .row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
+  .row > * { flex:0 0 auto; }
+  .hide { display:none !important; }
+  .center { min-height:70vh; display:grid; place-items:center; }
+  .auth { width:320px; display:grid; gap:.6rem; }
+  .pill { font-size:.72rem; font-weight:700; padding:.15rem .5rem; border-radius:999px;
+          background:color-mix(in srgb, var(--accent) 18%, transparent); color:var(--accent); }
+  .timer { font-variant-numeric:tabular-nums; font-weight:700; font-size:1.1rem; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:760px){ .grid2 { grid-template-columns:1fr; } }
+  .tot { font-size:1.8rem; font-weight:800; }
+  .seg button.on { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+  /* charts */
+  .donut { width:150px; height:150px; border-radius:50%; flex:0 0 auto; }
+  .donut::after { content:""; }
+  .legend { display:grid; gap:.35rem; font-size:.85rem; }
+  .legend .k { display:flex; align-items:center; gap:.45rem; }
+  .sw { width:11px; height:11px; border-radius:3px; flex:0 0 auto; }
+  .bars { display:grid; gap:.5rem; }
+  .bar { display:grid; grid-template-columns:120px 1fr 56px; align-items:center; gap:.5rem; font-size:.85rem; }
+  .bar .track { background:var(--track); border-radius:6px; height:16px; overflow:hidden; }
+  .bar .fill { height:100%; border-radius:6px; }
+  .days { display:flex; align-items:flex-end; gap:4px; height:120px; }
+  .days .d { flex:1; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; gap:3px; }
+  .days .d .col { width:70%; background:var(--accent); border-radius:4px 4px 0 0; min-height:2px; }
+  .days .d .lbl { font-size:.62rem; color:var(--muted); }
+  .muted { color:var(--muted); }
+</style>
+</head>
+<body>
+  <!-- login -->
+  <div id="login" class="center">
+    <div class="card auth">
+      <h2>⏱ tempo — sign in</h2>
+      <input id="email" placeholder="email" value="ada@acme.io">
+      <input id="password" type="password" placeholder="password" value="pw12345678">
+      <select id="role"><option value="member">member</option><option value="manager">manager</option><option value="admin">admin</option></select>
+      <div class="row"><button class="pri grow" id="loginBtn">Log in</button><button class="grow" id="regBtn">Register</button></div>
+      <div class="muted" id="authMsg">Pick a role to register a demo account. Admins create projects &amp; categories.</div>
+    </div>
+  </div>
+
+  <!-- app -->
+  <div id="app" class="hide">
+    <header>
+      <h1>⏱ tempo <span class="dim">· worktime</span></h1>
+      <span class="pill" id="who"></span>
+      <span class="grow"></span>
+      <button id="logout">Log out</button>
+    </header>
+    <main>
+      <div class="grid2">
+        <div class="card">
+          <h2>Log time</h2>
+          <div class="row">
+            <select id="proj"></select>
+            <select id="cat"></select>
+            <input id="mins" type="number" min="1" value="30" style="width:6rem" title="minutes">
+            <button class="pri" id="logBtn">Log</button>
+          </div>
+          <div class="row" style="margin-top:.7rem">
+            <button id="pomo">▶ Start timer</button>
+            <span class="timer" id="elapsed"></span>
+            <span class="muted" id="pomoWhat"></span>
+          </div>
+        </div>
+        <div class="card hide" id="adminCard">
+          <h2>Admin</h2>
+          <div class="row" style="margin-bottom:.6rem">
+            <input id="pkey" placeholder="key (APOLLO)" style="width:8rem">
+            <input id="pname" placeholder="project name">
+            <button id="addProj">Add project</button>
+          </div>
+          <div class="row">
+            <input id="cname" placeholder="category (engineering)">
+            <button id="addCat">Add category</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row">
+          <div class="seg row" id="ranges">
+            <button data-r="week">Week</button>
+            <button data-r="month" class="on">Month</button>
+            <button data-r="year">Year</button>
+          </div>
+          <input id="from" type="date"><span class="muted">→</span><input id="to" type="date">
+          <span class="grow"></span>
+          <div class="seg row hide" id="scopeSeg">
+            <button data-s="me" class="on">Mine</button>
+            <button data-s="all">Everyone</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="card">
+          <h2>By project · <span id="rangeLbl" class="muted"></span></h2>
+          <div class="row" style="align-items:center; gap:1rem">
+            <div class="donut" id="donut"></div>
+            <div style="flex:1">
+              <div class="tot" id="totHours">0.0h</div>
+              <div class="muted" style="margin-bottom:.6rem">total logged</div>
+              <div class="legend" id="projLegend"></div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>By category</h2>
+          <div class="bars" id="catBars"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>By day</h2>
+        <div class="days" id="days"></div>
+      </div>
+
+      <div class="card hide" id="userCard">
+        <h2>By person (team)</h2>
+        <div class="bars" id="userBars"></div>
+      </div>
+    </main>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+const PALETTE = ["#4f46e5","#16a34a","#ea580c","#0891b2","#db2777","#ca8a04","#7c3aed","#0d9488","#dc2626","#2563eb"];
+let token = localStorage.getItem("tempo-tok") || null;
+let me = null, projects = [], cats = [], pomo = null, pomoTick = null;
+
+async function api(path, method = "GET", body) {
+  const h = { "content-type": "application/json" };
+  if (token) h.authorization = `Bearer ${token}`;
+  const r = await fetch(`/api${path}`, { method, headers: h, body: body ? JSON.stringify(body) : undefined });
+  return { ok: r.ok, status: r.status, data: await r.json().catch(() => ({})) };
+}
+const hrs = m => (m / 60).toFixed(1) + "h";
+const todayStr = () => new Date().toISOString().slice(0, 10);
+
+// ---- auth ----
+$("loginBtn").onclick = async () => {
+  const r = await api("/login", "POST", { email: $("email").value, password: $("password").value });
+  if (!r.ok) return ($("authMsg").textContent = r.data.error || "login failed");
+  token = r.data.access_token; localStorage.setItem("tempo-tok", token); boot();
+};
+$("regBtn").onclick = async () => {
+  const r = await api("/register", "POST", { email: $("email").value, password: $("password").value, role: $("role").value });
+  if (!r.ok && r.status !== 409) return ($("authMsg").textContent = r.data.error || "register failed");
+  $("loginBtn").click();
+};
+$("logout").onclick = async () => { await api("/logout", "POST"); token = null; localStorage.removeItem("tempo-tok"); location.reload(); };
+
+async function boot() {
+  const r = await api("/me");
+  if (!r.ok) { token = null; localStorage.removeItem("tempo-tok"); return; }
+  me = r.data;
+  $("login").classList.add("hide"); $("app").classList.remove("hide");
+  $("who").textContent = `${me.email} · ${me.roles.join(",")}`;
+  if (me.roles.includes("admin")) $("adminCard").classList.remove("hide");
+  if (me.roles.includes("admin") || me.roles.includes("manager")) $("scopeSeg").classList.remove("hide");
+  setRange("month");
+  await refreshMeta();
+  await resumeTimer();
+  report();
+}
+
+// ---- meta (projects + categories) ----
+async function refreshMeta() {
+  projects = (await api("/projects")).data.items || [];
+  cats = (await api("/categories")).data.items || [];
+  const opt = (v, t) => `<option value="${v}">${t}</option>`;
+  $("proj").innerHTML = projects.map(p => opt(p.id, `${p.name}`)).join("") || opt("", "no projects yet");
+  $("cat").innerHTML = cats.map(c => opt(c.id, c.name)).join("") || opt("", "no categories yet");
+}
+$("addProj") && ($("addProj").onclick = async () => {
+  await api("/projects", "POST", { key: $("pkey").value.trim(), name: $("pname").value.trim() });
+  $("pkey").value = $("pname").value = ""; refreshMeta();
+});
+$("addCat") && ($("addCat").onclick = async () => {
+  await api("/categories", "POST", { name: $("cname").value.trim() });
+  $("cname").value = ""; refreshMeta();
+});
+
+// ---- logging ----
+$("logBtn").onclick = async () => {
+  const minutes = Number($("mins").value) || 0;
+  if (!$("proj").value || !$("cat").value || minutes <= 0) return;
+  await api("/entries", "POST", { project: $("proj").value, category: $("cat").value, minutes, day: todayStr() });
+  report();
+};
+
+// ---- pomodoro ----
+async function resumeTimer() {
+  const t = (await api("/timer")).data.timer;
+  setPomo(t);
+}
+function setPomo(t) {
+  pomo = t;
+  clearInterval(pomoTick);
+  if (t) {
+    $("pomo").textContent = "■ Stop & log";
+    const p = projects.find(p => p.id === t.project), c = cats.find(c => c.id === t.category);
+    $("pomoWhat").textContent = `${p ? p.name : "?"} · ${c ? c.name : "?"}`;
+    const paint = () => {
+      const s = Math.max(0, Math.floor(Date.now() / 1000) - t.started);
+      $("elapsed").textContent = `${String(Math.floor(s/3600)).padStart(2,"0")}:${String(Math.floor(s/60)%60).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
+    };
+    paint(); pomoTick = setInterval(paint, 1000);
+  } else {
+    $("pomo").textContent = "▶ Start timer"; $("elapsed").textContent = ""; $("pomoWhat").textContent = "";
+  }
+}
+$("pomo").onclick = async () => {
+  if (pomo) { await api("/timer/stop", "POST"); setPomo(null); report(); }
+  else {
+    if (!$("proj").value || !$("cat").value) return;
+    const r = await api("/timer/start", "POST", { project: $("proj").value, category: $("cat").value, day: todayStr() });
+    if (r.ok) setPomo(r.data);
+  }
+};
+
+// ---- range + scope ----
+function setRange(kind) {
+  const now = new Date(); let from, to = todayStr();
+  if (kind === "week") { const d = new Date(now); d.setDate(d.getDate() - 6); from = d.toISOString().slice(0,10); }
+  else if (kind === "year") { from = `${now.getFullYear()}-01-01`; to = `${now.getFullYear()}-12-31`; }
+  else { from = `${now.toISOString().slice(0,7)}-01`; } // month
+  $("from").value = from; $("to").value = to;
+  document.querySelectorAll("#ranges button").forEach(b => b.classList.toggle("on", b.dataset.r === kind));
+}
+document.querySelectorAll("#ranges button").forEach(b => b.onclick = () => { setRange(b.dataset.r); report(); });
+[$("from"), $("to")].forEach(el => el.onchange = () => { document.querySelectorAll("#ranges button").forEach(b=>b.classList.remove("on")); report(); });
+document.querySelectorAll("#scopeSeg button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#scopeSeg button").forEach(x => x.classList.toggle("on", x === b)); report();
+});
+const scope = () => document.querySelector("#scopeSeg button.on")?.dataset.s || "me";
+
+// ---- report + charts ----
+async function report() {
+  const from = $("from").value, to = $("to").value;
+  const r = await api(`/report?from=${from}&to=${to}&scope=${scope()}`);
+  if (!r.ok) return;
+  const d = r.data;
+  $("rangeLbl").textContent = `${from} → ${to}` + (d.scope === "all" ? " · team" : "");
+  $("totHours").textContent = hrs(d.total_minutes || 0);
+
+  // donut + legend by project (conic-gradient)
+  const bp = d.by_project || [];
+  const tot = bp.reduce((s, x) => s + x.minutes, 0) || 1;
+  let acc = 0; const stops = [];
+  const legend = bp.map((x, i) => {
+    const col = PALETTE[i % PALETTE.length];
+    const start = acc / tot * 360; acc += x.minutes; const end = acc / tot * 360;
+    stops.push(`${col} ${start}deg ${end}deg`);
+    return `<div class="k"><span class="sw" style="background:${col}"></span>${x.name} <span class="muted">· ${hrs(x.minutes)}</span></div>`;
+  }).join("");
+  $("donut").style.background = bp.length
+    ? `conic-gradient(${stops.join(",")}), var(--track)`
+    : "var(--track)";
+  $("donut").style.mask = "radial-gradient(circle at 50% 50%, transparent 54%, #000 55%)";
+  $("donut").style.webkitMask = "radial-gradient(circle at 50% 50%, transparent 54%, #000 55%)";
+  $("projLegend").innerHTML = legend || `<span class="muted">No time logged in this range.</span>`;
+
+  hbars("catBars", (d.by_category || []).map(c => ({ label: c.key, minutes: c.minutes })));
+  daybars(d.by_day || []);
+  if (d.by_user) { $("userCard").classList.remove("hide"); hbars("userBars", (d.by_user || []).map(u => ({ label: u.key, minutes: u.minutes }))); }
+  else $("userCard").classList.add("hide");
+}
+
+function hbars(id, data) {
+  const max = Math.max(1, ...data.map(x => x.minutes));
+  $(id).innerHTML = data.length ? data.map((x, i) => `
+    <div class="bar"><span title="${x.label}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.label}</span>
+      <span class="track"><span class="fill" style="width:${x.minutes/max*100}%;background:${PALETTE[i%PALETTE.length]}"></span></span>
+      <span class="muted" style="text-align:right">${hrs(x.minutes)}</span></div>`).join("")
+    : `<span class="muted">Nothing here yet.</span>`;
+}
+function daybars(data) {
+  const max = Math.max(1, ...data.map(x => x.minutes));
+  $("days").innerHTML = data.length ? data.map(x => `
+    <div class="d" title="${x.day}: ${hrs(x.minutes)}">
+      <div class="col" style="height:${x.minutes/max*100}%"></div>
+      <div class="lbl">${x.day.slice(5)}</div></div>`).join("")
+    : `<span class="muted">No days in range.</span>`;
+}
+
+// go
+if (token) boot();
+</script>
+</body>
+</html>
