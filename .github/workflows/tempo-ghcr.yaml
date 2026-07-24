@@ -1,0 +1,64 @@
+# Publish the composed `tempo` wasm component to GHCR as a public OCI artifact,
+# on a `tempo-v*` tag (or manual dispatch). Hosts then pull it anonymously:
+#   wash start component oci://ghcr.io/<owner>/tempo:<version> tempo
+#
+# One-time: after the first publish, set the package Public (GitHub → Packages →
+# tempo → visibility), or link it to this repo so it inherits public visibility.
+name: publish tempo to GHCR
+
+on:
+  push:
+    tags: ["tempo-v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "version to publish (e.g. 0.1.0)"
+        required: true
+        default: "0.1.0"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: comp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: comp/components -> target
+
+      - name: Install build tools (cargo-component, wac, wasm-tools, wash, just)
+        run: |
+          cargo install cargo-component --locked
+          cargo install wac-cli --locked
+          cargo install wasm-tools --locked
+          cargo install wash-cli --locked
+          curl -fsSL https://just.systems/install.sh | bash -s -- --to "$HOME/.cargo/bin"
+
+      - name: Compose tempo (tempo-domain + auth-guard + record-store)
+        run: just compose-tempo
+
+      - name: Resolve version + lowercase owner
+        id: meta
+        run: |
+          v="${{ github.event.inputs.version }}"
+          [ -z "$v" ] && v="${GITHUB_REF_NAME#tempo-v}"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Push to GHCR (wasmCloud OCI artifact)
+        run: |
+          ref="ghcr.io/${{ steps.meta.outputs.owner }}/tempo:${{ steps.meta.outputs.version }}"
+          echo "pushing $ref"
+          wash oci push "$ref" components/target/tempo_domain.composed.wasm \
+            --user "${{ github.actor }}" --password "${{ secrets.GITHUB_TOKEN }}"
+          echo "pulled anonymously once public: wash start component oci://$ref tempo"
