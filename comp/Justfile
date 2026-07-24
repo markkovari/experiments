@@ -297,6 +297,13 @@ push-tempo-ghcr version="0.1.0": compose-tempo
       --user {{ghcr_owner}} --password "$(gh auth token)"
     @echo "pushed oci://ghcr.io/{{ghcr_owner}}/tempo:{{version}} (set the package Public once)"
 
+# Build ONE self-contained image (vet-host + composed component + built SPA).
+# No wasmCloud — vet-host serves http + the SPA + Redis-backed storage in one
+# process. Run: docker run -p 8080:8080 -e REDIS_URL=rediss://... tempo
+docker-tempo: compose-tempo build-tempo-ui
+    docker build -f examples/tempo/Dockerfile -t tempo .
+    @echo "built image 'tempo' — docker run -p 8080:8080 -e REDIS_URL=rediss://user:pw@host:25061 tempo"
+
 # Compose arena-domain (ARENA.md — multiplayer Connect Four) with records +
 # id-generate. Remaining imports are WASI.
 compose-arena: build

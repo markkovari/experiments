@@ -84,12 +84,36 @@ just e2e-tempo      # the auth + membership + aggregation + timer e2e
 The frontend lives in `examples/tempo/ui` (Vite + React + shadcn/ui + recharts);
 `just host-tempo` builds it to `examples/tempo/dist`, which the host serves.
 
-## Publish + host
+## Deploy — the simple way (one process / one container)
+
+You don't need wasmCloud to run this. The repo's **`vet-host`** is a single
+binary that serves `wasi:http`, the SPA (`--static-dir`), and `wasi:keyvalue`
+in-process — with a built-in **Redis** backend. The whole app is one command:
+
+```bash
+vet-host --component tempo.composed.wasm --addr 0.0.0.0:8080 \
+  --kv redis --redis-url rediss://default:PW@host:25061 --static-dir dist
+```
+
+Package that as **one image** (`just docker-tempo` → `examples/tempo/Dockerfile`)
+and run it anywhere:
+
+```bash
+docker run -p 8080:8080 -e REDIS_URL='rediss://default:PW@host:25061' tempo
+```
+
+The container serves the API *and* the SPA on the same origin (no CORS, no proxy)
+and talks to a managed Redis/Valkey over TLS — the only moving parts are the
+image and the database. See `examples/tempo/Dockerfile` for the DigitalOcean
+droplet / App Platform recipe.
+
+## Publish the component (for the wasmCloud path)
 
 The composed `tempo` component (`components/target/tempo_domain.composed.wasm` —
 tempo + auth-guard + record-store) is self-contained; its only runtime imports
 are `wasi:keyvalue / http / config / clocks / random`, bound at deploy time. So
-storage (Redis, NATS, in-memory, …) is a **link choice**, not code.
+storage (Redis, NATS, in-memory, …) is a **link choice**, not code. If you'd
+rather run it on a wasmCloud lattice (scale, multi-tenant, live linking):
 
 Publish it to GHCR as a **public** OCI artifact (the wasmCloud-native pull path):
 
