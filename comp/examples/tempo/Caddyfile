@@ -1,0 +1,10 @@
+# Automatic HTTPS (Let's Encrypt) for tempo, reverse-proxied to the tempo
+# container. Used only by the compose `tls` profile; DOMAIN + ACME_EMAIL come
+# from the environment.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	reverse_proxy tempo:8080
+}
