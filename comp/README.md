@@ -194,6 +194,11 @@ catalog and a bench round:
   each IBAN is checked (country length + ISO 7064 **mod-97 checksum**) by a new
   **`iban:validate`** component before it's stored, and flagged green/red **as you
   type**. ([demo](docs/media/payees.gif))
+- **[BUZZ.md](BUZZ.md)** — a **live multiplayer quiz game** (Kahoot-style): a host
+  runs a game by **PIN**, players join anonymously on their phones and buzz in;
+  answers are graded **speed-weighted** (faster correct = more points) with a live
+  leaderboard. Real-time by polling over `auth-guard` + `records`; a host
+  big-screen + a player controller. ([demo](docs/media/buzz.gif))
 - **[ESHOP.md](ESHOP.md)** — eShopOnDapr (catalog / basket / ordering / payment
   + gateway) on wasmCloud v2 + k8s. ([demo](docs/media/eshop.gif))
 - **[HELPDESK.md](HELPDESK.md)** — a Zendesk-lite ticketing SaaS; FSM lifecycle,
