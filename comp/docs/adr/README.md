@@ -34,6 +34,27 @@ inside it. Where they disagree, the ADR wins.
                registry (OCI, digest-pinned)
 ```
 
+## Implementation status (slice 1, ADR-0011)
+
+| piece | where | state |
+|---|---|---|
+| renderer (`(graph, strategy, tenant, plan) → manifests`) | `components/platform-domain/src/render.rs` | **done** — pure, 12 unit tests |
+| control plane (accounts, catalog, deployments, revisions) | `components/platform-domain/src/lib.rs` | **done** |
+| applier (SSA + validation + re-apply loop) | `applier/` | **done** — 7 unit tests, validate-only mode needs no cluster |
+| both strategies, planner-validated | ADR-0005 | **done** — refuses a strategy the graph can't support |
+| digest pinning enforced | ADR-0006 | **done** — a save with no digest is a 409 |
+| isolation stamp (namespace, bucket, fail-closed egress) | ADR-0008 | **done** in the renderer |
+| e2e | `examples/platform/tests/platform.rs` | **done** — no cluster required |
+| registry push (the digest source) | — | **the gap.** `POST /api/internal/pushed` is the seam; nothing pushes yet |
+| `public` visibility | ADR-0007 | refused with `501` until signing exists |
+| tenant secrets | ADR-0010 | refused until `secretFrom` is proven |
+| studio canvas as the editor | ADR-0011 item 9 | not wired — the API is what exists |
+| a second tenant | ADR-0008 gate | data model ready, adversarial test not written |
+
+Run it: `just host-platform` (applier in validate-only — it builds no Kubernetes
+client, so the default loop cannot touch a cluster), `just e2e-platform`,
+`just host-platform-live` to actually apply.
+
 ## Open risks these ADRs name rather than solve
 
 - **The operator may not reconcile namespaces created after it was installed**
