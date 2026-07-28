@@ -87,11 +87,62 @@ run (bug 2 was therefore invisible here, which is exactly why it is dangerous), 
 only control actually keeping tenant code away from the registry is `allowedHosts`,
 enforced by the wasmCloud host in the runtime. ADR-0017 has been corrected in place.
 
+## The rest of it, also measured
+
+The three things this ADR first listed as unproven were then proven in the same way.
+
+**`linked` runs.** Four components — `mesh-domain`, `record-store`, `resilience`,
+`proxy-route` — pushed separately and deployed as one `WorkloadDeployment` with five
+`hostInterfaces` entries and **no edge appearing anywhere in the manifest**. A guarded
+call proves every hop was wired in-process: `mesh-domain` served the HTTP, `proxy-route`
+answered (`no route configured` — the known config gap, but it was *called*),
+`resilience` produced the circuit state, and `record-store` persisted it through
+`wasi:keyvalue`:
+
+```
+GET /api/circuits
+{"circuits":[{"key":"live","circuit":{"state":"closed","window_start_ms":1785273139487},
+              "would_admit":true,...}]}
+```
+
+That record cannot exist unless all four are linked. No `unbinding all plugins` in the
+host log — one entry per interface is what makes that true (ADR-0005).
+
+**The re-apply loop corrects drift.** With the Service deleted and the app's host scaled
+to zero, the app stopped answering; one pass later (`re-applied 1 deployment(s), 0
+failed`) the Service was back, replicas were back to 1, and the app served again —
+**returning `window_start_ms: 1785273139487`, the same record from before the host pod
+was destroyed.** So the PVC survived a pod's destruction and recreation, which is
+ADR-0014's durability claim measured rather than assumed.
+
+Worth noting for anyone doing this by hand: the reconciler will faithfully re-create
+whatever you delete. Tearing an app down means going through the platform, or stopping
+the loop first.
+
+**A second tenant, and ADR-0008's release gate.** `bob@globex.dev` → tenant `bob`,
+namespace `tenant-bob`, its own host. At the API: bob sees `0` components where alice
+sees 4, and `404` (not `403`) on her deployment and her manifests, so he cannot even
+probe for existence. Then the gate itself — **both tenants deploying the same component,
+under the same app name, writing the same bucket and the same key**:
+
+| | alice | bob |
+|---|---|---|
+| `GET /get?bucket=mine&k=secret` | `alices-data` | `bobs-data` |
+| opening `app-alice-probe` from bob's app | — | `found: false` |
+| opening `default` from bob's app | — | `found: false` |
+
+Bob cannot reach alice's storage *by naming it*, which is the failure ADR-0012 measured
+and ADR-0015 explained: the bucket name is irrelevant when the bus is inside the app's
+own pod. **ADR-0008's gate — "two tenants on one hostgroup, A provably cannot read B" —
+is met**, by removing the shared hostgroup rather than by partitioning it.
+
+Alice's other app, the linked `mesh`, was unaffected throughout.
+
 ## Consequences
 
-- **Slice 1's exit test (ADR-0011) is met for one strategy**: sign in, pick a component,
-  save, get a URL that serves it. `fused` is proven live; `linked` is proven only in the
-  renderer and the no-cluster e2e.
+- **Slice 1's exit test (ADR-0011) is met, for both strategies**: sign in, pick
+  components, choose a strategy, save, get a URL that serves it — `fused` and `linked`
+  each proven against the cluster.
 - **The registry is applied and PVC-backed**, 20Gi on `local-path`, no NodePort, holding
   `live/probe` from the run.
 - **Bug 1 is a class, not an instance.** The failure was in the *contract between our
@@ -99,9 +150,13 @@ enforced by the wasmCloud host in the runtime. ADR-0017 has been corrected in pl
   both sides are valid on their own. The renderer's tests now assert the label and the
   IP hostname, and that is the pattern to repeat: when the operator has to find
   something we created, assert on how it finds it.
-- **What is still unproven live**: the `linked` strategy, the re-apply loop actually
-  correcting drift, the push queue recovering from a registry wiped mid-flight, and a
-  second *tenant* (as opposed to a second app).
+- **ADR-0008's release gate is met** (see above), and by a different mechanism than it
+  anticipated: it asked for two tenants on one hostgroup to be provably separate, and the
+  answer is that they are never on one hostgroup.
+- **What is still unproven live**: the push queue recovering from a registry wiped
+  mid-flight; the platform hosting *itself* (ADR-0011's dogfood milestone); anything
+  under real concurrency or load; and every feature still refused in code (secrets,
+  `public` visibility, tenant config, rollback).
 - **Cold start, measured**: an app went from `save` to serving in roughly a minute, most
   of it the image pull for `wash` on first use per node. The `oci-cache` volume is
   per-pod, so component pulls are never warm; kubelet caches the container images, so

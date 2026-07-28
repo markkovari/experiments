@@ -48,12 +48,13 @@ inside it. Where they disagree, the ADR wins.
 | renderer (`(graph, strategy, tenant, plan) → manifests`) | `components/platform-domain/src/render.rs` | **done** — pure, 17 unit tests |
 | control plane (accounts, catalog, deployments, revisions) | `components/platform-domain/src/lib.rs` | **done** |
 | applier (SSA + validation + re-apply loop) | `applier/` | **done** — 7 unit tests, validate-only mode needs no cluster |
-| both strategies, planner-validated | ADR-0005 | **done** — refuses a strategy the graph can't support |
+| both strategies, planner-validated | ADR-0005 | **done, both proven live** (ADR-0018) — `fused` serves; `linked` wires 4 components in-process, no edges in the manifest |
 | digest pinning enforced | ADR-0006 | **done** — a save with no digest is a 409 |
 | isolation stamp (namespace, egress, blobstore containers) | ADR-0008 | **done** — and now per-app rather than per-tenant (ADR-0014) |
 | a host per application (private data NATS, own engine, own endpoint) | ADR-0014 | **done and measured on a cluster** (ADR-0015) — a rendered host pod registers, a workload pins to it, and an app on its own bus cannot read another's buckets |
 | image allow-list on the applier | ADR-0014 | **done** — a `Deployment` may only run the platform's two pinned images, and no host namespaces, privilege, hostPath or service account |
 | delete an app (prune + orphan host reaping) | ADR-0016 | **done** — `DELETE /api/deployments/{id}?confirm=<app>`, label-scoped prune, and a sweep that reaps only what has neither a revision nor a live pod |
+| drift correction (ADR-0004's re-apply) | `applier/` | **proven live** (ADR-0018) — Service deleted and host scaled to 0, both restored next pass, and the app's data survived the pod |
 | e2e | `examples/platform/tests/platform.rs` | **done** — no cluster required |
 | registry push (the digest source) | ADR-0017 | **done and proven against a real registry** — the applier pushes from the reconcile loop; upload → `deployable: true`, manifest resolves by the pinned digest |
 | the registry itself | `examples/platform/k8s/registry.yaml` | **applied and in use** — 20Gi PVC, no NodePort; it served the live run (ADR-0018) |
