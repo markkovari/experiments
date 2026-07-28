@@ -1228,24 +1228,28 @@
         "description": "DNS suffix for the operator's Host routing"
       },
       {
-        "name": "grant-shared-state",
-        "description": "bind `wasi:keyvalue` / `wasmcloud:messaging` for tenant"
+        "name": "scheduler-nats",
+        "description": "the platform's control-plane NATS, which each app's host dials"
       },
       {
-        "name": "allow-multi-tenant",
-        "description": "permit a second tenant while grant-shared-state is on;"
+        "name": "host-image",
+        "description": "`wash` image for the per-application host pod (ADR-0014)"
+      },
+      {
+        "name": "nats-image",
+        "description": "NATS image for that pod's private data-plane sidecar"
       },
       {
         "name": "id",
         "description": ""
       },
       {
-        "name": "environment",
+        "name": "platform-namespace",
         "description": ""
       }
     ],
-    "wasm_size_bytes": 284868,
-    "wasm_sha256_12": "d227cd49c01a",
+    "wasm_size_bytes": 298476,
+    "wasm_sha256_12": "7ab598b68387",
     "reusable_as_is": true
   },
   {

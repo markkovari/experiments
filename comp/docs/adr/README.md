@@ -9,7 +9,7 @@ inside it. Where they disagree, the ADR wins.
 | # | decision | status |
 |---|---|---|
 | [0001](0001-use-adrs.md) | Record architecture decisions as ADRs | accepted |
-| [0002](0002-tenant-is-a-namespace.md) | A tenant is a Kubernetes namespace | accepted |
+| [0002](0002-tenant-is-a-namespace.md) | A tenant is a Kubernetes namespace | accepted; isolation unit revised by [0014](0014-an-application-owns-a-host.md) |
 | [0003](0003-control-plane-is-wasm-plus-applier.md) | The control plane is a wasm app plus a small native applier | accepted |
 | [0004](0004-reconcile-by-server-side-apply-on-save.md) | Reconcile by server-side apply on save | accepted |
 | [0005](0005-deployment-strategy-is-a-tenant-choice.md) | Deployment strategy is a tenant choice: fused or linked | accepted |
@@ -20,7 +20,8 @@ inside it. Where they disagree, the ADR wins.
 | [0010](0010-config-and-secrets.md) | Config is `wasi:config`; secrets never enter a manifest | accepted |
 | [0011](0011-slice-one-scope.md) | Slice 1 is single-tenant, both strategies, one cluster | accepted |
 | [0012](0012-keyvalue-isolation-needs-a-cooperative-component.md) | Per-tenant keyvalue isolation needs a cooperative component | accepted |
-| [0013](0013-unenforceable-capabilities-are-denied-by-omission.md) | A capability the host cannot partition is denied by omission | accepted |
+| [0013](0013-unenforceable-capabilities-are-denied-by-omission.md) | A capability the host cannot partition is denied by omission | superseded by [0014](0014-an-application-owns-a-host.md) |
+| [0014](0014-an-application-owns-a-host.md) | An application owns a host | accepted |
 
 ## The shape these add up to
 
@@ -45,8 +46,9 @@ inside it. Where they disagree, the ADR wins.
 | applier (SSA + validation + re-apply loop) | `applier/` | **done** — 7 unit tests, validate-only mode needs no cluster |
 | both strategies, planner-validated | ADR-0005 | **done** — refuses a strategy the graph can't support |
 | digest pinning enforced | ADR-0006 | **done** — a save with no digest is a 409 |
-| isolation stamp (namespace, egress, blobstore containers) | ADR-0008 | **partial** — namespace + egress + blobstore work; **keyvalue does not isolate** (ADR-0012), so it is not bound at all (ADR-0013) |
-| default-deny of unpartitionable capabilities | ADR-0013 | **done** — `wasi:keyvalue` / `wasmcloud:messaging` are refused with a `409` at save; omitting the entry was verified to fail closed in the host's linker |
+| isolation stamp (namespace, egress, blobstore containers) | ADR-0008 | **done** — and now per-app rather than per-tenant (ADR-0014) |
+| a host per application (private data NATS, own engine, own endpoint) | ADR-0014 | **rendered and validated, not yet run on a cluster** — every host interface the operator binds is granted again |
+| image allow-list on the applier | ADR-0014 | **done** — a `Deployment` may only run the platform's two pinned images, and no host namespaces, privilege, hostPath or service account |
 | e2e | `examples/platform/tests/platform.rs` | **done** — no cluster required |
 | registry push (the digest source) | — | **the gap.** `POST /api/internal/pushed` is the seam; nothing pushes yet |
 | `public` visibility | ADR-0007 | refused with `501` until signing exists |
@@ -56,7 +58,7 @@ inside it. Where they disagree, the ADR wins.
 | a second tenant, apps that do not | ADR-0013 | **open** — HTTP/config/blobstore-only graphs are host-partitioned, so the gate does not apply to them |
 | dedicated host per tenant (the escape hatch, and the tier) | ADR-0013 | **available** — `grant-shared-state=true` plus `template.spec.environment`, no catalog change needed |
 | tenant config (`localResources.config`) | ADR-0010 | not wired — a deployed app cannot be configured yet, so `mesh` on the cluster answers `no route configured` |
-| shared-host scheduling (`template.spec.environment`) | — | **done** — a workload in `tenant-<x>` runs on the shared host in another namespace |
+| namespace scaffolding applied | ADR-0002 | **done** — it rides along with every save, because the app's host pod needs it (ADR-0014) |
 
 Run it: `just host-platform` (applier in validate-only — it builds no Kubernetes
 client, so the default loop cannot touch a cluster), `just e2e-platform`,
@@ -69,15 +71,15 @@ client, so the default loop cannot touch a cluster), `just e2e-platform`,
   same records. The bucket is chosen by the guest's `store::open(name)`, not by
   manifest config, and every capability here hardcodes `"default"`. See
   [ADR-0012](0012-keyvalue-isolation-needs-a-cooperative-component.md); the gate is
-  now enforced in code, not in prose. **What we do instead** (ADR-0013): the entry is
-  not emitted at all, which was measured to fail closed in the host's linker
-  (`a matching implementation was not found ... unbinding all plugins`), and a save
-  that needs it is refused with a `409` naming the interface. Apps that need keyvalue
-  run on a host environment of their own.
-- **Namespace `NetworkPolicy` is inert for shared-host workloads** — the component
-  runs in a pod in the HOST's namespace, so a policy in the tenant's namespace
-  selects nothing. Egress control rests entirely on `allowedHosts` (found in the
-  same run).
+  now **resolved** by ADR-0014 rather than worked around: the interface is bindable
+  again because each application runs on its own host, whose data plane
+  (`--data-nats-url`) is a loopback NATS sidecar in the app's own pod. Nothing else
+  can reach the bus, so there is no bucket to allow-list. ADR-0013's default-deny was
+  the interim answer and is superseded.
+- ~~Namespace `NetworkPolicy` is inert for shared-host workloads~~ → **fixed by
+  ADR-0014**: the app's host pod runs in the tenant's own namespace, so the policy
+  selects it. It now has to allow the host's own egress (control-plane NATS, registry)
+  or the app never registers.
 - ~~The operator may not reconcile namespaces created after install~~ → **it does.**
   It holds ClusterRoles and runs with `-allow-shared-hosts=true`, and
   `template.spec.environment` schedules a workload onto a host in another namespace.
@@ -87,7 +89,11 @@ client, so the default loop cannot touch a cluster), `just e2e-platform`,
 - **`wasi:keyvalue` has no CAS**, so all RMW state is best-effort and `lock:mutex`
   is advisory (ADR-0008). A published consistency envelope, not a bug to fix.
 - **Per-workload CPU isolation is weak** (fuel traps composed apps), so
-  noisy-neighbour risk is metered, not prevented (ADR-0008).
+  noisy-neighbour risk is metered, not prevented *within* an app (ADR-0008). Between
+  apps it is now a pod boundary (ADR-0014).
+- **A rendered host pod has never been run.** The flags come from `wash host --help`
+  and the chart's own `hostgroup-default`, the CRD facts from the cluster — but
+  ADR-0014's manifests have only been validated, not applied. Deploy before believing.
 - **Host plugins are not an authoring surface** — "plugin" in the v2 model means the
   host's built-ins, and nothing here has ever registered one (ADR-0005). Per-tenant
   KV backends wait on upstream #5051.

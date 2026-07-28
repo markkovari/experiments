@@ -43,6 +43,11 @@ const ALLOWED_KINDS: &[(&str, &str)] = &[
     ("v1", "Namespace"),
     ("v1", "ResourceQuota"),
     ("networking.k8s.io/v1", "NetworkPolicy"),
+    // ADR-0014: an application owns a host, so the platform renders a host pod and
+    // the volume its private data NATS stores to. See `check_pod_spec` — a Deployment
+    // is by far the most dangerous kind on this list, because it runs images.
+    ("apps/v1", "Deployment"),
+    ("v1", "PersistentVolumeClaim"),
 ];
 
 /// Fields we have not seen work on this cluster (used once anywhere, or only in a
@@ -83,6 +88,15 @@ struct Args {
     /// per-request namespace check.
     #[arg(long, default_value = "tenant-")]
     namespace_prefix: String,
+
+    /// The ONLY images a rendered pod may run (ADR-0014's host pod and its data-NATS
+    /// sidecar). Independently configured here rather than read from the manifest:
+    /// this is what keeps "apply a Deployment" from meaning "run anything".
+    #[arg(long, default_value = "ghcr.io/wasmcloud/wash:2.5.2")]
+    host_image: String,
+
+    #[arg(long, default_value = "docker.io/nats:2.12.8-alpine")]
+    nats_image: String,
 }
 
 #[derive(Deserialize)]
@@ -192,9 +206,10 @@ async fn apply(state: &AppState, req: &ApplyRequest) -> Result<ApplyReport> {
         bail!("no objects in the payload");
     }
 
+    let allowed_images = vec![state.args.host_image.clone(), state.args.nats_image.clone()];
     let mut names = Vec::new();
     for obj in &objects {
-        validate(obj, ns)?;
+        validate(obj, ns, &allowed_images)?;
         names.push(describe(obj));
     }
 
@@ -279,7 +294,7 @@ fn describe(obj: &DynamicObject) -> String {
 }
 
 /// The checks that make this process safe to give a credential to.
-fn validate(obj: &DynamicObject, ns: &str) -> Result<()> {
+fn validate(obj: &DynamicObject, ns: &str, allowed_images: &[String]) -> Result<()> {
     let (api_version, kind) = gvk_of(obj)?;
     if !ALLOWED_KINDS.iter().any(|(av, k)| *av == api_version && *k == kind) {
         bail!("{api_version}/{kind} is not an allow-listed kind");
@@ -305,12 +320,73 @@ fn validate(obj: &DynamicObject, ns: &str) -> Result<()> {
         },
     }
 
+    if kind == "Deployment" {
+        check_pod_spec(obj, name, allowed_images)?;
+    }
+
     // Fields we do not trust yet, wherever they appear in the tree.
     let as_json = serde_json::to_string(obj).unwrap_or_default();
     for key in FORBIDDEN_KEYS {
         if as_json.contains(&format!("\"{key}\"")) {
             bail!("{kind}/{name} uses {key:?}, which is not a verified field on this operator");
         }
+    }
+    Ok(())
+}
+
+/// The check that earns `Deployment` its place on the allow-list.
+///
+/// Every other allowed kind is declarative data. A Deployment **runs images**, so
+/// accepting one turns "the platform may apply manifests" into "the platform may
+/// execute arbitrary code in this cluster" — and the platform is a wasm component
+/// that tenants send HTTP to. One renderer bug away from a container of someone
+/// else's choosing, mounting whatever it likes.
+///
+/// So the applier does not trust the renderer here. It re-derives the only two
+/// images a host pod may run from its own flags, and refuses the pod-level fields
+/// that turn a container into a node compromise: host namespaces, privilege,
+/// `hostPath` volumes, and a service account (which would hand the pod a Kubernetes
+/// token — the applier's own credential is the thing this whole split exists to keep
+/// away from tenant-reachable code, ADR-0003).
+fn check_pod_spec(obj: &DynamicObject, name: &str, allowed_images: &[String]) -> Result<()> {
+    let spec = obj.data.get("spec").context("Deployment needs a spec")?;
+    let pod = spec
+        .get("template")
+        .and_then(|t| t.get("spec"))
+        .context("Deployment needs spec.template.spec")?;
+
+    for field in ["hostNetwork", "hostPID", "hostIPC", "serviceAccountName", "serviceAccount"] {
+        if pod.get(field).is_some() {
+            bail!("Deployment/{name} sets {field:?}, which a platform-rendered host pod never does");
+        }
+    }
+    if let Some(vols) = pod.get("volumes").and_then(|v| v.as_array()) {
+        for v in vols {
+            if v.get("hostPath").is_some() {
+                bail!("Deployment/{name} mounts a hostPath, which would escape the pod");
+            }
+        }
+    }
+
+    let mut images = 0usize;
+    for key in ["containers", "initContainers"] {
+        for c in pod.get(key).and_then(|v| v.as_array()).map(|a| a.as_slice()).unwrap_or(&[]) {
+            let image = c.get("image").and_then(|i| i.as_str()).unwrap_or_default();
+            if !allowed_images.iter().any(|a| a == image) {
+                bail!(
+                    "Deployment/{name} runs image {image:?}, which is not one of the platform's host images {allowed_images:?}"
+                );
+            }
+            images += 1;
+            let sc = c.get("securityContext");
+            let flag = |k: &str| sc.and_then(|s| s.get(k)).and_then(|v| v.as_bool()).unwrap_or(false);
+            if flag("privileged") || flag("allowPrivilegeEscalation") {
+                bail!("Deployment/{name} asks for privilege on container {image:?}");
+            }
+        }
+    }
+    if images == 0 {
+        bail!("Deployment/{name} declares no containers");
     }
     Ok(())
 }
@@ -373,6 +449,90 @@ mod tests {
         parse_objects(yaml).expect("parses").pop().expect("one object")
     }
 
+    fn images() -> Vec<String> {
+        vec!["ghcr.io/wasmcloud/wash:2.5.2".into(), "docker.io/nats:2.12.8-alpine".into()]
+    }
+
+    /// A host pod as the renderer emits it (ADR-0014), used as the base for the
+    /// hostile variants below.
+    fn host_pod(mutate: &dyn Fn(&mut serde_json::Value)) -> DynamicObject {
+        let mut o = obj(HOST_POD);
+        mutate(o.data.get_mut("spec").unwrap());
+        o
+    }
+
+    const HOST_POD: &str = r#"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: acme-api-host
+  namespace: tenant-acme
+spec:
+  replicas: 1
+  template:
+    spec:
+      initContainers:
+        - name: data-nats
+          image: docker.io/nats:2.12.8-alpine
+          restartPolicy: Always
+      containers:
+        - name: host
+          image: ghcr.io/wasmcloud/wash:2.5.2
+"#;
+
+    #[test]
+    fn accepts_the_platforms_own_host_pod() {
+        validate(&obj(HOST_POD), "tenant-acme", &images()).expect("valid");
+    }
+
+    #[test]
+    fn a_deployment_may_only_run_the_platforms_images() {
+        // The whole reason `Deployment` can be on the allow-list. Without this check,
+        // a renderer bug (or anything that could influence the renderer) turns the
+        // applier's credential into arbitrary code execution in the cluster.
+        let hostile = host_pod(&|spec| {
+            spec["template"]["spec"]["containers"][0]["image"] = json!("attacker/miner:latest");
+        });
+        let err = validate(&hostile, "tenant-acme", &images()).unwrap_err().to_string();
+        assert!(err.contains("not one of the platform's host images"), "{err}");
+
+        // The sidecar is checked too — it is an initContainer, which is easy to forget.
+        let hostile = host_pod(&|spec| {
+            spec["template"]["spec"]["initContainers"][0]["image"] = json!("busybox");
+        });
+        assert!(validate(&hostile, "tenant-acme", &images()).is_err());
+    }
+
+    #[test]
+    fn a_deployment_may_not_reach_out_of_its_pod() {
+        for (field, value) in [
+            ("hostNetwork", json!(true)),
+            ("hostPID", json!(true)),
+            // A token would give the pod the very API access ADR-0003 keeps away
+            // from anything tenants can reach.
+            ("serviceAccountName", json!("default")),
+        ] {
+            let hostile = host_pod(&|spec| spec["template"]["spec"][field] = value.clone());
+            assert!(
+                validate(&hostile, "tenant-acme", &images()).is_err(),
+                "{field} must be refused"
+            );
+        }
+
+        let hostile = host_pod(&|spec| {
+            spec["template"]["spec"]["volumes"] =
+                json!([{ "name": "root", "hostPath": { "path": "/" } }]);
+        });
+        let err = validate(&hostile, "tenant-acme", &images()).unwrap_err().to_string();
+        assert!(err.contains("hostPath"), "{err}");
+
+        let hostile = host_pod(&|spec| {
+            spec["template"]["spec"]["containers"][0]["securityContext"] =
+                json!({ "privileged": true });
+        });
+        assert!(validate(&hostile, "tenant-acme", &images()).is_err());
+    }
+
     const WORKLOAD: &str = r#"
 apiVersion: runtime.wasmcloud.dev/v1alpha1
 kind: WorkloadDeployment
@@ -385,13 +545,13 @@ spec:
 
     #[test]
     fn accepts_a_rendered_workload() {
-        validate(&obj(WORKLOAD), "tenant-acme").expect("valid");
+        validate(&obj(WORKLOAD), "tenant-acme", &images()).expect("valid");
     }
 
     #[test]
     fn refuses_an_object_aimed_at_another_namespace() {
         // The check that turns a wasm-side bug into a 422 instead of a breach.
-        let err = validate(&obj(WORKLOAD), "tenant-globex").unwrap_err().to_string();
+        let err = validate(&obj(WORKLOAD), "tenant-globex", &images()).unwrap_err().to_string();
         assert!(err.contains("namespaced into"), "{err}");
     }
 
@@ -402,7 +562,7 @@ apiVersion: v1
 kind: Secret
 metadata: { name: creds, namespace: tenant-acme }
 "#;
-        let err = validate(&obj(secret), "tenant-acme").unwrap_err().to_string();
+        let err = validate(&obj(secret), "tenant-acme", &images()).unwrap_err().to_string();
         assert!(err.contains("not an allow-listed kind"), "{err}");
         // ...including the one that would be a privilege escalation.
         let rb = r#"
@@ -410,7 +570,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata: { name: pwn }
 "#;
-        assert!(validate(&obj(rb), "tenant-acme").is_err());
+        assert!(validate(&obj(rb), "tenant-acme", &images()).is_err());
     }
 
     #[test]
@@ -424,16 +584,16 @@ spec:
     spec:
       hostSelector: { hostgroup: default }
 "#;
-        let err = validate(&obj(with_selector), "tenant-acme").unwrap_err().to_string();
+        let err = validate(&obj(with_selector), "tenant-acme", &images()).unwrap_err().to_string();
         assert!(err.contains("hostSelector"), "{err}");
     }
 
     #[test]
     fn a_namespace_object_must_be_the_tenants_own() {
         let ns = "apiVersion: v1\nkind: Namespace\nmetadata: { name: kube-system }\n";
-        assert!(validate(&obj(ns), "tenant-acme").is_err());
+        assert!(validate(&obj(ns), "tenant-acme", &images()).is_err());
         let own = "apiVersion: v1\nkind: Namespace\nmetadata: { name: tenant-acme }\n";
-        validate(&obj(own), "tenant-acme").expect("its own namespace is fine");
+        validate(&obj(own), "tenant-acme", &images()).expect("its own namespace is fine");
     }
 
     #[test]

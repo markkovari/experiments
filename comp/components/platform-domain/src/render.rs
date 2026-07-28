@@ -18,6 +18,15 @@
 //! docs/adr/0003 and 0010. The applier rejects them too, so a future mistake here
 //! fails closed.
 //!
+//! **An application owns a host** (ADR-0014). Each deployment renders its own host
+//! pod — `wash host` plus a private NATS sidecar — and the workload is pinned to it
+//! by `environment`. That is what separates storage, compute and capability
+//! implementations per application: the app's keyvalue buckets and messaging
+//! subjects live in a NATS nothing else can reach, and its wasmtime engine, core
+//! instance budget and HTTP listener are its own. It is also why the renderer can
+//! bind `wasi:keyvalue` and `wasmcloud:messaging` at all — on a shared host it could
+//! not, because the bucket is named by the guest (measured: ADR-0012).
+//!
 //! Two rules encode expensive lessons and are asserted by the tests below:
 //!
 //! 1. **One `hostInterfaces` entry per interface.** An entry binds to a component
@@ -53,29 +62,6 @@ const OPERATOR_BOUND: &[(&str, &str, &[&str])] = &[
     ("wasmcloud", "messaging", &["handler", "consumer", "producer"]),
 ];
 
-/// Host interfaces whose per-workload isolation the HOST enforces, and which are
-/// therefore safe to grant to tenant-supplied code:
-///
-/// * `wasi:http` — incoming is per-vhost, outgoing is the `allowedHosts` allow-list.
-/// * `wasi:config` — a per-component view; a component sees only its own keys.
-/// * `wasi:blobstore` — containers are allow-listed per workload by the plugin.
-///
-/// Everything else on a shared host is shared state. `wasi:keyvalue` is the proven
-/// case: the bucket is named by the GUEST (`store::open(name)`) and the host applies
-/// no restriction, so two tenants read each other's records — measured, see ADR-0012
-/// and ADR-0013. `wasmcloud:messaging` has the same shape with subjects.
-///
-/// Denying one is real enforcement, not a hint: with the interface absent from
-/// `hostInterfaces` the host refuses to instantiate the component at all —
-/// "component imports instance `wasi:keyvalue/store@0.2.0-draft`, but a matching
-/// implementation was not found in the linker ... unbinding all plugins".
-const TENANT_GRANTABLE: &[(&str, &str)] =
-    &[("wasi", "http"), ("wasi", "config"), ("wasi", "blobstore")];
-
-fn grantable_to_tenants(h: &HostIface) -> bool {
-    TENANT_GRANTABLE.iter().any(|(ns, pkg)| *ns == h.namespace && *pkg == h.pkg)
-}
-
 fn operator_binds(h: &HostIface) -> bool {
     OPERATOR_BOUND.iter().any(|(ns, pkg, ifaces)| {
         *ns == h.namespace && *pkg == h.pkg && ifaces.contains(&h.iface.as_str())
@@ -93,13 +79,28 @@ pub struct Plan {
     /// Destinations this tenant may dial. Rendered as `allowedHosts`, both bare
     /// and port-qualified. Empty means egress is denied entirely.
     pub egress: Vec<String>,
+    /// The app's private data-NATS volume — its keyvalue, blobstore and stream
+    /// storage, all of it (ADR-0014).
+    pub storage: String,
+    /// Requests for the app's host pod. Every application is now a pod, so a plan
+    /// prices compute directly rather than only as a share of a hostgroup.
+    pub host_cpu: String,
+    pub host_memory: String,
 }
 
 impl Default for Plan {
     fn default() -> Self {
         // Mirrors what the vet-clinic settled on after `poolSize: 48` starved the
         // host (1344 core instances against a 1000 cap).
-        Plan { replicas: 1, pool_size: 8, max_invocations: 200, egress: Vec::new() }
+        Plan {
+            replicas: 1,
+            pool_size: 8,
+            max_invocations: 200,
+            egress: Vec::new(),
+            storage: "1Gi".into(),
+            host_cpu: "100m".into(),
+            host_memory: "256Mi".into(),
+        }
     }
 }
 
@@ -152,17 +153,6 @@ pub struct HostIface {
 
 pub struct RenderInput<'a> {
     pub tenant: &'a str,
-    /// The host ENVIRONMENT to schedule onto. Per the operator's CRD: "Environment,
-    /// if set, scopes scheduling to Hosts whose Environment matches this value,
-    /// regardless of the Workload's own namespace... only honored when the operator
-    /// is started with allowSharedHosts=true".
-    ///
-    /// This is what makes ADR-0002 (a namespace per tenant) compatible with
-    /// PLATFORM.md's shared-hostgroup density bet: the workload object lives in the
-    /// tenant's namespace, the component runs on a shared host elsewhere. Platform
-    /// infrastructure config, never tenant input. Empty omits the field, in which
-    /// case scheduling falls back to hosts in the workload's own namespace.
-    pub environment: &'a str,
     /// Deployment name, already validated as a DNS label by the caller.
     pub name: &'a str,
     pub strategy: Strategy,
@@ -170,11 +160,19 @@ pub struct RenderInput<'a> {
     pub plan: &'a Plan,
     /// Cluster hostname the operator routes on (`Host` header, port 9191).
     pub http_host: &'a str,
-    /// Grant host interfaces whose isolation the host does NOT enforce
-    /// (`wasi:keyvalue`, `wasmcloud:messaging`). Only safe when this tenant has a
-    /// host to itself — a dedicated `environment` with its own data NATS. Default
-    /// false, which denies them and makes the host fail closed (ADR-0013).
-    pub grant_shared_state: bool,
+    /// The platform's control-plane NATS, which the app's host dials to register and
+    /// receive scheduling. Shared by every host — it carries no application data.
+    pub scheduler_nats: &'a str,
+    /// `wash` image for the app's host pod. Pinned by the platform, never tenant
+    /// input; the applier independently refuses any other image (ADR-0003).
+    pub host_image: &'a str,
+    /// NATS image for the app's private data plane sidecar.
+    pub nats_image: &'a str,
+    /// The platform's own namespace — where the control-plane NATS and the registry
+    /// live, which the tenant's NetworkPolicy must permit egress to.
+    pub platform_ns: &'a str,
+    /// Object-count ceiling for the tenant's quota, from their plan.
+    pub max_deployments: u32,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -210,10 +208,20 @@ pub fn namespace_for(tenant: &str) -> String {
     format!("tenant-{}", dns_label(tenant))
 }
 
-/// A tenant's storage prefix. The isolation stamp keys everything on this
-/// (ADR-0008); a tenant never sees or sets it.
-pub fn bucket_for(tenant: &str) -> String {
-    format!("t-{}", dns_label(tenant))
+/// The host environment one application runs on, and the name of everything that
+/// backs it (host pod, data NATS, storage claim). Derived from tenant + deployment,
+/// never supplied: this string IS the isolation boundary (ADR-0014), so a tenant
+/// being able to set it would be a tenant being able to join someone else's host.
+pub fn env_for(tenant: &str, name: &str) -> String {
+    let e = format!("{}-{}", dns_label(tenant), dns_label(name));
+    // A DNS label ceiling, since it names a Deployment and a PVC.
+    e.chars().take(53).collect::<String>().trim_matches('-').to_string()
+}
+
+/// An application's storage prefix. Belt to the private data NATS's braces: nothing
+/// else can reach that NATS, and within it the app is still namespaced (ADR-0008).
+pub fn bucket_for(tenant: &str, name: &str) -> String {
+    format!("b-{}", env_for(tenant, name))
 }
 
 fn dns_label(s: &str) -> String {
@@ -263,7 +271,8 @@ pub fn render(input: &RenderInput) -> Result<String, RenderError> {
     }
 
     let ns = namespace_for(input.tenant);
-    let bucket = bucket_for(input.tenant);
+    let env = env_for(input.tenant, input.name);
+    let bucket = bucket_for(input.tenant, input.name);
     let serves_http = input.parts.iter().any(|p| p.serves_http);
     let total_modules: u32 = input.parts.iter().map(|p| p.nested_instances.max(1)).sum();
     let pool = safe_pool_size(input.plan.pool_size, total_modules);
@@ -271,6 +280,15 @@ pub fn render(input: &RenderInput) -> Result<String, RenderError> {
     let mut s = String::new();
     s.push_str("# Generated by platform:app — do not edit; the platform re-applies this.\n");
     s.push_str(&format!("# tenant={} strategy={} \n", input.tenant, input.strategy.as_str()));
+    // The tenant's namespace and guardrails ride along with every save. They have to:
+    // the app's host pod runs in that namespace and cannot register unless the
+    // NetworkPolicy there permits the control plane. Re-applying them is idempotent
+    // (ADR-0004), so drift heals on the next save or re-apply pass instead of needing
+    // a separate provisioning step nobody would remember to run.
+    s.push_str(&render_tenant_namespace(input.tenant, input.max_deployments, input.platform_ns));
+    s.push_str("---\n");
+    s.push_str(&render_app_host(input, &ns, &env));
+    s.push_str("---\n");
     s.push_str("apiVersion: runtime.wasmcloud.dev/v1alpha1\n");
     s.push_str("kind: WorkloadDeployment\n");
     s.push_str("metadata:\n");
@@ -283,9 +301,10 @@ pub fn render(input: &RenderInput) -> Result<String, RenderError> {
     s.push_str("spec:\n");
     s.push_str(&format!("  replicas: {}\n", input.plan.replicas.max(1)));
     s.push_str("  template:\n    spec:\n");
-    if !input.environment.is_empty() {
-        s.push_str(&format!("      environment: {}\n", input.environment));
-    }
+    // Pin the workload to this application's own host. Without it the operator would
+    // schedule onto any host in the namespace, which is every other app of this
+    // tenant — the whole boundary is this one line plus the pod it names.
+    s.push_str(&format!("      environment: {env}\n"));
     if serves_http {
         s.push_str("      kubernetes:\n        service:\n");
         s.push_str(&format!("          name: {}\n", input.name));
@@ -295,10 +314,10 @@ pub fn render(input: &RenderInput) -> Result<String, RenderError> {
     let mut wanted: BTreeSet<HostIface> = BTreeSet::new();
     for p in input.parts {
         for h in &p.host_imports {
-            // Ambient families are not declared — see OPERATOR_BOUND. Shared-state
-            // families are not declared either unless this tenant owns the host,
-            // which is what stops one tenant reading another's records.
-            if operator_binds(h) && (grantable_to_tenants(h) || input.grant_shared_state) {
+            // Ambient families are not declared — see OPERATOR_BOUND. Everything the
+            // operator does bind is granted: this host serves one application, so
+            // there is no one to share a bucket or a subject with (ADR-0014).
+            if operator_binds(h) {
                 wanted.insert(h.clone());
             }
         }
@@ -375,6 +394,101 @@ pub fn render(input: &RenderInput) -> Result<String, RenderError> {
     Ok(s)
 }
 
+/// One application's host: a `wash host` pod with a **private NATS sidecar**, plus
+/// the claim that NATS stores to.
+///
+/// This is where "separated storage, compute and implementations" actually happens,
+/// and it happens because of one fact about the host binary: the control plane and
+/// the data plane are different flags.
+///
+/// * `--scheduler-nats-url` is the operator's bus. It carries scheduling, not
+///   application data, so every app's host shares the platform's one NATS.
+/// * `--data-nats-url` is what backs `wasi:keyvalue`, `wasi:blobstore` and
+///   `wasmcloud:messaging`. Pointing it at `localhost` in this pod means the app's
+///   buckets and subjects live in a NATS that has no Service, no other client, and
+///   dies with the app. There is nothing to allow-list because there is no one else.
+///
+/// Compute follows for free: its own wasmtime engine, its own core-instance budget
+/// (so one app's `poolSize` cannot starve another's — the vet-clinic failure), and
+/// its own `:9191`, which is why each app gets its own endpoint.
+///
+/// The NATS is a **native sidecar** (`initContainers` + `restartPolicy: Always`), so
+/// it is up before the host starts and shuts down after it — ordinary containers give
+/// no such ordering, and the host's first `store::open` would race the bus.
+fn render_app_host(input: &RenderInput, ns: &str, env: &str) -> String {
+    let mut s = String::new();
+    s.push_str("# This application's own host: private data NATS, own engine, own :9191.\n");
+    s.push_str("apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n");
+    s.push_str(&format!("  name: {env}-data\n  namespace: {ns}\n"));
+    s.push_str("  labels:\n    platform.comp/managed: \"true\"\n");
+    s.push_str(&format!("    platform.comp/env: {env}\n"));
+    s.push_str("spec:\n  accessModes: [ReadWriteOnce]\n  resources:\n    requests:\n");
+    s.push_str(&format!("      storage: {}\n", input.plan.storage));
+    s.push_str("---\n");
+
+    s.push_str("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n");
+    s.push_str(&format!("  name: {env}-host\n  namespace: {ns}\n"));
+    s.push_str("  labels:\n    platform.comp/managed: \"true\"\n");
+    s.push_str(&format!("    platform.comp/tenant: {}\n", dns_label(input.tenant)));
+    s.push_str(&format!("    platform.comp/env: {env}\n"));
+    s.push_str("spec:\n  replicas: 1\n");
+    // The claim is ReadWriteOnce and JetStream is not shared-filesystem safe, so a
+    // rolling update must never run two hosts at once. Scaling an app past one host
+    // needs a real NATS cluster — see ADR-0014's ceiling.
+    s.push_str("  strategy:\n    type: Recreate\n");
+    s.push_str(&format!("  selector:\n    matchLabels:\n      platform.comp/env: {env}\n"));
+    s.push_str("  template:\n    metadata:\n      labels:\n");
+    s.push_str("        platform.comp/managed: \"true\"\n");
+    s.push_str(&format!("        platform.comp/env: {env}\n"));
+    s.push_str("    spec:\n");
+    s.push_str("      initContainers:\n");
+    s.push_str("        - name: data-nats\n");
+    s.push_str(&format!("          image: {}\n", input.nats_image));
+    s.push_str("          restartPolicy: Always\n");
+    // `-a 127.0.0.1` keeps the bus on loopback: even inside this pod it is not
+    // reachable from the cluster network, so the app's data plane has no exposed
+    // surface at all.
+    s.push_str("          args: [\"-js\", \"-sd\", \"/data\", \"-a\", \"127.0.0.1\"]\n");
+    // A native sidecar orders *start*, not readiness — without this probe the host
+    // would race the bus and crash-loop until NATS happened to be listening.
+    s.push_str("          startupProbe:\n");
+    s.push_str("            tcpSocket:\n              port: 4222\n");
+    s.push_str("            periodSeconds: 1\n            failureThreshold: 30\n");
+    s.push_str("          volumeMounts:\n            - name: data\n              mountPath: /data\n");
+    s.push_str("          resources:\n            requests:\n              cpu: 50m\n              memory: 64Mi\n");
+    s.push_str("      containers:\n");
+    s.push_str("        - name: host\n");
+    s.push_str(&format!("          image: {}\n", input.host_image));
+    s.push_str("          args:\n");
+    s.push_str("            - host\n");
+    s.push_str(&format!("            - --host-group={env}\n"));
+    s.push_str(&format!("            - --environment={env}\n"));
+    s.push_str(&format!("            - --scheduler-nats-url={}\n", input.scheduler_nats));
+    // The whole point: application data never leaves this pod.
+    s.push_str("            - --data-nats-url=nats://127.0.0.1:4222\n");
+    s.push_str("            - --http-addr=0.0.0.0:9191\n");
+    s.push_str("            - --oci-cache-dir=/oci-cache\n");
+    s.push_str("            - --allow-insecure-registries\n");
+    s.push_str("          env:\n");
+    s.push_str("            - name: HOME\n              value: /tmp\n");
+    // Per-app engine budget. `safe_pool_size` clamps the workload against this, and
+    // now the budget really is the app's own rather than shared with every neighbour.
+    s.push_str("            - name: WASMTIME_POOLING_TOTAL_CORE_INSTANCES\n");
+    s.push_str("              value: \"8000\"\n");
+    s.push_str("          ports:\n            - containerPort: 9191\n");
+    s.push_str("          volumeMounts:\n");
+    s.push_str("            - name: oci-cache\n              mountPath: /oci-cache\n");
+    s.push_str("            - name: tmp\n              mountPath: /tmp\n");
+    s.push_str("          resources:\n            requests:\n");
+    s.push_str(&format!("              cpu: {}\n", input.plan.host_cpu));
+    s.push_str(&format!("              memory: {}\n", input.plan.host_memory));
+    s.push_str("      volumes:\n");
+    s.push_str(&format!("        - name: data\n          persistentVolumeClaim:\n            claimName: {env}-data\n"));
+    s.push_str("        - name: oci-cache\n          emptyDir: {}\n");
+    s.push_str("        - name: tmp\n          emptyDir: {}\n");
+    s
+}
+
 /// Expand a plan's egress list into `allowedHosts` entries.
 ///
 /// The operator's own schema documents the accepted forms: `*`, `host[:port]`,
@@ -423,7 +537,7 @@ fn expand_egress(egress: &[String]) -> Vec<String> {
 /// The namespace scaffolding a tenant needs, applied once at tenant creation
 /// (ADR-0002). Everything the platform creates for a tenant lives here so that
 /// deleting the namespace is a complete teardown.
-pub fn render_tenant_namespace(tenant: &str, max_deployments: u32) -> String {
+pub fn render_tenant_namespace(tenant: &str, max_deployments: u32, platform_ns: &str) -> String {
     let ns = namespace_for(tenant);
     let mut s = String::new();
     s.push_str("# Generated by platform:app — the tenant's namespace and its guardrails.\n");
@@ -438,15 +552,36 @@ pub fn render_tenant_namespace(tenant: &str, max_deployments: u32) -> String {
     s.push_str(&format!("    count/workloaddeployments.runtime.wasmcloud.dev: \"{max_deployments}\"\n"));
     s.push_str(&format!("    count/services: \"{}\"\n", max_deployments * 2));
     s.push_str("    count/secrets: \"32\"\n");
+    // One host pod and one claim per application (ADR-0014), so the object quota has
+    // to cover them or it stops counting the thing that actually costs money.
+    s.push_str(&format!("    count/deployments.apps: \"{max_deployments}\"\n"));
+    s.push_str(&format!("    count/persistentvolumeclaims: \"{max_deployments}\"\n"));
+    s.push_str(&format!("    requests.storage: \"{}Gi\"\n", max_deployments * 4));
     s.push_str("---\n");
     // The outer ring of egress control; `allowedHosts` on each workload is the
     // inner one (ADR-0002/0008).
+    //
+    // This policy became load-bearing with ADR-0014 and was inert before it: the
+    // app's host pod now runs HERE, in the tenant's namespace, so a podSelector in
+    // this namespace finally selects it. When components ran on a shared host in
+    // another namespace, this object selected nothing at all (found the hard way,
+    // ADR-0012).
+    //
+    // Which means it must now allow what the host itself needs, or the app never
+    // registers: the platform's control-plane NATS and the registry it pulls from.
+    // The app's own traffic is still governed by `allowedHosts` per component.
     s.push_str("apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n");
     s.push_str(&format!("  name: default-deny-egress\n  namespace: {ns}\n"));
     s.push_str("spec:\n  podSelector: {}\n  policyTypes: [Egress]\n");
     s.push_str("  egress:\n");
     s.push_str("    # DNS only; everything else must go through a workload allow-list.\n");
     s.push_str("    - ports:\n        - protocol: UDP\n          port: 53\n");
+    s.push_str("    # The host's control plane and image source. Not application data:\n");
+    s.push_str("    # that stays on the NATS sidecar inside the app's own pod.\n");
+    s.push_str("    - to:\n        - namespaceSelector:\n            matchLabels:\n");
+    s.push_str(&format!("              kubernetes.io/metadata.name: {platform_ns}\n"));
+    s.push_str("      ports:\n        - protocol: TCP\n          port: 4222\n");
+    s.push_str("        - protocol: TCP\n          port: 5000\n");
     s
 }
 
@@ -476,16 +611,19 @@ mod tests {
             parts,
             plan,
             http_host: "api.tenant-acme.svc.cluster.local",
-            environment: "",
-            grant_shared_state: false,
+            scheduler_nats: "nats://nats.platform.svc.cluster.local:4222",
+            host_image: "ghcr.io/wasmcloud/wash:2.5.2",
+            nats_image: "docker.io/nats:2.12.8-alpine",
+            platform_ns: "platform",
+            max_deployments: 5,
         }
     }
 
     #[test]
-    fn shared_state_interfaces_are_denied_on_a_shared_host() {
-        // keyvalue is not grantable: the guest names the bucket and the host applies
-        // no restriction, so granting it on a shared host means tenants read each
-        // other's records (ADR-0012, measured on a cluster).
+    fn every_operator_bound_family_is_granted_because_the_app_owns_its_host() {
+        // The inverse of what ADR-0013 had to do. keyvalue and messaging are grantable
+        // again — not because the host learned to partition them, but because there is
+        // no second app on this host to partition them from (ADR-0014).
         let parts = vec![part(
             "api",
             true,
@@ -499,41 +637,74 @@ mod tests {
         let plan = Plan::default();
         let out = render(&input(&parts, Strategy::Fused, &plan)).unwrap();
 
-        // Denied — and absence is enforcement: the host refuses to instantiate a
-        // component whose import has no implementation in the linker.
-        assert!(!out.contains("package: keyvalue"), "kv must not be granted: {out}");
-        assert!(!out.contains("package: messaging"), "messaging must not be granted: {out}");
-        // Granted — the host enforces isolation for these itself.
+        assert!(out.contains("package: keyvalue"), "{out}");
+        assert!(out.contains("package: messaging"), "{out}");
         assert!(out.contains("package: config"));
         assert!(out.contains("package: blobstore"));
-        assert!(out.contains("buckets: t-acme"), "blobstore is allow-listed per tenant");
         assert!(out.contains("package: http"));
-
-        // A tenant with a host to itself may have them.
-        let mut dedicated = input(&parts, Strategy::Fused, &plan);
-        dedicated.grant_shared_state = true;
-        dedicated.environment = "tenant-acme";
-        let out = render(&dedicated).unwrap();
-        assert!(out.contains("package: keyvalue"), "dedicated host: {out}");
-        assert!(out.contains("package: messaging"));
-        assert!(out.contains("environment: tenant-acme"));
+        assert!(out.contains("buckets: b-acme-api"), "per-app, not per-tenant: {out}");
     }
 
     #[test]
-    fn the_environment_targets_a_shared_host_in_another_namespace() {
-        // The workload object lives in the tenant's namespace; the component runs on
-        // a shared host whose Environment matches. Without this the operator looks
-        // for a host in tenant-<x>, finds none, and the workload never schedules.
-        let parts = vec![part("api", true, vec![])];
+    fn the_app_gets_its_own_host_with_a_private_data_nats() {
+        // The load-bearing test for ADR-0014. Every clause here is a way the
+        // separation could silently not happen.
+        let parts = vec![part("api", true, vec![iface("wasi", "keyvalue", "store")])];
         let plan = Plan::default();
-        let mut i = input(&parts, Strategy::Fused, &plan);
-        i.environment = "jobs";
-        let out = render(&i).unwrap();
-        assert!(out.contains("      environment: jobs\n"), "{out}");
-        assert!(out.contains("namespace: tenant-acme"), "the object still belongs to the tenant");
-        // Omitted when unset, so a single-namespace deployment behaves as before.
         let out = render(&input(&parts, Strategy::Fused, &plan)).unwrap();
-        assert!(!out.contains("environment:"), "{out}");
+
+        // A host pod of its own, named for the app, in the TENANT's namespace — which
+        // is also what makes the namespace NetworkPolicy apply to it at last.
+        assert!(out.contains("kind: Deployment"), "{out}");
+        assert!(out.contains("name: acme-api-host"), "{out}");
+        // Every namespaced object lands in the tenant's namespace and nowhere else.
+        // `\n  namespace: ` is the metadata form; hostInterfaces entries use
+        // `- namespace: wasi` at a deeper indent and must not be caught here.
+        assert_eq!(
+            out.matches("\n  namespace: ").count(),
+            out.matches("\n  namespace: tenant-acme\n").count(),
+            "an object escaped the tenant namespace: {out}"
+        );
+        assert!(out.matches("\n  namespace: tenant-acme\n").count() >= 5, "{out}");
+
+        // Storage: the data plane is a sidecar on loopback. If this ever pointed at a
+        // Service, every app on that NATS would share buckets again — the ADR-0012
+        // failure, reintroduced by one URL.
+        assert!(out.contains("--data-nats-url=nats://127.0.0.1:4222"), "{out}");
+        assert!(out.contains("-a\", \"127.0.0.1"), "the NATS must not listen off-pod: {out}");
+        assert!(out.contains("--scheduler-nats-url=nats://nats.platform.svc.cluster.local:4222"));
+        // ...and it must be a native sidecar, or the host races the bus on startup.
+        assert!(out.contains("initContainers:"), "{out}");
+        assert!(out.contains("restartPolicy: Always"), "{out}");
+        // Durable: a restart must not lose the app's records.
+        assert!(out.contains("kind: PersistentVolumeClaim"));
+        assert!(out.contains("name: acme-api-data"));
+        assert!(out.contains("claimName: acme-api-data"));
+        // JetStream on a ReadWriteOnce claim cannot tolerate two hosts at once.
+        assert!(out.contains("type: Recreate"), "{out}");
+
+        // Compute: the workload is pinned to this host and nothing else.
+        assert!(out.contains("      environment: acme-api\n"), "{out}");
+        assert!(out.contains("--environment=acme-api"), "{out}");
+        assert!(out.contains("--host-group=acme-api"), "{out}");
+    }
+
+    #[test]
+    fn two_apps_of_one_tenant_share_nothing() {
+        // The adversarial test ADR-0008 asked for, at the level that failed before:
+        // same tenant, same namespace, two apps. Every isolation-bearing name differs.
+        let parts = vec![part("api", true, vec![iface("wasi", "keyvalue", "store")])];
+        let plan = Plan::default();
+        let mut a = input(&parts, Strategy::Fused, &plan);
+        a.name = "orders";
+        let mut b = input(&parts, Strategy::Fused, &plan);
+        b.name = "billing";
+        let (a, b) = (render(&a).unwrap(), render(&b).unwrap());
+
+        assert!(a.contains("environment: acme-orders") && b.contains("environment: acme-billing"));
+        assert!(a.contains("acme-orders-data") && b.contains("acme-billing-data"), "separate claims");
+        assert!(a.contains("acme-orders-host") && b.contains("acme-billing-host"), "separate hosts");
+        assert!(!a.contains("billing") && !b.contains("orders"), "no name crosses over");
     }
 
     #[test]
@@ -549,8 +720,9 @@ mod tests {
         assert!(out.contains("kind: WorkloadDeployment"));
         assert!(out.contains("namespace: tenant-acme"), "{out}");
         assert!(out.contains("platform.comp/strategy: fused"));
-        // one component, digest-pinned
-        assert_eq!(out.matches("        - name: ").count(), 1);
+        // one component, digest-pinned. Counted by `poolSize`, which only a
+        // component entry carries — the app's host pod has `- name:` lines too.
+        assert_eq!(out.matches("          poolSize:").count(), 1);
         assert!(out.contains("@sha256:"));
         // ...and a Service, because it serves http
         assert!(out.contains("kind: Service"));
@@ -570,11 +742,7 @@ mod tests {
             ],
         )];
         let plan = Plan::default();
-        // keyvalue is only granted to a tenant that owns its host (ADR-0013);
-        // this test is about the entry MECHANICS, so grant it.
-        let mut i = input(&parts, Strategy::Fused, &plan);
-        i.grant_shared_state = true;
-        let out = render(&i).unwrap();
+        let out = render(&input(&parts, Strategy::Fused, &plan)).unwrap();
 
         assert!(out.contains("interfaces: [store]"), "{out}");
         assert!(out.contains("interfaces: [atomics]"));
@@ -591,13 +759,9 @@ mod tests {
             part("breaker", false, vec![]),
         ];
         let plan = Plan::default();
-        // keyvalue is only granted to a tenant that owns its host (ADR-0013);
-        // this test is about the entry MECHANICS, so grant it.
-        let mut i = input(&parts, Strategy::Linked, &plan);
-        i.grant_shared_state = true;
-        let out = render(&i).unwrap();
+        let out = render(&input(&parts, Strategy::Linked, &plan)).unwrap();
 
-        assert_eq!(out.matches("        - name: ").count(), 3, "all three components: {out}");
+        assert_eq!(out.matches("          poolSize:").count(), 3, "all three components: {out}");
         // The union, deduped: two components want keyvalue/store, one entry.
         assert_eq!(out.matches("interfaces: [store]").count(), 1);
         // Composable edges leave no trace — the runtime links them in-process.
@@ -615,15 +779,14 @@ mod tests {
         let plan = Plan { egress: vec!["api.example.com".into()], ..Plan::default() };
         let out = render(&input(&parts, Strategy::Fused, &plan)).unwrap();
 
-        // blobstore: the one storage mechanism with a working precedent.
-        assert!(out.contains("buckets: t-acme"), "blobstore container allow-list: {out}");
-
-        // keyvalue cannot be isolated per tenant on a shared host — proven on a
-        // cluster, where a second tenant read the first's records straight through
-        // it (ADR-0012). So it is not stamped and not bound: omitting the
-        // hostInterfaces entry fails closed in the linker (ADR-0013).
-        assert!(!out.contains("bucket: t-acme"), "must not pretend to isolate kv: {out}");
-        assert!(!out.contains("interfaces: [store]"), "kv must not be bound: {out}");
+        // blobstore containers are allow-listed per APP, not per tenant: two apps of
+        // one tenant are two boundaries (ADR-0014), which is the level the cluster
+        // test failed at when it was per-tenant (ADR-0012).
+        assert!(out.contains("buckets: b-acme-api"), "blobstore container allow-list: {out}");
+        // keyvalue carries no bucket key, because nothing reads one — the boundary is
+        // the private data NATS in the app's own pod, not a manifest field.
+        assert!(!out.contains("bucket: b-acme-api"), "a key nothing reads is worse than none: {out}");
+        assert!(out.contains("interfaces: [store]"), "and it IS bound now: {out}");
 
         // Egress in both forms — a bare-only list silently fails closed on a port.
         assert!(out.contains("- \"api.example.com\""));
@@ -693,11 +856,7 @@ mod tests {
             ],
         )];
         let plan = Plan::default();
-        // keyvalue is only granted to a tenant that owns its host (ADR-0013);
-        // this test is about the entry MECHANICS, so grant it.
-        let mut i = input(&parts, Strategy::Fused, &plan);
-        i.grant_shared_state = true;
-        let out = render(&i).unwrap();
+        let out = render(&input(&parts, Strategy::Fused, &plan)).unwrap();
         assert!(!out.contains("interfaces: [types]"), "type-only, unbindable: {out}");
         assert!(out.contains("interfaces: [outgoing-handler]"));
         assert!(out.contains("interfaces: [incoming-handler]"), "it serves http");
@@ -738,7 +897,8 @@ mod tests {
     #[test]
     fn names_are_derived_never_taken() {
         assert_eq!(namespace_for("ACME Corp."), "tenant-acme-corp");
-        assert_eq!(bucket_for("ACME Corp."), "t-acme-corp");
+        assert_eq!(bucket_for("ACME Corp.", "Orders v2"), "b-acme-corp-orders-v2");
+        assert_eq!(env_for("ACME Corp.", "Orders v2"), "acme-corp-orders-v2");
         // A hostile deployment name cannot escape its namespace.
         let parts = vec![part("api", false, vec![])];
         let plan = Plan::default();
@@ -749,13 +909,19 @@ mod tests {
 
     #[test]
     fn tenant_namespace_carries_its_guardrails() {
-        let out = render_tenant_namespace("acme", 5);
+        let out = render_tenant_namespace("acme", 5, "platform");
         assert!(out.contains("kind: Namespace"));
         assert!(out.contains("name: tenant-acme"));
         assert!(out.contains("count/workloaddeployments.runtime.wasmcloud.dev: \"5\""));
         assert!(out.contains("kind: NetworkPolicy"));
         assert!(out.contains("policyTypes: [Egress]"));
         assert!(out.contains("port: 53"), "DNS must survive default-deny: {out}");
+        // The app's host pod runs in THIS namespace now, so the policy applies to it
+        // — and it must be able to reach the control plane or the app never registers.
+        assert!(out.contains("kubernetes.io/metadata.name: platform"), "{out}");
+        assert!(out.contains("port: 4222"), "the host's scheduler bus: {out}");
+        assert!(out.contains("count/deployments.apps: \"5\""), "one host pod per app: {out}");
+        assert!(out.contains("count/persistentvolumeclaims: \"5\""), "{out}");
     }
 
     #[test]
@@ -778,11 +944,7 @@ mod tests {
             ],
         )];
         let plan = Plan::default();
-        // keyvalue is only granted to a tenant that owns its host (ADR-0013);
-        // this test is about the entry MECHANICS, so grant it.
-        let mut i = input(&parts, Strategy::Fused, &plan);
-        i.grant_shared_state = true;
-        let out = render(&i).unwrap();
+        let out = render(&input(&parts, Strategy::Fused, &plan)).unwrap();
 
         // Declared: the two the operator binds, plus http because it serves.
         assert!(out.contains("package: keyvalue"), "{out}");

@@ -16,9 +16,9 @@
 //!   0003  the applier re-validates and rejects anything aimed elsewhere
 //!   0007  another tenant cannot see or use a private component
 //!   0004  a save creates a revision, and the applier can list what to re-apply
-//!   0013  a graph needing `wasi:keyvalue` is REFUSED on a shared host, because no
-//!         manifest field partitions it — the main flow runs as a tenant with its own
-//!         host environment, then the same graph is retried without that grant
+//!   0014  each application gets its OWN host — private data NATS, own engine, own
+//!         endpoint — so two apps of one tenant share no storage and no compute, and
+//!         `wasi:keyvalue` is bindable again
 
 use std::path::PathBuf;
 use std::process::{Child, Command};
@@ -129,13 +129,6 @@ fn require_port_free(addr: &str, what: &str) {
 }
 
 fn start_all() -> (Kill, Kill) {
-    // The graph under test reaches `wasi:keyvalue` through `record-store`, which a
-    // shared host refuses by default (ADR-0013). The main flow is a tenant with its
-    // own host environment, so it gets the grant; the refusal is asserted at the end.
-    start_all_with(true)
-}
-
-fn start_all_with(grant_shared_state: bool) -> (Kill, Kill) {
     require_port_free(PLATFORM, "platform");
     require_port_free(APPLIER, "applier");
     // The applier first — validate-only, so no Kubernetes client is ever built.
@@ -163,7 +156,6 @@ fn start_all_with(grant_shared_state: bool) -> (Kill, Kill) {
         .env("CFG_APPLIER_SECRET", SECRET)
         .env("CFG_REGISTRY", "registry.platform.svc.cluster.local:5000")
         .env("CFG_CLUSTER_SUFFIX", "svc.cluster.local")
-        .env("CFG_GRANT_SHARED_STATE", if grant_shared_state { "true" } else { "false" })
         .spawn()
         .expect("spawn vet-host");
     let platform = Kill(platform);
@@ -183,7 +175,7 @@ const DIGEST2: &str = "sha256:22222222222222222222222222222222222222222222222222
 
 #[test]
 fn platform_signs_in_renders_and_applies() {
-    let (applier, platform) = start_all();
+    let (_applier, _platform) = start_all();
 
     // ===== 0009: identity ==================================================
     let (code, _) = req("POST", "/api/register", None, Some(json!({ "email": "ada@acme.dev", "password": "correct-horse-battery" })));
@@ -267,7 +259,7 @@ fn platform_signs_in_renders_and_applies() {
     assert!(yaml.contains("namespace: tenant-ada"));
     assert!(yaml.contains("platform.comp/strategy: linked"));
     // 0005 linked: every component present, edges absent (the runtime links them).
-    assert_eq!(yaml.matches("        - name: ").count(), 4, "{yaml}");
+    assert_eq!(yaml.matches("          poolSize:").count(), 4, "{yaml}");
     assert!(!yaml.contains("records:store/store"), "an edge must not appear: {yaml}");
     // 0006: digests, never tags.
     assert!(yaml.contains(&format!("@{DIGEST}")));
@@ -275,9 +267,19 @@ fn platform_signs_in_renders_and_applies() {
     // 0005: one hostInterfaces entry per interface, never merged.
     assert!(yaml.contains("interfaces: [store]"), "{yaml}");
     assert!(!yaml.contains("interfaces: [store, atomics]"));
-    // 0008/0012: the isolation stamp the tenant never wrote. keyvalue carries no
-    // bucket key, because nothing reads one — this tenant is isolated by owning its
-    // host, not by a manifest field (ADR-0013).
+    // 0014: the app's own host, which is what makes keyvalue safe to bind. Its data
+    // plane must be on loopback — a Service URL here would put every app back on one
+    // shared bus, which is exactly the leak ADR-0012 measured.
+    assert!(yaml.contains("kind: Deployment"), "the app's host: {yaml}");
+    assert!(yaml.contains("--data-nats-url=nats://127.0.0.1:4222"), "{yaml}");
+    assert!(yaml.contains("      environment: ada-api\n"), "workload pinned to it: {yaml}");
+    assert!(yaml.contains("kind: PersistentVolumeClaim"), "durable storage: {yaml}");
+    // The namespace and its guardrails travel with it, or the host pod has nowhere to
+    // run and no route to the control plane.
+    assert!(yaml.contains("kind: Namespace"), "{yaml}");
+    assert!(yaml.contains("kind: NetworkPolicy"), "{yaml}");
+    // 0008/0012: still no keyvalue bucket key, because nothing reads one. The
+    // boundary is the private bus, not a manifest field.
     assert!(!yaml.contains("bucket: t-ada"), "must not fake kv isolation: {yaml}");
     assert!(yaml.contains("allowedHosts:"), "fail-closed egress is explicit: {yaml}");
     assert!(yaml.contains("permits no egress"), "this plan has none: {yaml}");
@@ -293,7 +295,7 @@ fn platform_signs_in_renders_and_applies() {
     assert_eq!(code, 200, "fused save: {fused}");
     assert_eq!(fused["revision"], 2, "a save is a revision (0004)");
     let yaml = text_of(&format!("/api/deployments/{id}/manifests"), &token);
-    assert_eq!(yaml.matches("        - name: ").count(), 1, "fused is one artifact: {yaml}");
+    assert_eq!(yaml.matches("          poolSize:").count(), 1, "fused is one artifact: {yaml}");
     assert!(yaml.contains("platform.comp/strategy: fused"));
     // ...and it still needs every host interface the graph did.
     assert!(yaml.contains("interfaces: [store]"), "{yaml}");
@@ -347,16 +349,15 @@ fn platform_signs_in_renders_and_applies() {
     assert_eq!(code, 201, "creating a draft is fine");
     let (_, eve_deployments) = req("GET", "/api/deployments", Some(&eve), None);
     let sid = eve_deployments["deployments"][0]["id"].as_str().unwrap().to_string();
-    // ADR-0012's gate fires before anything else: with the shared-state grant on,
-    // two tenants on one host share a keyvalue bucket — proven on a real cluster — so
-    // a second tenant cannot deploy. This is the release gate ADR-0008 asked for, in
-    // code. (Without the grant, the 0013 refusal below fires instead.)
+    // ADR-0012's gate is LIFTED (ADR-0014): a second tenant no longer shares storage
+    // with the first, because neither shares a host. Eve's save fails on the one
+    // thing that should still stop it — she cannot use ada's private component.
     let (code, denied) = req("POST", &format!("/api/deployments/{sid}/save"), Some(&eve), Some(json!({})));
-    assert_eq!(code, 403, "{denied}");
+    assert_eq!(code, 422, "{denied}");
     let msg = denied["error"].as_str().unwrap();
-    assert!(msg.contains("grant-shared-state is on"), "{msg}");
-    assert!(msg.contains("keyvalue"), "{msg}");
-    assert!(msg.contains("adr/0012"), "the refusal cites the evidence: {msg}");
+    assert!(msg.contains("not visible to you"), "refused for ownership, not storage: {msg}");
+    assert!(!msg.contains("adr/0012"), "the storage gate is lifted (0014): {msg}");
+
     // Eve cannot read ada's deployment at all.
     assert_eq!(req("GET", &format!("/api/deployments/{id}"), Some(&eve), None).0, 404);
     assert_eq!(req("GET", &format!("/api/deployments/{id}/manifests"), Some(&eve), None).0, 404);
@@ -380,47 +381,37 @@ fn platform_signs_in_renders_and_applies() {
     assert_eq!(code, 200, "{orgd}");
     assert_eq!(orgd["visibility"], "org");
 
-    // ===== 0013: on a shared host the same graph is refused ================
-    // Everything above ran with the shared-state grant, which is only correct for a
-    // tenant that owns its host environment. Restart without it — the shared-host
-    // default — and the identical graph is refused at save, because `record-store`
-    // imports `wasi:keyvalue` and no manifest field partitions it per workload
-    // (ADR-0012 measured the leak; ADR-0013 denies by omission). Same ports: `Kill`
-    // waits on the children, so both are gone before the second pair binds.
-    drop(platform);
-    drop(applier);
-    let (_applier, _platform) = start_all_with(false);
-
-    // Fresh process, `--kv memory`, so this is a clean tenant.
-    assert_eq!(req("POST", "/api/register", None, Some(json!({ "email": "ada@acme.dev", "password": "correct-horse-battery" }))).0, 201);
-    let (_, login) = req("POST", "/api/login", None, Some(json!({ "email": "ada@acme.dev", "password": "correct-horse-battery" })));
-    let token = login["token"].as_str().unwrap().to_string();
-    for stem in ["mesh_domain", "record_store", "resilience", "proxy_route"] {
-        upload(&token, stem);
-    }
-    assert_eq!(record_push("ada/mesh-domain", DIGEST), 200);
-    for c in ["record-store", "resilience", "proxy-route"] {
-        assert_eq!(record_push(&format!("ada/{c}"), DIGEST2), 200);
-    }
-    // The same graph as above, so only the grant differs.
-    let (code, created) = req(
+    // ===== 0014: a second app of the same tenant shares nothing =============
+    // The level the cluster test failed at before (ADR-0012 proved two *tenants*
+    // leaked; two *apps* of one tenant leaked for the same reason). Same components,
+    // same namespace, same everything except the app — so if any isolation-bearing
+    // name were derived from the tenant alone, it would collide here.
+    let (code, second) = req(
         "POST",
         "/api/deployments",
         Some(&token),
-        Some(json!({ "name": "api", "strategy": "linked", "nodes": nodes, "edges": edges })),
+        Some(json!({ "name": "billing", "strategy": "linked", "nodes": nodes, "edges": edges })),
     );
-    assert_eq!(code, 201, "{created}");
-    let shared = created["id"].as_str().unwrap().to_string();
+    assert_eq!(code, 201, "{second}");
+    let bid = second["id"].as_str().unwrap().to_string();
+    let (code, saved2) = req("POST", &format!("/api/deployments/{bid}/save"), Some(&token), Some(json!({})));
+    assert_eq!(code, 200, "second app saves: {saved2}");
 
-    let (code, denied) = req("POST", &format!("/api/deployments/{shared}/save"), Some(&token), Some(json!({})));
-    assert_eq!(code, 409, "keyvalue must be refused on a shared host: {denied}");
-    let msg = denied["error"].as_str().unwrap();
-    assert!(msg.contains("wasi:keyvalue/store"), "the refusal names the interface: {msg}");
-    assert!(msg.contains("adr/0013"), "...and cites the decision: {msg}");
-    // Nothing was rendered, so nothing reached the applier.
-    assert!(denied.get("applier").is_none(), "refused before rendering: {denied}");
+    let a = text_of(&format!("/api/deployments/{id}/manifests"), &token);
+    let b = text_of(&format!("/api/deployments/{bid}/manifests"), &token);
+    // Separate hosts, separate storage, separate scheduling target.
+    assert!(a.contains("environment: ada-api") && b.contains("environment: ada-billing"), "{b}");
+    assert!(a.contains("ada-api-host") && b.contains("ada-billing-host"));
+    assert!(a.contains("ada-api-data") && b.contains("ada-billing-data"), "separate claims");
+    assert!(!b.contains("ada-api"), "no name from the other app appears: {b}");
+    // Both bind keyvalue, which is only sound because neither shares a bus.
+    assert!(a.contains("interfaces: [store]") && b.contains("interfaces: [store]"));
+    assert!(a.contains("--data-nats-url=nats://127.0.0.1:4222"));
+    // The applier accepted the host pod, which means its image allow-list matched.
+    let applied = saved2["applier"]["applied"].as_array().unwrap();
+    assert!(applied.iter().any(|x| x == "Deployment/ada-billing-host"), "{applied:?}");
+    assert!(applied.iter().any(|x| x == "PersistentVolumeClaim/ada-billing-data"), "{applied:?}");
 }
-
 /// The applier's own boundary, exercised over HTTP rather than as a unit test:
 /// it refuses a payload aimed at a namespace the request does not name.
 #[test]

@@ -12,12 +12,10 @@
 //!   applier-secret  shared secret; the applier rejects requests without it
 //!   registry        OCI prefix images are pushed to and pinned from
 //!   cluster-suffix  DNS suffix for the operator's Host routing
-//!   grant-shared-state  bind `wasi:keyvalue` / `wasmcloud:messaging` for tenant
-//!                   code (default false). Only correct when the tenant owns its
-//!                   host environment — on a shared host it lets tenants read each
-//!                   other's data, measured (docs/adr/0012, docs/adr/0013)
-//!   allow-multi-tenant  permit a second tenant while grant-shared-state is on;
-//!                   the release gate ADR-0008 asked for (default false)
+//!   scheduler-nats  the platform's control-plane NATS, which each app's host dials
+//!                   to register and receive scheduling (no application data)
+//!   host-image      `wash` image for the per-application host pod (ADR-0014)
+//!   nats-image      NATS image for that pod's private data-plane sidecar
 
 #[allow(warnings)]
 mod bindings;
@@ -103,39 +101,6 @@ fn cfg(key: &str, default: &str) -> String {
     config::get(key).ok().flatten().unwrap_or_else(|| default.to_string())
 }
 
-/// May tenant code be granted host interfaces whose isolation the host does NOT
-/// enforce — `wasi:keyvalue`, `wasmcloud:messaging`? Only true when every tenant has
-/// a host to itself (a dedicated `environment` with its own data NATS). Default
-/// false: on a shared host these are shared state, measured (ADR-0012/0013).
-fn grants_shared_state() -> bool {
-    cfg("grant-shared-state", "false") == "true"
-}
-
-/// Host interfaces the host isolates per workload, so they are safe on a shared host.
-const TENANT_GRANTABLE: &[(&str, &str)] =
-    &[("wasi", "http"), ("wasi", "config"), ("wasi", "blobstore")];
-
-/// What a graph would need that the platform will not grant it here. Returns the
-/// offending interfaces so the refusal can name them.
-fn ungrantable(parts: &[Part]) -> Vec<String> {
-    if grants_shared_state() {
-        return Vec::new();
-    }
-    let mut out: Vec<String> = Vec::new();
-    for p in parts {
-        for h in &p.host_imports {
-            let ok = TENANT_GRANTABLE
-                .iter()
-                .any(|(ns, pkg)| *ns == h.namespace && *pkg == h.pkg);
-            let raw = format!("{}:{}/{}", h.namespace, h.pkg, h.iface);
-            if !ok && !out.contains(&raw) {
-                out.push(raw);
-            }
-        }
-    }
-    out
-}
-
 fn usage() -> Outcome {
     Outcome::Json(
         200,
@@ -186,7 +151,8 @@ fn register(request: &IncomingRequest) -> Outcome {
                 let doc = json!({
                     "tenant": tenant, "owner": p.subject, "created": now(),
                     "plan": { "replicas": 1, "pool_size": 8, "max_invocations": 200,
-                              "max_deployments": DEPLOYMENT_BUDGET, "egress": [] },
+                              "max_deployments": DEPLOYMENT_BUDGET, "egress": [],
+                              "storage": "1Gi", "host_cpu": "100m", "host_memory": "256Mi" },
                     "namespace_applied": false
                 });
                 let _ = records::create(ACCOUNTS, &doc.to_string(), &["tenant".to_string()]);
@@ -529,6 +495,11 @@ fn plan_of(tenant: &str) -> TenantPlan {
                 .as_array()
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default(),
+            // An application is a pod now (ADR-0014), so a plan prices its host and
+            // its storage directly.
+            storage: p["storage"].as_str().unwrap_or("1Gi").to_string(),
+            host_cpu: p["host_cpu"].as_str().unwrap_or("100m").to_string(),
+            host_memory: p["host_memory"].as_str().unwrap_or("256Mi").to_string(),
         },
         max_deployments: p["max_deployments"].as_u64().unwrap_or(DEPLOYMENT_BUDGET),
     }
@@ -726,29 +697,6 @@ fn deployment_save(request: &IncomingRequest, id: &str) -> Outcome {
     let Some((rec, rev, mut doc)) = owned_deployment(&p, id) else {
         return Outcome::Err(404, "not_found".into());
     };
-    // ADR-0013: multi-tenancy is safe here BECAUSE tenant code is not granted any
-    // host interface whose isolation the host doesn't enforce. If an operator turns
-    // that grant on (a dedicated host per tenant), the old blanket gate applies
-    // again, because then two tenants on one host would share state for real.
-    if grants_shared_state() && cfg("allow-multi-tenant", "false") != "true" {
-        let tenants = records::list_records(ACCOUNTS, 100, "")
-            .map(|page| page.entries)
-            .unwrap_or_default();
-        let first = tenants
-            .iter()
-            .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok())
-            .min_by_key(|v| v["created"].as_u64().unwrap_or(0))
-            .and_then(|v| v["tenant"].as_str().map(String::from))
-            .unwrap_or_default();
-        if tenants.len() > 1 && first != p.tenant {
-            return Outcome::Err(
-                403,
-                format!(
-                    "grant-shared-state is on, so a second tenant on this host would share `{first}`'s keyvalue (docs/adr/0012). Give each tenant its own host environment, or set allow-multi-tenant=true if they are already separated."
-                ),
-            );
-        }
-    }
     // A save may also update the graph in the same request.
     if let Ok(b) = body(request) {
         for key in ["nodes", "edges", "strategy"] {
@@ -765,19 +713,6 @@ fn deployment_save(request: &IncomingRequest, id: &str) -> Outcome {
         Ok(parts) => parts,
         Err(o) => return o,
     };
-    // Fail fast with the reason. The renderer would omit these anyway, and the host
-    // would then refuse to instantiate the component ("a matching implementation was
-    // not found in the linker") — a 409 here beats a workload stuck at ready=0.
-    let denied = ungrantable(&parts);
-    if !denied.is_empty() {
-        return Outcome::Err(
-            409,
-            format!(
-                "this graph needs {}, which the platform does not grant on a shared host: the bucket/subject is chosen by the component and the host applies no per-workload restriction, so granting it would let tenants read each other's data (docs/adr/0013). Options: use your own database over an egress allow-list, or ask for a dedicated host environment.",
-                denied.join(", ")
-            ),
-        );
-    }
     let tenant_plan = plan_of(&p.tenant);
     let name = doc["name"].as_str().unwrap_or("app").to_string();
     let suffix = cfg("cluster-suffix", "svc.cluster.local");
@@ -790,9 +725,14 @@ fn deployment_save(request: &IncomingRequest, id: &str) -> Outcome {
         parts: &parts,
         plan: &tenant_plan,
         http_host: &http_host,
-        // Shared-host scheduling: platform infrastructure, not tenant input.
-        environment: &cfg("environment", ""),
-        grant_shared_state: grants_shared_state(),
+        // The app's own host is rendered alongside it; these name the images and the
+        // control-plane bus it registers on (ADR-0014). Platform config, never tenant
+        // input — the applier independently refuses any other image.
+        scheduler_nats: &cfg("scheduler-nats", "nats://nats.platform.svc.cluster.local:4222"),
+        host_image: &cfg("host-image", "ghcr.io/wasmcloud/wash:2.5.2"),
+        nats_image: &cfg("nats-image", "docker.io/nats:2.12.8-alpine"),
+        platform_ns: &cfg("platform-namespace", "platform"),
+        max_deployments: tenant_plan.max_deployments as u32,
     }) {
         Ok(m) => m,
         Err(e) => return Outcome::Err(422, e.detail()),
