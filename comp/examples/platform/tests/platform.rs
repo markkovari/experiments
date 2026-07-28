@@ -52,6 +52,7 @@ fn req(method: &str, path: &str, token: Option<&str>, body: Option<Value>) -> (u
     let mut r = match method {
         "GET" => ureq::get(&url),
         "POST" => ureq::post(&url),
+        "DELETE" => ureq::delete(&url),
         m => panic!("method {m}"),
     };
     if let Some(t) = token {
@@ -272,7 +273,7 @@ fn platform_signs_in_renders_and_applies() {
     // shared bus, which is exactly the leak ADR-0012 measured.
     assert!(yaml.contains("kind: Deployment"), "the app's host: {yaml}");
     assert!(yaml.contains("--data-nats-url=nats://127.0.0.1:4222"), "{yaml}");
-    assert!(yaml.contains("      environment: ada-api\n"), "workload pinned to it: {yaml}");
+    assert!(yaml.contains("      environment: app-ada-api\n"), "workload pinned to it: {yaml}");
     assert!(yaml.contains("kind: PersistentVolumeClaim"), "durable storage: {yaml}");
     // The namespace and its guardrails travel with it, or the host pod has nowhere to
     // run and no route to the control plane.
@@ -400,17 +401,49 @@ fn platform_signs_in_renders_and_applies() {
     let a = text_of(&format!("/api/deployments/{id}/manifests"), &token);
     let b = text_of(&format!("/api/deployments/{bid}/manifests"), &token);
     // Separate hosts, separate storage, separate scheduling target.
-    assert!(a.contains("environment: ada-api") && b.contains("environment: ada-billing"), "{b}");
-    assert!(a.contains("ada-api-host") && b.contains("ada-billing-host"));
-    assert!(a.contains("ada-api-data") && b.contains("ada-billing-data"), "separate claims");
-    assert!(!b.contains("ada-api"), "no name from the other app appears: {b}");
+    assert!(a.contains("environment: app-ada-api") && b.contains("environment: app-ada-billing"), "{b}");
+    assert!(a.contains("app-ada-api-host") && b.contains("app-ada-billing-host"));
+    assert!(a.contains("app-ada-api-data") && b.contains("app-ada-billing-data"), "separate claims");
+    assert!(!b.contains("app-ada-api"), "no name from the other app appears: {b}");
     // Both bind keyvalue, which is only sound because neither shares a bus.
     assert!(a.contains("interfaces: [store]") && b.contains("interfaces: [store]"));
     assert!(a.contains("--data-nats-url=nats://127.0.0.1:4222"));
     // The applier accepted the host pod, which means its image allow-list matched.
     let applied = saved2["applier"]["applied"].as_array().unwrap();
-    assert!(applied.iter().any(|x| x == "Deployment/ada-billing-host"), "{applied:?}");
-    assert!(applied.iter().any(|x| x == "PersistentVolumeClaim/ada-billing-data"), "{applied:?}");
+    assert!(applied.iter().any(|x| x == "Deployment/app-ada-billing-host"), "{applied:?}");
+    assert!(applied.iter().any(|x| x == "PersistentVolumeClaim/app-ada-billing-data"), "{applied:?}");
+    // Every object carries the env, which is what makes deleting an app one selector.
+    assert!(b.contains("platform.comp/env: app-ada-billing"), "{b}");
+
+    // ===== 0015: deleting an app removes its footprint, then its records =====
+    // Until this existed there was no delete path at all, so an app's host pod, claim
+    // and self-registered `Host` outlived it (measured on a cluster).
+    let (code, deleted) = req("DELETE", &format!("/api/deployments/{bid}"), Some(&token), None);
+    assert_eq!(code, 200, "{deleted}");
+    assert_eq!(deleted["env"], "app-ada-billing");
+    assert_eq!(deleted["applier"]["validated_only"], true, "{deleted}");
+    assert_eq!(deleted["applier"]["env"], "app-ada-billing");
+
+    // The deployment and its revisions are gone; the tenant's other app is untouched.
+    assert_eq!(req("GET", &format!("/api/deployments/{bid}"), Some(&token), None).0, 404);
+    assert_eq!(req("GET", &format!("/api/deployments/{id}"), Some(&token), None).0, 200);
+    let revs = json_of(
+        ureq::get(&format!("http://{PLATFORM}/api/internal/revisions"))
+            .set("x-platform-secret", SECRET)
+            .call()
+            .expect("revisions"),
+    );
+    let list = revs["revisions"].as_array().cloned().unwrap_or_default();
+    assert!(
+        list.iter().all(|r| r["deployment"] != json!(bid)),
+        "a deleted app must leave no revision — the reaper reads this to decide what is live: {list:?}"
+    );
+    // ...and what remains still carries its env, or the reaper would call it an orphan.
+    assert!(list.iter().all(|r| r["env"].as_str().is_some_and(|e| e.starts_with("app-"))), "{list:?}");
+
+    // Another tenant cannot delete it.
+    let (code, _) = req("DELETE", &format!("/api/deployments/{id}"), Some(&eve), None);
+    assert_eq!(code, 404, "eve must not be able to delete ada's app");
 }
 /// The applier's own boundary, exercised over HTTP rather than as a unit test:
 /// it refuses a payload aimed at a namespace the request does not name.

@@ -76,6 +76,7 @@ impl Guest for Component {
             (Method::Get, ["api", "deployments", id]) => deployment_get(&request, id),
             (Method::Post, ["api", "deployments", id, "save"]) => deployment_save(&request, id),
             (Method::Get, ["api", "deployments", id, "manifests"]) => manifests(&request, id),
+            (Method::Delete, ["api", "deployments", id]) => deployment_delete(&request, id),
 
             // The applier polls this to re-apply current revisions (ADR-0004).
             (Method::Get, ["api", "internal", "revisions"]) => internal_revisions(&request),
@@ -744,6 +745,10 @@ fn deployment_save(request: &IncomingRequest, id: &str) -> Outcome {
         "deployment": id, "tenant": p.tenant, "revision": next,
         "strategy": strategy.as_str(), "manifests": manifests,
         "namespace": render::namespace_for(&p.tenant), "saved": now(),
+        // The applier's host reaper needs the live set of environments, and a
+        // revision is the only thing it polls. Without this, every host looks like
+        // an orphan.
+        "env": render::env_for(&p.tenant, &name),
     });
     let _ = records::create(REVISIONS, &revision_doc.to_string(), &["deployment".to_string(), "tenant".to_string()]);
 
@@ -819,15 +824,66 @@ fn internal_revisions(request: &IncomingRequest) -> Outcome {
     )
 }
 
+
+/// Delete a deployment: its Kubernetes footprint, then its records.
+///
+/// The footprint goes first. If it were the other way round and the prune failed, the
+/// platform would have forgotten an app that is still running — an orphan nothing
+/// would ever clean up, because the reaper's idea of "live" comes from the records
+/// this would have deleted.
+///
+/// The tenant's namespace, quota and NetworkPolicy stay: they belong to the tenant,
+/// not to this app, and the tenant's other apps are still in there.
+fn deployment_delete(request: &IncomingRequest, id: &str) -> Outcome {
+    let Some(p) = caller(request) else {
+        return Outcome::Err(401, "unauthorized".into());
+    };
+    let Some((rec, _rev, doc)) = owned_deployment(&p, id) else {
+        return Outcome::Err(404, "not_found".into());
+    };
+    let name = doc["name"].as_str().unwrap_or("app").to_string();
+    let ns = render::namespace_for(&p.tenant);
+    let env = render::env_for(&p.tenant, &name);
+
+    let pruned = match prune_via_applier(&ns, &env) {
+        Ok(v) => v,
+        // Refuse rather than half-delete: the records are the reaper's source of
+        // truth, so dropping them now would strand whatever is still running.
+        Err(e) => return Outcome::Err(502, format!("nothing was deleted: {e}")),
+    };
+
+    for e in records::list_records(REVISIONS, 1000, "").map(|pg| pg.entries).unwrap_or_default() {
+        if let Ok(v) = serde_json::from_str::<Value>(&e.data) {
+            if v["deployment"] == json!(id) {
+                let _ = records::delete(REVISIONS, &e.id);
+            }
+        }
+    }
+    let _ = records::delete(DEPLOYMENTS, &rec);
+    Outcome::Json(200, json!({ "deleted": id, "env": env, "applier": pruned }).to_string())
+}
+
 // ---- the applier hop (ADR-0003) --------------------------------------------
 
 fn apply_via_applier(namespace: &str, manifests: &str) -> Result<Value, String> {
+    post_to_applier("/apply", &json!({ "namespace": namespace, "manifests": manifests }))
+        .map_err(|e| if e.contains("no applier-url") { "no applier-url configured — nothing was applied".to_string() } else { e })
+}
+
+/// Delete one application's footprint (ADR-0015's reconciliation). The applier
+/// re-derives what to delete from the env label, so the platform sends a selector
+/// rather than a list of names it could get wrong.
+fn prune_via_applier(namespace: &str, env: &str) -> Result<Value, String> {
+    post_to_applier("/prune", &json!({ "namespace": namespace, "env": env }))
+}
+
+fn post_to_applier(path: &str, body: &Value) -> Result<Value, String> {
     let url = cfg("applier-url", "");
     if url.is_empty() {
-        return Err("no applier-url configured — nothing was applied".into());
+        return Err("no applier-url configured".into());
     }
     let secret = cfg("applier-secret", "");
-    let payload = json!({ "namespace": namespace, "manifests": manifests }).to_string();
+    let payload = body.to_string();
 
     let (scheme, rest) = if let Some(r) = url.strip_prefix("https://") {
         (Scheme::Https, r)
@@ -848,7 +904,7 @@ fn apply_via_applier(namespace: &str, manifests: &str) -> Result<Value, String> 
     let _ = req.set_method(&Method::Post);
     let _ = req.set_scheme(Some(&scheme));
     let _ = req.set_authority(Some(&authority));
-    let _ = req.set_path_with_query(Some(&format!("{base}/apply")));
+    let _ = req.set_path_with_query(Some(&format!("{base}{path}")));
     // Order matters and is not optional: take the body handles, hand the request to
     // the host, and only THEN write. The outgoing stream is drained by the host as
     // part of sending, so writing more than the initial buffer BEFORE `handle`

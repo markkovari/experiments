@@ -203,6 +203,9 @@ impl RenderError {
     }
 }
 
+/// Reserved prefix for every host environment the platform owns. See `env_for`.
+pub const ENV_PREFIX: &str = "app-";
+
 /// A tenant's namespace. Derived, never tenant-supplied (ADR-0002).
 pub fn namespace_for(tenant: &str) -> String {
     format!("tenant-{}", dns_label(tenant))
@@ -213,7 +216,13 @@ pub fn namespace_for(tenant: &str) -> String {
 /// never supplied: this string IS the isolation boundary (ADR-0014), so a tenant
 /// being able to set it would be a tenant being able to join someone else's host.
 pub fn env_for(tenant: &str, name: &str) -> String {
-    let e = format!("{}-{}", dns_label(tenant), dns_label(name));
+    // The `app-` prefix is load-bearing, not decoration. A `Host` object is written by
+    // the operator from what the host advertises, so the platform cannot label it —
+    // and the reaper that deletes orphaned Hosts therefore needs a positive marker of
+    // "this is one of mine". The prefix is it: the reaper only ever considers Hosts
+    // whose environment starts with `app-`, which makes the chart's own hosts
+    // (`jobs`, `eshop`, `default`) untouchable by construction rather than by care.
+    let e = format!("{}{}-{}", ENV_PREFIX, dns_label(tenant), dns_label(name));
     // A DNS label ceiling, since it names a Deployment and a PVC.
     e.chars().take(53).collect::<String>().trim_matches('-').to_string()
 }
@@ -298,6 +307,9 @@ pub fn render(input: &RenderInput) -> Result<String, RenderError> {
     s.push_str("    platform.comp/managed: \"true\"\n");
     s.push_str(&format!("    platform.comp/tenant: {}\n", dns_label(input.tenant)));
     s.push_str(&format!("    platform.comp/strategy: {}\n", input.strategy.as_str()));
+    // Every object of one app carries its env, so deleting an app is one label
+    // selector rather than a list of names the platform has to remember correctly.
+    s.push_str(&format!("    platform.comp/env: {env}\n"));
     s.push_str("spec:\n");
     s.push_str(&format!("  replicas: {}\n", input.plan.replicas.max(1)));
     s.push_str("  template:\n    spec:\n");
@@ -388,6 +400,7 @@ pub fn render(input: &RenderInput) -> Result<String, RenderError> {
         s.push_str(&format!("  name: {}\n", input.name));
         s.push_str(&format!("  namespace: {ns}\n"));
         s.push_str("  labels:\n    platform.comp/managed: \"true\"\n");
+        s.push_str(&format!("    platform.comp/env: {env}\n"));
         s.push_str("spec:\n  ports:\n");
         s.push_str("    - name: http\n      port: 80\n      targetPort: 9191\n");
     }
@@ -648,7 +661,7 @@ mod tests {
         assert!(out.contains("package: config"));
         assert!(out.contains("package: blobstore"));
         assert!(out.contains("package: http"));
-        assert!(out.contains("buckets: b-acme-api"), "per-app, not per-tenant: {out}");
+        assert!(out.contains("buckets: b-app-acme-api"), "per-app, not per-tenant: {out}");
     }
 
     #[test]
@@ -662,7 +675,7 @@ mod tests {
         // A host pod of its own, named for the app, in the TENANT's namespace — which
         // is also what makes the namespace NetworkPolicy apply to it at last.
         assert!(out.contains("kind: Deployment"), "{out}");
-        assert!(out.contains("name: acme-api-host"), "{out}");
+        assert!(out.contains("name: app-acme-api-host"), "{out}");
         // Every namespaced object lands in the tenant's namespace and nowhere else.
         // `\n  namespace: ` is the metadata form; hostInterfaces entries use
         // `- namespace: wasi` at a deeper indent and must not be caught here.
@@ -684,15 +697,15 @@ mod tests {
         assert!(out.contains("restartPolicy: Always"), "{out}");
         // Durable: a restart must not lose the app's records.
         assert!(out.contains("kind: PersistentVolumeClaim"));
-        assert!(out.contains("name: acme-api-data"));
-        assert!(out.contains("claimName: acme-api-data"));
+        assert!(out.contains("name: app-acme-api-data"));
+        assert!(out.contains("claimName: app-acme-api-data"));
         // JetStream on a ReadWriteOnce claim cannot tolerate two hosts at once.
         assert!(out.contains("type: Recreate"), "{out}");
 
         // Compute: the workload is pinned to this host and nothing else.
-        assert!(out.contains("      environment: acme-api\n"), "{out}");
-        assert!(out.contains("--environment=acme-api"), "{out}");
-        assert!(out.contains("--host-group=acme-api"), "{out}");
+        assert!(out.contains("      environment: app-acme-api\n"), "{out}");
+        assert!(out.contains("--environment=app-acme-api"), "{out}");
+        assert!(out.contains("--host-group=app-acme-api"), "{out}");
     }
 
     #[test]
@@ -707,9 +720,9 @@ mod tests {
         b.name = "billing";
         let (a, b) = (render(&a).unwrap(), render(&b).unwrap());
 
-        assert!(a.contains("environment: acme-orders") && b.contains("environment: acme-billing"));
-        assert!(a.contains("acme-orders-data") && b.contains("acme-billing-data"), "separate claims");
-        assert!(a.contains("acme-orders-host") && b.contains("acme-billing-host"), "separate hosts");
+        assert!(a.contains("environment: app-acme-orders") && b.contains("environment: app-acme-billing"));
+        assert!(a.contains("app-acme-orders-data") && b.contains("app-acme-billing-data"), "separate claims");
+        assert!(a.contains("app-acme-orders-host") && b.contains("app-acme-billing-host"), "separate hosts");
         assert!(!a.contains("billing") && !b.contains("orders"), "no name crosses over");
     }
 
@@ -788,10 +801,10 @@ mod tests {
         // blobstore containers are allow-listed per APP, not per tenant: two apps of
         // one tenant are two boundaries (ADR-0014), which is the level the cluster
         // test failed at when it was per-tenant (ADR-0012).
-        assert!(out.contains("buckets: b-acme-api"), "blobstore container allow-list: {out}");
+        assert!(out.contains("buckets: b-app-acme-api"), "blobstore container allow-list: {out}");
         // keyvalue carries no bucket key, because nothing reads one — the boundary is
         // the private data NATS in the app's own pod, not a manifest field.
-        assert!(!out.contains("bucket: b-acme-api"), "a key nothing reads is worse than none: {out}");
+        assert!(!out.contains("bucket: b-app-acme-api"), "a key nothing reads is worse than none: {out}");
         assert!(out.contains("interfaces: [store]"), "and it IS bound now: {out}");
 
         // Egress in both forms — a bare-only list silently fails closed on a port.
@@ -903,8 +916,8 @@ mod tests {
     #[test]
     fn names_are_derived_never_taken() {
         assert_eq!(namespace_for("ACME Corp."), "tenant-acme-corp");
-        assert_eq!(bucket_for("ACME Corp.", "Orders v2"), "b-acme-corp-orders-v2");
-        assert_eq!(env_for("ACME Corp.", "Orders v2"), "acme-corp-orders-v2");
+        assert_eq!(bucket_for("ACME Corp.", "Orders v2"), "b-app-acme-corp-orders-v2");
+        assert_eq!(env_for("ACME Corp.", "Orders v2"), "app-acme-corp-orders-v2");
         // A hostile deployment name cannot escape its namespace.
         let parts = vec![part("api", false, vec![])];
         let plan = Plan::default();

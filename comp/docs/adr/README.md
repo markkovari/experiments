@@ -23,6 +23,7 @@ inside it. Where they disagree, the ADR wins.
 | [0013](0013-unenforceable-capabilities-are-denied-by-omission.md) | A capability the host cannot partition is denied by omission | superseded by [0014](0014-an-application-owns-a-host.md) |
 | [0014](0014-an-application-owns-a-host.md) | An application owns a host | accepted, confirmed by [0015](0015-a-bucket-name-is-not-a-boundary.md) |
 | [0015](0015-a-bucket-name-is-not-a-boundary.md) | A bucket name is not a boundary, and `hostInterfaces[].name` does not work | accepted |
+| [0016](0016-deleting-an-app-is-reconciled-not-remembered.md) | Deleting an app is reconciled, not remembered | accepted |
 
 ## The shape these add up to
 
@@ -50,6 +51,7 @@ inside it. Where they disagree, the ADR wins.
 | isolation stamp (namespace, egress, blobstore containers) | ADR-0008 | **done** — and now per-app rather than per-tenant (ADR-0014) |
 | a host per application (private data NATS, own engine, own endpoint) | ADR-0014 | **done and measured on a cluster** (ADR-0015) — a rendered host pod registers, a workload pins to it, and an app on its own bus cannot read another's buckets |
 | image allow-list on the applier | ADR-0014 | **done** — a `Deployment` may only run the platform's two pinned images, and no host namespaces, privilege, hostPath or service account |
+| delete an app (prune + orphan host reaping) | ADR-0016 | **done** — `DELETE /api/deployments/{id}`, label-scoped prune, and a sweep in the reconcile loop |
 | e2e | `examples/platform/tests/platform.rs` | **done** — no cluster required |
 | registry push (the digest source) | — | **the gap.** `POST /api/internal/pushed` is the seam; nothing pushes yet |
 | `public` visibility | ADR-0007 | refused with `501` until signing exists |
@@ -100,10 +102,11 @@ client, so the default loop cannot touch a cluster), `just e2e-platform`,
 - **A host's bucket namespace is flat and guest-addressable.** Any component can
   `open()` any name on its host, including one belonging to another app. This is why a
   naming scheme is not an isolation mechanism (ADR-0015).
-- **Deleting an app leaves its `Host` object behind.** Both experiment hosts stayed
-  registered in the operator's namespace after their pods were gone. The platform
-  cannot currently clean these up — `Host` is not on the applier's allow-list and
-  lives outside the tenant namespace. **Open.**
+- ~~Deleting an app leaves its `Host` object behind~~ → **ADR-0016**, which also
+  supplied the delete path the platform turned out not to have at all. Two residual
+  risks in it, both named there: the reap has only been tested against hosts whose
+  pods were already gone (a live host re-registering is an inference), and deleting an
+  app destroys its PVC, which is irreversible and needs to look like it in the UI.
 - **Host plugins are not an authoring surface** — "plugin" in the v2 model means the
   host's built-ins, and nothing here has ever registered one (ADR-0005). Per-tenant
   KV backends wait on upstream #5051.

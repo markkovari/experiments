@@ -1264,8 +1264,8 @@
         "description": ""
       }
     ],
-    "wasm_size_bytes": 298476,
-    "wasm_sha256_12": "7ab598b68387",
+    "wasm_size_bytes": 303405,
+    "wasm_sha256_12": "57db2a26bb91",
     "reusable_as_is": true
   },
   {

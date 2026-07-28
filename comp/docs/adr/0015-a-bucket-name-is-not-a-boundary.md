@@ -117,10 +117,13 @@ inside the container where `127.0.0.1` means what we meant.
   hardcode their bucket.
 - **A deleted host leaves its `Host` object behind.** Both experiment hosts remained
   registered in the operator's namespace after their pods and namespace were deleted,
-  and had to be removed by hand. The platform will accumulate these as apps are
-  deleted, so teardown needs to delete the `Host` too — which the platform cannot
-  currently do, since `Host` is not on the applier's allow-list and lives in the
-  operator's namespace, not the tenant's. **Open.**
+  and had to be removed by hand — nothing else reaps them. Chasing this turned up that
+  the platform had **no delete path at all**, so every app ever created leaked its
+  whole footprint. Resolved by
+  [ADR-0016](0016-deleting-an-app-is-reconciled-not-remembered.md): deletion is a
+  label-scoped prune plus an orphan sweep in the reconcile loop, with the reserved
+  `app-` environment prefix as the ownership marker that keeps the sweep away from
+  hosts the platform does not own.
 
 ## Alternatives
 

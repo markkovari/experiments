@@ -29,7 +29,7 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
-use kube::api::{Api, DynamicObject, GroupVersionKind, Patch, PatchParams};
+use kube::api::{Api, DeleteParams, DynamicObject, GroupVersionKind, ListParams, Patch, PatchParams};
 use kube::core::ApiResource;
 use kube::Client;
 use serde::{Deserialize, Serialize};
@@ -97,6 +97,41 @@ struct Args {
 
     #[arg(long, default_value = "docker.io/nats:2.12.8-alpine")]
     nats_image: String,
+
+    /// Namespace the runtime-operator runs in. The ONE place outside a tenant
+    /// namespace this process touches, and only to delete orphaned `Host` objects
+    /// (see `reap_hosts`) — never to create or patch anything.
+    #[arg(long, default_value = "platform")]
+    operator_namespace: String,
+
+    /// Reserved prefix marking host environments the platform owns. A `Host` whose
+    /// environment does not start with this is never considered for deletion, which
+    /// is what keeps the chart's own hosts safe.
+    #[arg(long, default_value = "app-")]
+    env_prefix: String,
+
+    /// Disable orphan reaping entirely.
+    #[arg(long)]
+    no_reap: bool,
+}
+
+/// Delete one application's whole footprint. The platform sends the env; every
+/// object the renderer emits carries it as `platform.comp/env`, so this needs no
+/// list of names — which matters because a list the platform got wrong would leave
+/// objects behind forever.
+#[derive(Deserialize)]
+struct PruneRequest {
+    namespace: String,
+    env: String,
+}
+
+#[derive(Serialize)]
+struct PruneReport {
+    namespace: String,
+    env: String,
+    deleted: Vec<String>,
+    dry_run: bool,
+    validated_only: bool,
 }
 
 #[derive(Deserialize)]
@@ -143,6 +178,7 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/apply", post(apply_handler))
+        .route("/prune", post(prune_handler))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&args.addr).await?;
@@ -188,18 +224,165 @@ async fn apply_handler(
     }
 }
 
+
+async fn prune_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<PruneRequest>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.args.secret) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "bad or missing x-platform-secret" }))).into_response();
+    }
+    match prune(&state, &req).await {
+        Ok(report) => (StatusCode::OK, Json(json!(report))).into_response(),
+        Err(e) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": "rejected", "detail": format!("{e:#}") })),
+        )
+            .into_response(),
+    }
+}
+
+/// Delete one application: every object labelled with its env, plus the `Host` the
+/// operator wrote when its pod registered.
+///
+/// The env is validated the same way a namespace is, and for the same reason — it is
+/// a selector and a cross-namespace reach, so a malformed one must be refused rather
+/// than interpreted. Two rules do the work:
+///
+/// * `env` must carry the reserved prefix, so this can never select a host the chart
+///   owns; and
+/// * `env` must belong to `namespace` (`app-<tenant>-<app>` inside `tenant-<tenant>`),
+///   so one tenant's prune cannot name another tenant's app.
+async fn prune(state: &AppState, req: &PruneRequest) -> Result<PruneReport> {
+    let ns = req.namespace.trim();
+    let env = req.env.trim();
+    check_namespace(ns, &state.args.namespace_prefix)?;
+    check_env(env, ns, &state.args.namespace_prefix, &state.args.env_prefix)?;
+
+    if state.args.validate_only {
+        return Ok(PruneReport {
+            namespace: ns.to_string(),
+            env: env.to_string(),
+            deleted: vec![format!("(validate-only) everything labelled platform.comp/env={env}")],
+            dry_run: false,
+            validated_only: true,
+        });
+    }
+    let client = state.client.as_ref().expect("client present unless validate-only");
+    let params = if state.args.dry_run { DeleteParams::default().dry_run() } else { DeleteParams::default() };
+    let selector = ListParams::default().labels(&format!("platform.comp/env={env}"));
+    let mut deleted = Vec::new();
+
+    for (api_version, kind) in ALLOWED_KINDS {
+        // The namespace itself is never pruned: it holds the tenant's other apps, and
+        // its quota and NetworkPolicy are the tenant's, not this app's.
+        if *kind == "Namespace" || *kind == "ResourceQuota" || *kind == "NetworkPolicy" {
+            continue;
+        }
+        let gvk = parse_gvk(api_version, kind)?;
+        let ar = ApiResource::from_gvk(&gvk);
+        let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), ns, &ar);
+        let found = api
+            .list(&selector)
+            .await
+            .with_context(|| format!("listing {kind} in {ns}"))?;
+        for obj in found {
+            let name = obj.metadata.name.clone().unwrap_or_default();
+            api.delete(&name, &params)
+                .await
+                .with_context(|| format!("deleting {kind}/{name} in {ns}"))?;
+            deleted.push(format!("{kind}/{name}"));
+        }
+    }
+
+    deleted.extend(delete_hosts_for(state, &[env.to_string()], false).await?);
+    Ok(PruneReport {
+        namespace: ns.to_string(),
+        env: env.to_string(),
+        deleted,
+        dry_run: state.args.dry_run,
+        validated_only: false,
+    })
+}
+
+fn check_namespace(ns: &str, prefix: &str) -> Result<()> {
+    if !ns.starts_with(prefix) {
+        bail!("namespace {ns:?} does not start with {prefix:?} — the applier only writes platform-managed namespaces");
+    }
+    if ns.is_empty() || !ns.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+        bail!("namespace {ns:?} is not a DNS label");
+    }
+    Ok(())
+}
+
+/// An env is only prunable if it is the platform's AND it belongs to this namespace.
+fn check_env(env: &str, ns: &str, ns_prefix: &str, env_prefix: &str) -> Result<()> {
+    if env.is_empty() || env.len() > 63 || !env.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+        bail!("env {env:?} is not a DNS label");
+    }
+    if !env.starts_with(env_prefix) {
+        bail!("env {env:?} does not start with {env_prefix:?} — only platform-owned host environments can be pruned");
+    }
+    // `tenant-acme` must own `app-acme-<app>`, so `app-globex-x` is refused here.
+    let tenant = ns.strip_prefix(ns_prefix).unwrap_or_default();
+    let owner = format!("{env_prefix}{tenant}-");
+    if !env.starts_with(&owner) {
+        bail!("env {env:?} does not belong to namespace {ns:?} (expected it to start with {owner:?})");
+    }
+    Ok(())
+}
+
+/// Delete `Host` objects for the given environments — or, when `orphans_of` is true,
+/// every platform-owned Host whose environment is NOT in the list.
+///
+/// This is the one place the applier reaches outside a tenant namespace, so it is
+/// fenced twice: only in `--operator-namespace`, and only for Hosts whose
+/// `spec.environment` carries the reserved prefix. A Host is written by the operator
+/// from what a host advertises, so the platform cannot label it and cannot name it
+/// (the name is generated) — matching on the environment is the only handle there is.
+async fn delete_hosts_for(
+    state: &AppState,
+    envs: &[String],
+    orphans_of: bool,
+) -> Result<Vec<String>> {
+    if state.args.no_reap {
+        return Ok(Vec::new());
+    }
+    let client = state.client.as_ref().context("no client")?;
+    let gvk = GroupVersionKind::gvk("runtime.wasmcloud.dev", "v1alpha1", "Host");
+    let ar = ApiResource::from_gvk(&gvk);
+    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), &state.args.operator_namespace, &ar);
+    let params = if state.args.dry_run { DeleteParams::default().dry_run() } else { DeleteParams::default() };
+
+    let mut deleted = Vec::new();
+    for host in api.list(&ListParams::default()).await.context("listing Hosts")? {
+        let env = host
+            .data
+            .get("environment")
+            .and_then(|e| e.as_str())
+            .unwrap_or_default()
+            .to_string();
+        // The fence: anything not ours is invisible to this function.
+        if !env.starts_with(&state.args.env_prefix) {
+            continue;
+        }
+        let matches = envs.iter().any(|e| *e == env);
+        if matches == orphans_of {
+            continue;
+        }
+        let name = host.metadata.name.clone().unwrap_or_default();
+        api.delete(&name, &params).await.with_context(|| format!("deleting Host/{name}"))?;
+        eprintln!("applier: reaped Host/{name} (environment={env})");
+        deleted.push(format!("Host/{name}"));
+    }
+    Ok(deleted)
+}
+
 /// Parse, validate, then (unless validate-only) server-side apply.
 async fn apply(state: &AppState, req: &ApplyRequest) -> Result<ApplyReport> {
     let ns = req.namespace.trim();
-    if !ns.starts_with(&state.args.namespace_prefix) {
-        bail!(
-            "namespace {ns:?} does not start with {:?} — the applier only writes platform-managed namespaces",
-            state.args.namespace_prefix
-        );
-    }
-    if !ns.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
-        bail!("namespace {ns:?} is not a DNS label");
-    }
+    check_namespace(ns, &state.args.namespace_prefix)?;
 
     let objects = parse_objects(&req.manifests)?;
     if objects.is_empty() {
@@ -417,6 +600,9 @@ async fn reapply_loop(state: Arc<AppState>, platform_url: String) {
                 None
             }
         };
+        // A failed poll means we know nothing, so we change nothing. That matters far
+        // more for reaping than for applying: treating "the poll failed" as "no apps
+        // exist" would delete every platform-owned Host on the cluster.
         let Some(revisions) = revisions else { continue };
         let list = revisions["revisions"].as_array().cloned().unwrap_or_default();
         let (mut ok, mut failed) = (0usize, 0usize);
@@ -437,6 +623,32 @@ async fn reapply_loop(state: Arc<AppState>, platform_url: String) {
         }
         if ok + failed > 0 {
             eprintln!("applier: re-applied {ok} deployment(s), {failed} failed");
+        }
+
+        // Reconcile the hosts. A `Host` is self-registered by a running host pod, so
+        // deleting an app's pod leaves the object behind — and nothing else reaps it
+        // (measured: two survived a namespace deletion, ADR-0015). The live set is
+        // whatever the platform says it has; every platform-owned Host outside that
+        // set is an orphan, whether it was left by a delete that half-finished, a
+        // crash, or a namespace someone removed by hand.
+        //
+        // Deliberately derived from the revisions rather than from delete calls: a
+        // reconciler that only cleans up when told never converges after the one
+        // failure that matters.
+        if !state.args.no_reap && !state.args.validate_only {
+            let live: Vec<String> = revisions["revisions"]
+                .as_array()
+                .map(|a| {
+                    a.iter().filter_map(|r| r["env"].as_str().map(String::from)).collect()
+                })
+                .unwrap_or_default();
+            match delete_hosts_for(&state, &live, true).await {
+                Ok(reaped) if !reaped.is_empty() => {
+                    eprintln!("applier: reaped {} orphaned host(s)", reaped.len());
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!("applier: host reap failed: {e:#}"),
+            }
         }
     }
 }
@@ -542,6 +754,38 @@ metadata:
 spec:
   replicas: 1
 "#;
+
+    /// The fences on prune. Every case here is a way a bug or a hostile caller could
+    /// delete something that is not theirs — which is a worse failure than a leak,
+    /// because it is not recoverable.
+    #[test]
+    fn prune_only_reaches_the_callers_own_app() {
+        let (nsp, envp) = ("tenant-", "app-");
+
+        // The happy path: acme's own app, in acme's own namespace.
+        check_env("app-acme-api", "tenant-acme", nsp, envp).expect("own app");
+
+        // A tenant naming another tenant's app.
+        let err = check_env("app-globex-api", "tenant-acme", nsp, envp).unwrap_err().to_string();
+        assert!(err.contains("does not belong to namespace"), "{err}");
+
+        // The chart's own hosts live in environments with no reserved prefix, and this
+        // is the single check that makes them unreachable. `jobs` and `eshop` are real
+        // hosts on the dev cluster; deleting one would take down other people's apps.
+        for foreign in ["jobs", "eshop", "default", ""] {
+            assert!(
+                check_env(foreign, "tenant-acme", nsp, envp).is_err(),
+                "{foreign:?} must not be prunable"
+            );
+        }
+
+        // A selector that is not a label at all.
+        assert!(check_env("app-acme-api,x=y", "tenant-acme", nsp, envp).is_err());
+        assert!(check_env("app-acme-*", "tenant-acme", nsp, envp).is_err());
+        // ...and the namespace fence still applies on this path.
+        assert!(check_namespace("kube-system", nsp).is_err());
+        assert!(check_namespace("tenant-acme", nsp).is_ok());
+    }
 
     #[test]
     fn accepts_a_rendered_workload() {
