@@ -1260,6 +1260,10 @@
         "description": ""
       },
       {
+        "name": "key",
+        "description": ""
+      },
+      {
         "name": "platform-namespace",
         "description": ""
       },
@@ -1268,8 +1272,8 @@
         "description": ""
       }
     ],
-    "wasm_size_bytes": 303689,
-    "wasm_sha256_12": "4dc38bc1865c",
+    "wasm_size_bytes": 308785,
+    "wasm_sha256_12": "8d4e49044786",
     "reusable_as_is": true
   },
   {

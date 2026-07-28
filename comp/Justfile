@@ -839,14 +839,19 @@ host-platform-live: compose-platform build-applier
     #!/usr/bin/env bash
     set -euo pipefail
     SECRET=${APPLIER_SECRET:-dev-secret}
+    # The registry the applier PUSHES to and the manifests PIN must be the same
+    # string, which is why both sides read one variable. From a laptop that is the
+    # NodePort; in-cluster it is the Service DNS name.
+    REG=${PLATFORM_REGISTRY:-localhost:30501}
     ./applier/target/release/applier --addr 127.0.0.1:8088 --secret "$SECRET" \
-      --dry-run --platform-url http://127.0.0.1:3057 --reapply-interval 60 &
+      --dry-run --platform-url http://127.0.0.1:3057 --reapply-interval 60 \
+      --registry "$REG" --registry-scheme http &
     APPLIER=$!
     trap 'kill $APPLIER 2>/dev/null || true' EXIT
     cd host && cargo build --release --bin vet-host
     VET_TENANT=platform \
       CFG_APPLIER_URL=http://127.0.0.1:8088 CFG_APPLIER_SECRET="$SECRET" \
-      CFG_REGISTRY=registry.platform.svc.cluster.local:5000 \
+      CFG_REGISTRY="$REG" \
       CFG_CLUSTER_SUFFIX=svc.cluster.local \
       ./target/release/vet-host --component ../{{platform_composed}} \
       --addr 127.0.0.1:3057 --kv memory

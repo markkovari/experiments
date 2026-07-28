@@ -80,6 +80,10 @@ impl Guest for Component {
 
             // The applier polls this to re-apply current revisions (ADR-0004).
             (Method::Get, ["api", "internal", "revisions"]) => internal_revisions(&request),
+            // The push path (ADR-0017), reconciled like everything else: the applier
+            // asks what needs pushing, fetches the bytes, pushes, then reports back.
+            (Method::Get, ["api", "internal", "pending-pushes"]) => internal_pending(&request),
+            (Method::Get, ["api", "internal", "artifact"]) => internal_artifact(&request, &query),
             // The seam the push step calls once an artifact is in the registry.
             (Method::Post, ["api", "internal", "pushed"]) => internal_pushed(&request),
             _ => Outcome::Err(404, "not_found".into()),
@@ -91,6 +95,8 @@ impl Guest for Component {
 enum Outcome {
     Json(u16, String),
     Text(u16, String, String),
+    /// A body that is not text — the staged `.wasm` the pusher fetches.
+    Bytes(u16, String, Vec<u8>),
     Err(u16, String),
 }
 
@@ -393,6 +399,62 @@ fn component_publish(request: &IncomingRequest) -> Outcome {
 
 /// Record that an artifact reached the registry. This is the seam the push step
 /// calls; until it is called, the row is not deployable (ADR-0006).
+/// Components with no `oci_ref` yet — the work queue for the pusher.
+///
+/// Derived state, not a queue with its own lifecycle: "needs pushing" IS "has no
+/// registry reference", so a lost or duplicated message cannot desynchronise
+/// anything, and a re-push after the registry loses a blob needs no bookkeeping.
+///
+/// The exports and imports travel with it because the OCI config blob `wkg` writes
+/// contains them, and the pusher must produce a byte-identical shape or the operator
+/// gets an artifact it cannot read. They are already known from upload-time
+/// reflection, so the pusher never has to parse the wasm.
+fn internal_pending(request: &IncomingRequest) -> Outcome {
+    if !internal_ok(request) {
+        return Outcome::Err(401, "internal endpoint".into());
+    }
+    let raws = |v: &Value| -> Vec<Value> {
+        v.as_array()
+            .map(|a| a.iter().filter_map(|r| r["raw"].as_str().map(|s| json!(s))).collect())
+            .unwrap_or_default()
+    };
+    let mut out = Vec::new();
+    for e in records::list_records(CATALOG, 1000, "").map(|p| p.entries).unwrap_or_default() {
+        let Ok(row) = serde_json::from_str::<Value>(&e.data) else { continue };
+        if !row["oci_ref"].as_str().unwrap_or_default().is_empty() {
+            continue;
+        }
+        out.push(json!({
+            "key": row["key"],
+            "repo": row["key"],
+            "sha256": row["surface"]["sha256"],
+            "size_bytes": row["surface"]["size_bytes"],
+            "exports": raws(&row["surface"]["exports"]),
+            "imports": raws(&row["surface"]["imports"]),
+        }));
+    }
+    Outcome::Json(200, json!({ "pending": out }).to_string())
+}
+
+/// The staged bytes for one component, so the pusher can send them to the registry.
+///
+/// A pull, not a push: the wasm side never streams megabytes outward (it has one
+/// awkward outgoing-body handshake and no reason to exercise it), and it matches the
+/// direction the applier already polls in.
+fn internal_artifact(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome {
+    if !internal_ok(request) {
+        return Outcome::Err(401, "internal endpoint".into());
+    }
+    let key = query.get("key").and_then(|v| v.as_str()).unwrap_or_default();
+    if key.is_empty() {
+        return Outcome::Err(422, "?key=<tenant>/<id> required".into());
+    }
+    match blob::get(BIN, key) {
+        Ok(bytes) => Outcome::Bytes(200, "application/wasm".into(), bytes),
+        Err(_) => Outcome::Err(404, "no staged bytes for that key".into()),
+    }
+}
+
 fn internal_pushed(request: &IncomingRequest) -> Outcome {
     if !internal_ok(request) {
         return Outcome::Err(401, "internal endpoint".into());
@@ -407,7 +469,12 @@ fn internal_pushed(request: &IncomingRequest) -> Outcome {
     }
     match find_one(CATALOG, "key", &key) {
         Some((rec, rev, mut row)) => {
-            let repo = format!("{}/{}", cfg("registry", "registry.platform.svc.cluster.local:5000"), row["id"].as_str().unwrap_or_default());
+            // `<tenant>/<id>`, not `<id>`: two tenants may both own a component called
+            // `mesh-domain`, and a shared repo path would put their artifacts in one
+            // place — harmless for correctness (blobs are content-addressed and the
+            // reference is a digest) but it leaks one tenant's component names to
+            // anyone who can list the other's repo.
+            let repo = format!("{}/{}", cfg("registry", "registry.platform.svc.cluster.local:5000"), key);
             row["oci_ref"] = json!(format!("{repo}@{digest}"));
             let _ = records::update(CATALOG, &rec, &row.to_string(), rev);
             Outcome::Json(200, json!({ "key": key, "oci_ref": row["oci_ref"] }).to_string())
@@ -1069,6 +1136,7 @@ fn emit(response_out: ResponseOutparam, result: Outcome) {
     let (code, ctype, body) = match result {
         Outcome::Json(c, b) => (c, "application/json".to_string(), b.into_bytes()),
         Outcome::Text(c, ct, b) => (c, ct, b.into_bytes()),
+        Outcome::Bytes(c, ct, b) => (c, ct, b),
         Outcome::Err(c, m) => (
             c,
             "application/json".to_string(),
