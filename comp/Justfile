@@ -851,6 +851,28 @@ host-platform-live: compose-platform build-applier
       ./target/release/vet-host --component ../{{platform_composed}} \
       --addr 127.0.0.1:3057 --kv memory
 
+# Tear down everything the platform created: every namespace it labelled as its
+# own, plus any local host/applier processes still holding ports. Safe to run at
+# any time, and safe when nothing is deployed.
+#
+# It selects by LABEL (platform.comp/managed=true), never by name, so it can only
+# remove namespaces the platform itself created — `just platform-teardown` cannot
+# take out `jobs`, `eshop` or anything you own.
+platform-teardown:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    echo "-- platform-managed namespaces:"
+    kubectl get ns -l platform.comp/managed=true --no-headers 2>/dev/null | awk '{print "   " $1, $2}' || true
+    kubectl delete ns -l platform.comp/managed=true --wait=false 2>/dev/null || true
+    echo "-- local processes:"
+    pkill -f 'vet-host' 2>/dev/null && echo "   stopped vet-host" || echo "   no vet-host running"
+    pkill -f 'release/applier' 2>/dev/null && echo "   stopped applier" || echo "   no applier running"
+    docker rm -f comp-registry >/dev/null 2>&1 && echo "   removed the local comp-registry container" || true
+    echo "-- left behind ON PURPOSE: artifacts already pushed to a registry."
+    echo "   registry:2 has deletion disabled by default, and clearing it would"
+    echo "   wipe images other namespaces depend on. Restart the registry pod if"
+    echo "   you want its (ephemeral) storage reset."
+
 # Platform e2e: sign in, upload components, refuse a deploy with no digest
 # (ADR-0006), record a push, then save under BOTH strategies and assert the
 # rendered manifests — namespace, one hostInterfaces entry per interface, the
