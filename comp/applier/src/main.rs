@@ -350,6 +350,31 @@ async fn delete_hosts_for(
         return Ok(Vec::new());
     }
     let client = state.client.as_ref().context("no client")?;
+
+    // On a sweep, "not in the live set" is not enough on its own. The live set comes
+    // from the platform's revisions, so a Host whose pod is still running but whose
+    // revision the platform has lost would look like an orphan — and reaping it would
+    // be the wrong answer to a different bug (the platform forgetting a running app).
+    //
+    // So an orphan needs BOTH: no revision AND no host pod. The second half is a
+    // positive liveness check, which also means a reap can never race a host that is
+    // starting up.
+    let live_pods: BTreeSet<String> = if orphans_of {
+        let gvk = GroupVersionKind::gvk("apps", "v1", "Deployment");
+        let ar = ApiResource::from_gvk(&gvk);
+        let api: Api<DynamicObject> = Api::all_with(client.clone(), &ar);
+        let params = ListParams::default().labels("platform.comp/managed=true");
+        api.list(&params)
+            .await
+            .context("listing platform host Deployments (needs cluster-wide list on deployments)")?
+            .into_iter()
+            .filter_map(|d| {
+                d.metadata.labels.as_ref().and_then(|l| l.get("platform.comp/env").cloned())
+            })
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
     let gvk = GroupVersionKind::gvk("runtime.wasmcloud.dev", "v1alpha1", "Host");
     let ar = ApiResource::from_gvk(&gvk);
     let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), &state.args.operator_namespace, &ar);
@@ -369,6 +394,14 @@ async fn delete_hosts_for(
         }
         let matches = envs.iter().any(|e| *e == env);
         if matches == orphans_of {
+            continue;
+        }
+        // The second half of the orphan test — see `live_pods` above.
+        if orphans_of && live_pods.contains(&env) {
+            eprintln!(
+                "applier: Host environment={env} has no revision but its pod is still running — \
+                 NOT reaping. The platform has lost a deployment record; that is the bug to fix."
+            );
             continue;
         }
         let name = host.metadata.name.clone().unwrap_or_default();

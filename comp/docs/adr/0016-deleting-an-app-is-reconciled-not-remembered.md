@@ -55,6 +55,16 @@ Three facts shape the fix:
   outside that set is an orphan, however it got that way — a delete that half-finished,
   a crashed applier, a namespace someone removed by hand. A reconciler that only
   cleans up when asked never converges after the one failure that matters.
+- **An orphan needs two things missing, not one: no revision AND no host pod.** The
+  live set comes from the platform, so a `Host` whose pod is still running but whose
+  revision the platform has lost would look like an orphan — and reaping it would be
+  the wrong answer to a different bug (the platform forgetting a running app). The
+  second half is a positive liveness check against `Deployment`s labelled
+  `platform.comp/env`, which also means a sweep cannot race a host that is starting.
+  When the two disagree the applier logs it and reaps nothing, naming the real bug.
+- **Deleting an app requires naming it**: `?confirm=<app>`, or `428 Precondition
+  Required`. The operation destroys the app's storage claim and nothing here can undo
+  that, so an accidental or replayed `DELETE` must not be able to succeed.
 - **A failed poll changes nothing.** This matters far more for reaping than for
   applying: treating "the platform did not answer" as "there are no apps" would delete
   every platform-owned host on the cluster. The loop already `continue`d on a failed
@@ -68,15 +78,16 @@ is not in this ADR.
 ## Consequences
 
 - **The PVC goes with the app**, so deleting an app destroys its data. That is the
-  honest reading of "delete", but it is irreversible and the UI must say so before it
-  is a button. If a grace period is wanted, the place for it is a `deleted_at` on the
+  honest reading of "delete", and the `?confirm=<app>` token is the guard rather than
+  the answer — the UI must still say what is about to be destroyed. If a grace period is wanted, the place for it is a `deleted_at` on the
   record with the prune deferred — not a PVC left behind, which would be storage
   nobody is accounting for.
-- **Deleting a live host's `Host` object should be self-healing** — the pod
-  heartbeats, so the operator ought to recreate it — which means a reap that fires
-  wrongly costs a flap rather than an outage. *This is an inference from how the
-  object gets created, not a measurement.* The reap was only ever tested against
-  hosts whose pods were already gone.
+- **Deleting a live host's `Host` object is self-healing — measured.** A running host
+  whose object was deleted re-registered in **~5 seconds, with the same name and the
+  same host ID**, confirming the object is a projection of the live host rather than
+  its identity. So a reap that fires wrongly costs a flap, not an outage. (What is
+  still untested is whether a workload's readiness flaps during those seconds; the
+  probe host ran no workloads.)
 - **Orphan reaping is a cluster-wide sweep** on an interval, so its cost grows with
   the number of `Host` objects, not with the number of deletes. At this scale that is
   nothing; if it ever isn't, the fix is a field selector on the environment prefix.

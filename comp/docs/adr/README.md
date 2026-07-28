@@ -51,7 +51,7 @@ inside it. Where they disagree, the ADR wins.
 | isolation stamp (namespace, egress, blobstore containers) | ADR-0008 | **done** — and now per-app rather than per-tenant (ADR-0014) |
 | a host per application (private data NATS, own engine, own endpoint) | ADR-0014 | **done and measured on a cluster** (ADR-0015) — a rendered host pod registers, a workload pins to it, and an app on its own bus cannot read another's buckets |
 | image allow-list on the applier | ADR-0014 | **done** — a `Deployment` may only run the platform's two pinned images, and no host namespaces, privilege, hostPath or service account |
-| delete an app (prune + orphan host reaping) | ADR-0016 | **done** — `DELETE /api/deployments/{id}`, label-scoped prune, and a sweep in the reconcile loop |
+| delete an app (prune + orphan host reaping) | ADR-0016 | **done** — `DELETE /api/deployments/{id}?confirm=<app>`, label-scoped prune, and a sweep that reaps only what has neither a revision nor a live pod |
 | e2e | `examples/platform/tests/platform.rs` | **done** — no cluster required |
 | registry push (the digest source) | — | **the gap.** `POST /api/internal/pushed` is the seam; nothing pushes yet |
 | `public` visibility | ADR-0007 | refused with `501` until signing exists |
@@ -103,10 +103,13 @@ client, so the default loop cannot touch a cluster), `just e2e-platform`,
   `open()` any name on its host, including one belonging to another app. This is why a
   naming scheme is not an isolation mechanism (ADR-0015).
 - ~~Deleting an app leaves its `Host` object behind~~ → **ADR-0016**, which also
-  supplied the delete path the platform turned out not to have at all. Two residual
-  risks in it, both named there: the reap has only been tested against hosts whose
-  pods were already gone (a live host re-registering is an inference), and deleting an
-  app destroys its PVC, which is irreversible and needs to look like it in the UI.
+  supplied the delete path the platform turned out not to have at all. Both residual
+  risks are now closed: a live host whose object is deleted **re-registers in ~5s with
+  the same host ID** (measured, so a wrong reap is a flap not an outage, and the sweep
+  additionally requires no live pod), and an app delete requires `?confirm=<app>`
+  because it destroys the storage claim. Still open: whether a workload's readiness
+  flaps during those seconds, and retention (a soft delete keeping the PVC for a
+  window) rather than only a confirmation prompt.
 - **Host plugins are not an authoring surface** — "plugin" in the v2 model means the
   host's built-ins, and nothing here has ever registered one (ADR-0005). Per-tenant
   KV backends wait on upstream #5051.

@@ -1262,10 +1262,14 @@
       {
         "name": "platform-namespace",
         "description": ""
+      },
+      {
+        "name": "confirm",
+        "description": ""
       }
     ],
-    "wasm_size_bytes": 303405,
-    "wasm_sha256_12": "57db2a26bb91",
+    "wasm_size_bytes": 303689,
+    "wasm_sha256_12": "4dc38bc1865c",
     "reusable_as_is": true
   },
   {

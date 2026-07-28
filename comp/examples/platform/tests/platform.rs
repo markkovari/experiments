@@ -418,7 +418,18 @@ fn platform_signs_in_renders_and_applies() {
     // ===== 0015: deleting an app removes its footprint, then its records =====
     // Until this existed there was no delete path at all, so an app's host pod, claim
     // and self-registered `Host` outlived it (measured on a cluster).
-    let (code, deleted) = req("DELETE", &format!("/api/deployments/{bid}"), Some(&token), None);
+    // An unconfirmed delete is refused: it would destroy the app's storage.
+    let (code, unconfirmed) = req("DELETE", &format!("/api/deployments/{bid}"), Some(&token), None);
+    assert_eq!(code, 428, "{unconfirmed}");
+    assert!(unconfirmed["error"].as_str().unwrap().contains("?confirm=billing"), "{unconfirmed}");
+    // Naming the WRONG app does not count either.
+    assert_eq!(
+        req("DELETE", &format!("/api/deployments/{bid}?confirm=api"), Some(&token), None).0,
+        428,
+        "the token must name the app being deleted"
+    );
+
+    let (code, deleted) = req("DELETE", &format!("/api/deployments/{bid}?confirm=billing"), Some(&token), None);
     assert_eq!(code, 200, "{deleted}");
     assert_eq!(deleted["env"], "app-ada-billing");
     assert_eq!(deleted["applier"]["validated_only"], true, "{deleted}");
@@ -442,7 +453,7 @@ fn platform_signs_in_renders_and_applies() {
     assert!(list.iter().all(|r| r["env"].as_str().is_some_and(|e| e.starts_with("app-"))), "{list:?}");
 
     // Another tenant cannot delete it.
-    let (code, _) = req("DELETE", &format!("/api/deployments/{id}"), Some(&eve), None);
+    let (code, _) = req("DELETE", &format!("/api/deployments/{id}?confirm=api"), Some(&eve), None);
     assert_eq!(code, 404, "eve must not be able to delete ada's app");
 }
 /// The applier's own boundary, exercised over HTTP rather than as a unit test:

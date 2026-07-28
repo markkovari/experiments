@@ -76,7 +76,7 @@ impl Guest for Component {
             (Method::Get, ["api", "deployments", id]) => deployment_get(&request, id),
             (Method::Post, ["api", "deployments", id, "save"]) => deployment_save(&request, id),
             (Method::Get, ["api", "deployments", id, "manifests"]) => manifests(&request, id),
-            (Method::Delete, ["api", "deployments", id]) => deployment_delete(&request, id),
+            (Method::Delete, ["api", "deployments", id]) => deployment_delete(&request, id, &query),
 
             // The applier polls this to re-apply current revisions (ADR-0004).
             (Method::Get, ["api", "internal", "revisions"]) => internal_revisions(&request),
@@ -834,7 +834,11 @@ fn internal_revisions(request: &IncomingRequest) -> Outcome {
 ///
 /// The tenant's namespace, quota and NetworkPolicy stay: they belong to the tenant,
 /// not to this app, and the tenant's other apps are still in there.
-fn deployment_delete(request: &IncomingRequest, id: &str) -> Outcome {
+fn deployment_delete(
+    request: &IncomingRequest,
+    id: &str,
+    query: &Map<String, Value>,
+) -> Outcome {
     let Some(p) = caller(request) else {
         return Outcome::Err(401, "unauthorized".into());
     };
@@ -842,6 +846,19 @@ fn deployment_delete(request: &IncomingRequest, id: &str) -> Outcome {
         return Outcome::Err(404, "not_found".into());
     };
     let name = doc["name"].as_str().unwrap_or("app").to_string();
+
+    // This destroys the app's storage claim, and nothing here can bring it back
+    // (ADR-0016). So the caller has to name what they are deleting: `428 Precondition
+    // Required` is exactly "the request must be made conditional", and an accidental
+    // or replayed DELETE cannot satisfy it.
+    if query.get("confirm").and_then(|v| v.as_str()) != Some(name.as_str()) {
+        return Outcome::Err(
+            428,
+            format!(
+                "deleting `{name}` also destroys its storage, permanently. Re-send with ?confirm={name} to mean it."
+            ),
+        );
+    }
     let ns = render::namespace_for(&p.tenant);
     let env = render::env_for(&p.tenant, &name);
 
