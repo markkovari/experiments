@@ -1256,6 +1256,14 @@
         "description": "NATS image for that pod's private data-plane sidecar"
       },
       {
+        "name": "platform-namespace",
+        "description": "where the registry lives"
+      },
+      {
+        "name": "control-plane-namespace",
+        "description": "where the operator + scheduler NATS live (defaults to"
+      },
+      {
         "name": "id",
         "description": ""
       },
@@ -1264,16 +1272,12 @@
         "description": ""
       },
       {
-        "name": "platform-namespace",
-        "description": ""
-      },
-      {
         "name": "confirm",
         "description": ""
       }
     ],
-    "wasm_size_bytes": 308785,
-    "wasm_sha256_12": "8d4e49044786",
+    "wasm_size_bytes": 310174,
+    "wasm_sha256_12": "5e2b76450ba2",
     "reusable_as_is": true
   },
   {

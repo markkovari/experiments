@@ -168,9 +168,14 @@ pub struct RenderInput<'a> {
     pub host_image: &'a str,
     /// NATS image for the app's private data plane sidecar.
     pub nats_image: &'a str,
-    /// The platform's own namespace — where the control-plane NATS and the registry
-    /// live, which the tenant's NetworkPolicy must permit egress to.
+    /// The platform's own namespace — where the registry lives, which the tenant's
+    /// NetworkPolicy must permit egress to.
     pub platform_ns: &'a str,
+    /// Where the runtime-operator and its scheduler NATS live. Usually the same as
+    /// `platform_ns`, but not necessarily: on this dev cluster the operator is in
+    /// `jobs` while the registry is in `platform`, and an app's host pod must reach
+    /// BOTH or it never registers and never pulls.
+    pub control_plane_ns: &'a str,
     /// Object-count ceiling for the tenant's quota, from their plan.
     pub max_deployments: u32,
 }
@@ -294,7 +299,12 @@ pub fn render(input: &RenderInput) -> Result<String, RenderError> {
     // NetworkPolicy there permits the control plane. Re-applying them is idempotent
     // (ADR-0004), so drift heals on the next save or re-apply pass instead of needing
     // a separate provisioning step nobody would remember to run.
-    s.push_str(&render_tenant_namespace(input.tenant, input.max_deployments, input.platform_ns));
+    s.push_str(&render_tenant_namespace(
+        input.tenant,
+        input.max_deployments,
+        input.platform_ns,
+        input.control_plane_ns,
+    ));
     s.push_str("---\n");
     s.push_str(&render_app_host(input, &ns, &env));
     s.push_str("---\n");
@@ -453,6 +463,11 @@ fn render_app_host(input: &RenderInput, ns: &str, env: &str) -> String {
     s.push_str("  template:\n    metadata:\n      labels:\n");
     s.push_str("        platform.comp/managed: \"true\"\n");
     s.push_str(&format!("        platform.comp/env: {env}\n"));
+    // The operator's route controller resolves a running host back to a pod through
+    // THIS label. Without it the workload runs but gets no endpoints, so its Service
+    // answers nothing — "deployed and unreachable", which is the worst failure shape
+    // available. Found by deploying for real; no amount of manifest review would have.
+    s.push_str(&format!("        wasmcloud.com/hostgroup: {env}\n"));
     s.push_str("    spec:\n");
     s.push_str("      initContainers:\n");
     s.push_str("        - name: data-nats\n");
@@ -480,6 +495,11 @@ fn render_app_host(input: &RenderInput, ns: &str, env: &str) -> String {
     s.push_str(&format!("          image: {}\n", input.host_image));
     s.push_str("          args:\n");
     s.push_str("            - host\n");
+    // The pod IP, not the default (the pod NAME). The route controller takes the
+    // host's advertised hostname and, if it is an IP, builds the EndpointSlice from it
+    // directly; given a name it tries a pod lookup instead. The chart's own hostgroup
+    // passes the IP, and matching it is what makes the app's Service resolve.
+    s.push_str("            - --host-name=$(WASMCLOUD_HOST_IP)\n");
     s.push_str(&format!("            - --host-group={env}\n"));
     s.push_str(&format!("            - --environment={env}\n"));
     s.push_str(&format!("            - --scheduler-nats-url={}\n", input.scheduler_nats));
@@ -490,6 +510,9 @@ fn render_app_host(input: &RenderInput, ns: &str, env: &str) -> String {
     s.push_str("            - --allow-insecure-registries\n");
     s.push_str("          env:\n");
     s.push_str("            - name: HOME\n              value: /tmp\n");
+    s.push_str("            - name: WASMCLOUD_HOST_IP\n");
+    s.push_str("              valueFrom:\n                fieldRef:\n");
+    s.push_str("                  fieldPath: status.podIP\n");
     // Per-app engine budget. `safe_pool_size` clamps the workload against this, and
     // now the budget really is the app's own rather than shared with every neighbour.
     s.push_str("            - name: WASMTIME_POOLING_TOTAL_CORE_INSTANCES\n");
@@ -556,7 +579,19 @@ fn expand_egress(egress: &[String]) -> Vec<String> {
 /// The namespace scaffolding a tenant needs, applied once at tenant creation
 /// (ADR-0002). Everything the platform creates for a tenant lives here so that
 /// deleting the namespace is a complete teardown.
-pub fn render_tenant_namespace(tenant: &str, max_deployments: u32, platform_ns: &str) -> String {
+pub fn render_tenant_namespace(
+    tenant: &str,
+    max_deployments: u32,
+    platform_ns: &str,
+    control_plane_ns: &str,
+) -> String {
+    // Both, deduped: the registry and the scheduler NATS may live in different
+    // namespaces, and the host pod needs to reach both. Allowing only one of them
+    // produces an app that never starts, for a reason nothing in the app explains.
+    let mut namespaces = vec![platform_ns];
+    if control_plane_ns != platform_ns {
+        namespaces.push(control_plane_ns);
+    }
     let ns = namespace_for(tenant);
     let mut s = String::new();
     s.push_str("# Generated by platform:app — the tenant's namespace and its guardrails.\n");
@@ -597,8 +632,11 @@ pub fn render_tenant_namespace(tenant: &str, max_deployments: u32, platform_ns: 
     s.push_str("    - ports:\n        - protocol: UDP\n          port: 53\n");
     s.push_str("    # The host's control plane and image source. Not application data:\n");
     s.push_str("    # that stays on the NATS sidecar inside the app's own pod.\n");
-    s.push_str("    - to:\n        - namespaceSelector:\n            matchLabels:\n");
-    s.push_str(&format!("              kubernetes.io/metadata.name: {platform_ns}\n"));
+    s.push_str("    - to:\n");
+    for ns in namespaces {
+        s.push_str("        - namespaceSelector:\n            matchLabels:\n");
+        s.push_str(&format!("              kubernetes.io/metadata.name: {ns}\n"));
+    }
     s.push_str("      ports:\n        - protocol: TCP\n          port: 4222\n");
     s.push_str("        - protocol: TCP\n          port: 5000\n");
     s
@@ -634,6 +672,7 @@ mod tests {
             host_image: "ghcr.io/wasmcloud/wash:2.5.2",
             nats_image: "docker.io/nats:2.12.8-alpine",
             platform_ns: "platform",
+            control_plane_ns: "platform",
             max_deployments: 5,
         }
     }
@@ -706,6 +745,13 @@ mod tests {
         assert!(out.contains("      environment: app-acme-api\n"), "{out}");
         assert!(out.contains("--environment=app-acme-api"), "{out}");
         assert!(out.contains("--host-group=app-acme-api"), "{out}");
+
+        // Reachability, which is separate from running: the route controller matches a
+        // host to a pod by this label and prefers an IP hostname. Missing either leaves
+        // the app running with a Service that answers nothing (measured).
+        assert!(out.contains("wasmcloud.com/hostgroup: app-acme-api"), "{out}");
+        assert!(out.contains("--host-name=$(WASMCLOUD_HOST_IP)"), "{out}");
+        assert!(out.contains("fieldPath: status.podIP"), "{out}");
     }
 
     #[test]
@@ -928,7 +974,7 @@ mod tests {
 
     #[test]
     fn tenant_namespace_carries_its_guardrails() {
-        let out = render_tenant_namespace("acme", 5, "platform");
+        let out = render_tenant_namespace("acme", 5, "platform", "jobs");
         assert!(out.contains("kind: Namespace"));
         assert!(out.contains("name: tenant-acme"));
         assert!(out.contains("count/workloaddeployments.runtime.wasmcloud.dev: \"5\""));
@@ -939,6 +985,9 @@ mod tests {
         // — and it must be able to reach the control plane or the app never registers.
         assert!(out.contains("kubernetes.io/metadata.name: platform"), "{out}");
         assert!(out.contains("port: 4222"), "the host's scheduler bus: {out}");
+        // Both infra namespaces, because the registry and the operator need not share
+        // one — an app whose host cannot reach the scheduler NATS never registers.
+        assert!(out.contains("kubernetes.io/metadata.name: jobs"), "{out}");
         assert!(out.contains("count/deployments.apps: \"5\""), "one host pod per app: {out}");
         assert!(out.contains("count/persistentvolumeclaims: \"5\""), "{out}");
     }

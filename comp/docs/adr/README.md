@@ -24,7 +24,8 @@ inside it. Where they disagree, the ADR wins.
 | [0014](0014-an-application-owns-a-host.md) | An application owns a host | accepted, confirmed by [0015](0015-a-bucket-name-is-not-a-boundary.md) |
 | [0015](0015-a-bucket-name-is-not-a-boundary.md) | A bucket name is not a boundary, and `hostInterfaces[].name` does not work | accepted |
 | [0016](0016-deleting-an-app-is-reconciled-not-remembered.md) | Deleting an app is reconciled, not remembered | accepted |
-| [0017](0017-the-applier-pushes-and-the-registry-is-a-cache.md) | The applier pushes, and the registry is a cache | accepted |
+| [0017](0017-the-applier-pushes-and-the-registry-is-a-cache.md) | The applier pushes, and the registry is a cache | accepted; auth reasoning corrected by [0018](0018-the-platform-deploys-a-running-app.md) |
+| [0018](0018-the-platform-deploys-a-running-app.md) | The platform deploys a running app, and what that took | accepted |
 
 ## The shape these add up to
 
@@ -55,7 +56,8 @@ inside it. Where they disagree, the ADR wins.
 | delete an app (prune + orphan host reaping) | ADR-0016 | **done** — `DELETE /api/deployments/{id}?confirm=<app>`, label-scoped prune, and a sweep that reaps only what has neither a revision nor a live pod |
 | e2e | `examples/platform/tests/platform.rs` | **done** — no cluster required |
 | registry push (the digest source) | ADR-0017 | **done and proven against a real registry** — the applier pushes from the reconcile loop; upload → `deployable: true`, manifest resolves by the pinned digest |
-| the registry itself | `examples/platform/k8s/registry.yaml` | **written, not yet applied** — PVC-backed, no NodePort, NetworkPolicy instead of auth |
+| the registry itself | `examples/platform/k8s/registry.yaml` | **applied and in use** — 20Gi PVC, no NodePort; it served the live run (ADR-0018) |
+| the whole path, live | ADR-0018 | **done** — upload → push → deploy → **serving HTTP with its own keyvalue**, plus a real delete. Found 3 bugs no review would have |
 | `public` visibility | ADR-0007 | refused with `501` until signing exists |
 | tenant secrets | ADR-0010 | refused until `secretFrom` is proven |
 | studio canvas as the editor | ADR-0011 item 9 | not wired — the API is what exists |
@@ -98,6 +100,11 @@ client, so the default loop cannot touch a cluster), `just e2e-platform`,
   apps it is now a pod boundary (ADR-0014).
 - ~~A rendered host pod has never been run.~~ → **run and measured** (ADR-0015),
   which also found and fixed a probe bug in it.
+- **`NetworkPolicy` is enforced by nothing on this cluster** — no CNI daemonset, no
+  policy controller, and a pod in an unlabelled namespace reached the registry. Every
+  policy this platform emits is therefore documentation here, and the control that
+  actually holds is `allowedHosts`, enforced by the wasmCloud host in the runtime
+  (ADR-0018). Do not count the policies as a layer until the cluster enforces them.
 - **`hostInterfaces[].name` is documented but broken** on wash 2.5.2 — setting it
   stops the workload linking at all (`resource implementation is missing`). Worth an
   upstream issue; `components/kv-probe` is the repro.

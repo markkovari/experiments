@@ -93,11 +93,24 @@ allow-lists the registry, so **tenant code cannot reach it at all**. Only the ho
 running that code can, and that pod is ours. So the boundary is a `NetworkPolicy` on the
 registry rather than a password, and the reasoning is written down where the object is.
 
+**With one correction, measured after the fact: `NetworkPolicy` is not enforced on this
+cluster at all.** A pod in an unlabelled namespace reached the registry (HTTP 200), and
+`kube-system` contains only coredns, local-path-provisioner and metrics-server — no CNI
+daemonset, no policy controller. OrbStack accepts policy objects and enforces none of
+them. So on *this* cluster the registry's `NetworkPolicy` is documentation, and the only
+thing actually keeping tenant code away from the registry is `allowedHosts`, which the
+**wasmCloud host** enforces in the runtime rather than the network. That is the load
+bearing control, and it is fail-closed (measured separately, on eshop). The policy stays
+because it is correct on a cluster that enforces policies — but it must not be counted
+as a second layer here, and anyone reading the auth argument above should read it as
+resting on one control, not two.
+
 ## Consequences
 
 - **Upload-to-deployable is eventually consistent**, bounded by the reconcile interval.
-  Measured end to end against the real registry: upload → pending → pushed →
-  `deployable: true`, with the manifest resolving by the pinned digest. If the wait ever
+  Measured end to end against the real registry — and then all the way to a running app:
+  upload → pending → pushed → `deployable: true` → deployed → **serving HTTP with its
+  own keyvalue working** (ADR-0018). If the wait ever
   matters, the fix is to trigger a pass on upload — not to move the push into the wasm
   side, which would forfeit every registry that needs TLS.
 - **The integrity check earned itself on its first run.** It fired immediately, and what

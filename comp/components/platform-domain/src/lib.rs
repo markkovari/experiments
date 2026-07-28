@@ -16,6 +16,10 @@
 //!                   to register and receive scheduling (no application data)
 //!   host-image      `wash` image for the per-application host pod (ADR-0014)
 //!   nats-image      NATS image for that pod's private data-plane sidecar
+//!   platform-namespace       where the registry lives
+//!   control-plane-namespace  where the operator + scheduler NATS live (defaults to
+//!                   platform-namespace; a tenant's NetworkPolicy must allow egress
+//!                   to both, or an app's host never registers)
 
 #[allow(warnings)]
 mod bindings;
@@ -800,6 +804,7 @@ fn deployment_save(request: &IncomingRequest, id: &str) -> Outcome {
         host_image: &cfg("host-image", "ghcr.io/wasmcloud/wash:2.5.2"),
         nats_image: &cfg("nats-image", "docker.io/nats:2.12.8-alpine"),
         platform_ns: &cfg("platform-namespace", "platform"),
+        control_plane_ns: &cfg("control-plane-namespace", &cfg("platform-namespace", "platform")),
         max_deployments: tenant_plan.max_deployments as u32,
     }) {
         Ok(m) => m,
