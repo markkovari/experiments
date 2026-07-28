@@ -451,8 +451,14 @@ fn render_app_host(input: &RenderInput, ns: &str, env: &str) -> String {
     s.push_str("          args: [\"-js\", \"-sd\", \"/data\", \"-a\", \"127.0.0.1\"]\n");
     // A native sidecar orders *start*, not readiness — without this probe the host
     // would race the bus and crash-loop until NATS happened to be listening.
+    //
+    // It must be an `exec` probe, not `tcpSocket`. kubelet dials probes at the POD
+    // IP, so a tcpSocket probe against a loopback-only bind is refused forever and
+    // the pod never leaves PodInitializing (measured: 25 failures, 5 restarts). The
+    // fix is to probe from inside the container, where 127.0.0.1 means what we meant.
     s.push_str("          startupProbe:\n");
-    s.push_str("            tcpSocket:\n              port: 4222\n");
+    s.push_str("            exec:\n");
+    s.push_str("              command: [\"nc\", \"-z\", \"127.0.0.1\", \"4222\"]\n");
     s.push_str("            periodSeconds: 1\n            failureThreshold: 30\n");
     s.push_str("          volumeMounts:\n            - name: data\n              mountPath: /data\n");
     s.push_str("          resources:\n            requests:\n              cpu: 50m\n              memory: 64Mi\n");

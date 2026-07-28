@@ -787,6 +787,22 @@
     "reusable_as_is": true
   },
   {
+    "name": "kv-probe",
+    "package": "kv:probe@0.1.0",
+    "description": "`kv-probe` \u2014 an instrument for one specific unknown (see wit/probe.wit)",
+    "exports": [
+      "wasi:http/incoming-handler@0.2.0"
+    ],
+    "capability_deps": [
+      "wasi:keyvalue/batch",
+      "wasi:keyvalue/store"
+    ],
+    "config_keys": [],
+    "wasm_size_bytes": 75753,
+    "wasm_sha256_12": "0b7ea51aa13c",
+    "reusable_as_is": true
+  },
+  {
     "name": "ledger",
     "package": "ledger:doubleentry@0.1.0",
     "description": "`ledger` \u2014 reference implementation of `ledger:doubleentry/ledger`",

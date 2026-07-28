@@ -21,7 +21,8 @@ inside it. Where they disagree, the ADR wins.
 | [0011](0011-slice-one-scope.md) | Slice 1 is single-tenant, both strategies, one cluster | accepted |
 | [0012](0012-keyvalue-isolation-needs-a-cooperative-component.md) | Per-tenant keyvalue isolation needs a cooperative component | accepted |
 | [0013](0013-unenforceable-capabilities-are-denied-by-omission.md) | A capability the host cannot partition is denied by omission | superseded by [0014](0014-an-application-owns-a-host.md) |
-| [0014](0014-an-application-owns-a-host.md) | An application owns a host | accepted |
+| [0014](0014-an-application-owns-a-host.md) | An application owns a host | accepted, confirmed by [0015](0015-a-bucket-name-is-not-a-boundary.md) |
+| [0015](0015-a-bucket-name-is-not-a-boundary.md) | A bucket name is not a boundary, and `hostInterfaces[].name` does not work | accepted |
 
 ## The shape these add up to
 
@@ -47,7 +48,7 @@ inside it. Where they disagree, the ADR wins.
 | both strategies, planner-validated | ADR-0005 | **done** — refuses a strategy the graph can't support |
 | digest pinning enforced | ADR-0006 | **done** — a save with no digest is a 409 |
 | isolation stamp (namespace, egress, blobstore containers) | ADR-0008 | **done** — and now per-app rather than per-tenant (ADR-0014) |
-| a host per application (private data NATS, own engine, own endpoint) | ADR-0014 | **rendered and validated, not yet run on a cluster** — every host interface the operator binds is granted again |
+| a host per application (private data NATS, own engine, own endpoint) | ADR-0014 | **done and measured on a cluster** (ADR-0015) — a rendered host pod registers, a workload pins to it, and an app on its own bus cannot read another's buckets |
 | image allow-list on the applier | ADR-0014 | **done** — a `Deployment` may only run the platform's two pinned images, and no host namespaces, privilege, hostPath or service account |
 | e2e | `examples/platform/tests/platform.rs` | **done** — no cluster required |
 | registry push (the digest source) | — | **the gap.** `POST /api/internal/pushed` is the seam; nothing pushes yet |
@@ -91,9 +92,18 @@ client, so the default loop cannot touch a cluster), `just e2e-platform`,
 - **Per-workload CPU isolation is weak** (fuel traps composed apps), so
   noisy-neighbour risk is metered, not prevented *within* an app (ADR-0008). Between
   apps it is now a pod boundary (ADR-0014).
-- **A rendered host pod has never been run.** The flags come from `wash host --help`
-  and the chart's own `hostgroup-default`, the CRD facts from the cluster — but
-  ADR-0014's manifests have only been validated, not applied. Deploy before believing.
+- ~~A rendered host pod has never been run.~~ → **run and measured** (ADR-0015),
+  which also found and fixed a probe bug in it.
+- **`hostInterfaces[].name` is documented but broken** on wash 2.5.2 — setting it
+  stops the workload linking at all (`resource implementation is missing`). Worth an
+  upstream issue; `components/kv-probe` is the repro.
+- **A host's bucket namespace is flat and guest-addressable.** Any component can
+  `open()` any name on its host, including one belonging to another app. This is why a
+  naming scheme is not an isolation mechanism (ADR-0015).
+- **Deleting an app leaves its `Host` object behind.** Both experiment hosts stayed
+  registered in the operator's namespace after their pods were gone. The platform
+  cannot currently clean these up — `Host` is not on the applier's allow-list and
+  lives outside the tenant namespace. **Open.**
 - **Host plugins are not an authoring surface** — "plugin" in the v2 model means the
   host's built-ins, and nothing here has ever registered one (ADR-0005). Per-tenant
   KV backends wait on upstream #5051.

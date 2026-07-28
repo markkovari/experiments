@@ -53,6 +53,7 @@ capabilities, so anything marked reusable drops into another app via
 | **inproc-workflow** | `inproc:workflow@0.1.0` | pure compute | — | 76 KiB | ✓ |
 | **jobs-domain** | `jobs:app@0.1.0` | cron:expr/parser, durable:workflow/orchestrator, idempotency:guard/store, outbox:dispatch/queue, records:store/store | — | 183 KiB | ✓ |
 | **jsonpatch** | `json:patch@0.1.0` | pure compute | — | 129 KiB | ✓ |
+| **kv-probe** | `kv:probe@0.1.0` | kv:batch, kv:store | — | 73 KiB | ✓ |
 | **ledger** | `ledger:doubleentry@0.1.0` | pure compute | — | 53 KiB | ✓ |
 | **link-shortener** | `shortlink:app@0.1.0` | cache:store/cache, id:generate/generator, ratelimit:guard/limiter, records:store/store, slug:generate/generator, kv:atomics, kv:store | — | 163 KiB | app/demo |
 | **llm-inference** | `llm:inference@0.1.0` | pure compute | — | 71 KiB | ✓ |
@@ -164,6 +165,7 @@ capabilities, so anything marked reusable drops into another app via
 - **inproc-workflow** — `inproc-workflow` — the default execution backend for the jobs queue
 - **jobs-domain** — jobs:app — a durable background-job queue over composed contracts
 - **jsonpatch** — `jsonpatch` — reference implementation of `json:patch`
+- **kv-probe** — `kv-probe` — an instrument for one specific unknown (see wit/probe.wit)
 - **ledger** — `ledger` — reference implementation of `ledger:doubleentry/ledger`
 - **link-shortener** — shortlink:app — link shortener over composed capability contracts
 - **llm-inference** — `llm-inference` — the DETERMINISTIC MOCK provider for `llm:inference@0.1.0`

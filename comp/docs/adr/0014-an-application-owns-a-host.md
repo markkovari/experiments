@@ -2,6 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-07-28
+- **Confirmed by:** [ADR-0015](0015-a-bucket-name-is-not-a-boundary.md)
 - **Supersedes:** [ADR-0013](0013-unenforceable-capabilities-are-denied-by-omission.md), and the density bet in `PLATFORM.md`
 - **Revises:** ADR-0002 (the namespace is the outer ring, not the isolation unit), ADR-0008 (isolation is provisioned, not only stamped)
 
@@ -52,9 +53,11 @@ Per application, in the tenant's namespace:
    plane, and **`--data-nats-url=nats://127.0.0.1:4222`**.
 2. A **NATS sidecar** in that pod, `-js -sd /data -a 127.0.0.1`. Loopback-bound: it
    has no Service, no cluster-network surface, and no other client. It is a **native
-   sidecar** (`initContainers` + `restartPolicy: Always`) with a `tcpSocket` startup
-   probe, because native sidecars order *start* and the host would otherwise race the
-   bus.
+   sidecar** (`initContainers` + `restartPolicy: Always`) with an `exec` startup probe
+   (`nc -z 127.0.0.1 4222`), because native sidecars order *start*, not readiness, and
+   the host would otherwise race the bus. The probe must be `exec` and not
+   `tcpSocket`: kubelet dials probes at the pod IP, so a loopback-only bind is refused
+   forever (ADR-0015).
 3. A `PersistentVolumeClaim` the sidecar stores to, so a restart does not lose the
    app's records.
 4. The `WorkloadDeployment` with `template.spec.environment: <tenant>-<app>`.
@@ -122,11 +125,15 @@ And the new risk this creates, with its guard:
 - **`grant-shared-state` and `allow-multi-tenant` are gone.** Both existed to make a
   shared host survivable. Deleting flags is the best outcome available for a design
   whose default was dangerous.
-- **What is still unproven:** that a rendered host pod registers with the operator
-  and serves. Every claim in this ADR about the *flags* comes from `wash host --help`
-  and the running `hostgroup-default` Deployment, and the CRD facts come from the
-  cluster — but nothing here has been applied to it. The manifests validate; that is
-  not the same as running. This should be deployed for real before it is believed.
+- ~~What is still unproven: that a rendered host pod registers with the operator and
+  serves.~~ **Measured on the cluster — see [ADR-0015](0015-a-bucket-name-is-not-a-boundary.md).**
+  A host pod rendered as a plain Deployment registers itself, a workload pinned by
+  `environment` schedules onto exactly that host, `wasi:keyvalue` binds against a
+  loopback NATS sidecar, and an app on its own bus cannot see a bucket an app on
+  another bus wrote — the same read that succeeded on a shared host. One bug in this
+  ADR's manifest was found and fixed in the process: the sidecar's `startupProbe` must
+  be `exec`, not `tcpSocket`, because kubelet dials probes at the pod IP and a
+  loopback-only bind is refused forever.
 
 ## Alternatives
 
