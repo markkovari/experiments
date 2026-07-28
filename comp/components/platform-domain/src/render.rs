@@ -39,18 +39,24 @@ use std::collections::BTreeSet;
 /// This matters more since the move to `wasm32-wasip2`: Rust's wasip2 std wires up
 /// the whole `wasi:cli` surface (five `terminal-*` interfaces included), so an
 /// unfiltered render asks for ~10 bindings that do not exist.
-const OPERATOR_BOUND: &[(&str, &str)] = &[
-    ("wasi", "http"),
-    ("wasi", "keyvalue"),
-    ("wasi", "config"),
-    ("wasi", "blobstore"),
-    ("wasmcloud", "messaging"),
+/// Per family, the interfaces the operator actually binds — taken from every
+/// `interfaces:` list in the working v2 manifests, not from what a component
+/// happens to import. `wasi:http/types` is the trap: a component imports it (it is
+/// where the request/response types live) but no manifest ever declares it, because
+/// it is type-only and has no backend to bind. `wasi:blobstore` DOES list `types`,
+/// which is why this is per-family rather than one global rule.
+const OPERATOR_BOUND: &[(&str, &str, &[&str])] = &[
+    ("wasi", "http", &["incoming-handler", "outgoing-handler"]),
+    ("wasi", "keyvalue", &["store", "atomics", "batch"]),
+    ("wasi", "config", &["store"]),
+    ("wasi", "blobstore", &["blobstore", "container", "types"]),
+    ("wasmcloud", "messaging", &["handler", "consumer", "producer"]),
 ];
 
 fn operator_binds(h: &HostIface) -> bool {
-    OPERATOR_BOUND
-        .iter()
-        .any(|(ns, pkg)| *ns == h.namespace && *pkg == h.pkg)
+    OPERATOR_BOUND.iter().any(|(ns, pkg, ifaces)| {
+        *ns == h.namespace && *pkg == h.pkg && ifaces.contains(&h.iface.as_str())
+    })
 }
 
 /// What a tenant's plan permits. Stamped by the platform, never tenant-authored.
@@ -298,12 +304,21 @@ pub fn render(input: &RenderInput) -> Result<String, RenderError> {
         s.push_str("          localResources:\n");
         // Egress is fail-closed. An empty list is a deliberate deny-all, not an
         // omission — omitting the key would inherit whatever the host defaults to.
-        s.push_str("            allowedHosts:\n");
-        for host in expand_egress(&input.plan.egress) {
-            s.push_str(&format!("              - \"{host}\"\n"));
-        }
-        if input.plan.egress.is_empty() {
-            s.push_str("              # (none — this tenant's plan permits no egress)\n");
+        // It must be `[]`: a key followed by only a comment is YAML null, which is
+        // not the same thing and not what the operator would read.
+        let hosts = expand_egress(&input.plan.egress);
+        if hosts.is_empty() {
+            s.push_str("            # this tenant's plan permits no egress\n");
+            s.push_str("            allowedHosts: []\n");
+            if p.host_imports.iter().any(|h| h.iface == "outgoing-handler") {
+                s.push_str("            # NOTE: this component imports wasi:http/outgoing-handler,\n");
+                s.push_str("            # so every outbound call it makes will be refused.\n");
+            }
+        } else {
+            s.push_str("            allowedHosts:\n");
+            for host in hosts {
+                s.push_str(&format!("              - \"{host}\"\n"));
+            }
         }
     }
 
@@ -320,19 +335,46 @@ pub fn render(input: &RenderInput) -> Result<String, RenderError> {
     Ok(s)
 }
 
-/// Egress needs both the bare authority and the port-qualified one — observed in
-/// `examples/jobs/k8s/jobs.yaml`, where only having one form silently fails closed.
+/// Expand a plan's egress list into `allowedHosts` entries.
+///
+/// The operator's own schema documents the accepted forms: `*`, `host[:port]`,
+/// `scheme://host[:port][/]`, `*.suffix[:port]`, `scheme://*.suffix[:port]`. Two
+/// consequences encoded here:
+///
+/// * A scheme-qualified entry is passed through untouched. Splitting it on `:` to
+///   find a port would turn `https://api.example.com` into the host `https` —
+///   silently allow-listing the wrong thing, since `https` is itself a legal host.
+/// * A bare authority is emitted both bare and port-qualified. `examples/jobs/k8s/jobs.yaml`
+///   carries both forms for the same host, and egress is fail-closed, so a missing
+///   form is a connection refused at runtime rather than an error at deploy.
+///
+/// Note the operator treats empty AND absent as deny-all, so `[]` is honest rather
+/// than load-bearing; `["*"]` is the documented opt-in for unrestricted egress.
 fn expand_egress(egress: &[String]) -> Vec<String> {
     let mut out: BTreeSet<String> = BTreeSet::new();
     for e in egress {
-        let bare = e.split(':').next().unwrap_or(e).to_string();
-        out.insert(bare.clone());
-        if e.contains(':') {
-            out.insert(e.clone());
-        } else {
-            // The common case in-cluster: http on 80 and the operator's 9191.
-            out.insert(format!("{bare}:80"));
-            out.insert(format!("{bare}:443"));
+        let e = e.trim();
+        if e.is_empty() {
+            continue;
+        }
+        // `*` and any scheme-qualified form go through verbatim.
+        if e == "*" || e.contains("://") {
+            out.insert(e.to_string());
+            continue;
+        }
+        match e.rsplit_once(':') {
+            // A trailing `:digits` is a port; keep both forms.
+            Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => {
+                out.insert(host.to_string());
+                out.insert(e.to_string());
+            }
+            // Otherwise it is a bare authority (or something with a colon that is
+            // not a port, which we do not try to be clever about).
+            _ => {
+                out.insert(e.to_string());
+                out.insert(format!("{e}:80"));
+                out.insert(format!("{e}:443"));
+            }
         }
     }
     out.into_iter().collect()
@@ -477,13 +519,74 @@ mod tests {
     }
 
     #[test]
-    fn no_egress_means_an_explicit_empty_allow_list() {
+    fn no_egress_means_an_explicit_empty_list_not_null() {
         let parts = vec![part("api", false, vec![])];
         let plan = Plan::default();
         let out = render(&input(&parts, Strategy::Fused, &plan)).unwrap();
-        // Present and empty, not omitted: omitting inherits the host default.
-        assert!(out.contains("allowedHosts:"), "{out}");
-        assert!(out.contains("permits no egress"));
+        // `allowedHosts:` followed by a comment is YAML null, not an empty list.
+        assert!(out.contains("allowedHosts: []"), "must be an explicit []: {out}");
+        assert!(!out.contains("allowedHosts:\n            #"), "never null: {out}");
+    }
+
+    #[test]
+    fn warns_when_a_component_needs_egress_it_cannot_have() {
+        // Importing outgoing-handler with an empty allow-list means every outbound
+        // call fails closed. Correct, and worth saying out loud.
+        let parts = vec![part("api", false, vec![iface("wasi", "http", "outgoing-handler")])];
+        let plan = Plan::default();
+        let out = render(&input(&parts, Strategy::Fused, &plan)).unwrap();
+        assert!(out.contains("interfaces: [outgoing-handler]"));
+        assert!(out.contains("will be refused"), "{out}");
+    }
+
+    #[test]
+    fn egress_forms_match_what_the_operator_accepts() {
+        // A scheme-qualified entry must survive intact: splitting it on ':' would
+        // allow-list the host "https", which is legal-looking and wrong.
+        let got = expand_egress(&["https://api.example.com".into()]);
+        assert_eq!(got, vec!["https://api.example.com".to_string()], "{got:?}");
+        assert!(!got.iter().any(|h| h == "https"), "the scheme is not a host: {got:?}");
+
+        // A bare authority gets both forms, because egress is fail-closed.
+        let got = expand_egress(&["db.internal".into()]);
+        assert_eq!(got, vec!["db.internal", "db.internal:443", "db.internal:80"]);
+
+        // An explicit port keeps the bare form too (jobs.yaml needs both).
+        let got = expand_egress(&["golem-proxy.jobs.svc.cluster.local:9006".into()]);
+        assert_eq!(
+            got,
+            vec![
+                "golem-proxy.jobs.svc.cluster.local",
+                "golem-proxy.jobs.svc.cluster.local:9006"
+            ]
+        );
+
+        // The documented wildcard and allow-all forms pass through.
+        assert_eq!(expand_egress(&["*".into()]), vec!["*".to_string()]);
+        let got = expand_egress(&["*.eshop.svc.cluster.local".into()]);
+        assert!(got.contains(&"*.eshop.svc.cluster.local".to_string()), "{got:?}");
+    }
+
+    #[test]
+    fn type_only_interfaces_are_never_declared() {
+        // A component importing wasi:http necessarily imports `types` too; no
+        // working manifest declares it, because there is nothing to bind.
+        let parts = vec![part(
+            "api",
+            true,
+            vec![
+                iface("wasi", "http", "types"),
+                iface("wasi", "http", "outgoing-handler"),
+                iface("wasi", "keyvalue", "store"),
+            ],
+        )];
+        let plan = Plan::default();
+        let out = render(&input(&parts, Strategy::Fused, &plan)).unwrap();
+        assert!(!out.contains("interfaces: [types]"), "type-only, unbindable: {out}");
+        assert!(out.contains("interfaces: [outgoing-handler]"));
+        assert!(out.contains("interfaces: [incoming-handler]"), "it serves http");
+        assert!(out.contains("interfaces: [store]"));
+        assert_eq!(out.matches("- namespace: ").count(), 3, "{out}");
     }
 
     #[test]
