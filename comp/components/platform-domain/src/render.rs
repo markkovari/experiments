@@ -53,6 +53,29 @@ const OPERATOR_BOUND: &[(&str, &str, &[&str])] = &[
     ("wasmcloud", "messaging", &["handler", "consumer", "producer"]),
 ];
 
+/// Host interfaces whose per-workload isolation the HOST enforces, and which are
+/// therefore safe to grant to tenant-supplied code:
+///
+/// * `wasi:http` — incoming is per-vhost, outgoing is the `allowedHosts` allow-list.
+/// * `wasi:config` — a per-component view; a component sees only its own keys.
+/// * `wasi:blobstore` — containers are allow-listed per workload by the plugin.
+///
+/// Everything else on a shared host is shared state. `wasi:keyvalue` is the proven
+/// case: the bucket is named by the GUEST (`store::open(name)`) and the host applies
+/// no restriction, so two tenants read each other's records — measured, see ADR-0012
+/// and ADR-0013. `wasmcloud:messaging` has the same shape with subjects.
+///
+/// Denying one is real enforcement, not a hint: with the interface absent from
+/// `hostInterfaces` the host refuses to instantiate the component at all —
+/// "component imports instance `wasi:keyvalue/store@0.2.0-draft`, but a matching
+/// implementation was not found in the linker ... unbinding all plugins".
+const TENANT_GRANTABLE: &[(&str, &str)] =
+    &[("wasi", "http"), ("wasi", "config"), ("wasi", "blobstore")];
+
+fn grantable_to_tenants(h: &HostIface) -> bool {
+    TENANT_GRANTABLE.iter().any(|(ns, pkg)| *ns == h.namespace && *pkg == h.pkg)
+}
+
 fn operator_binds(h: &HostIface) -> bool {
     OPERATOR_BOUND.iter().any(|(ns, pkg, ifaces)| {
         *ns == h.namespace && *pkg == h.pkg && ifaces.contains(&h.iface.as_str())
@@ -147,6 +170,11 @@ pub struct RenderInput<'a> {
     pub plan: &'a Plan,
     /// Cluster hostname the operator routes on (`Host` header, port 9191).
     pub http_host: &'a str,
+    /// Grant host interfaces whose isolation the host does NOT enforce
+    /// (`wasi:keyvalue`, `wasmcloud:messaging`). Only safe when this tenant has a
+    /// host to itself — a dedicated `environment` with its own data NATS. Default
+    /// false, which denies them and makes the host fail closed (ADR-0013).
+    pub grant_shared_state: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -267,8 +295,10 @@ pub fn render(input: &RenderInput) -> Result<String, RenderError> {
     let mut wanted: BTreeSet<HostIface> = BTreeSet::new();
     for p in input.parts {
         for h in &p.host_imports {
-            // Ambient families are not declared — see OPERATOR_BOUND.
-            if operator_binds(h) {
+            // Ambient families are not declared — see OPERATOR_BOUND. Shared-state
+            // families are not declared either unless this tenant owns the host,
+            // which is what stops one tenant reading another's records.
+            if operator_binds(h) && (grantable_to_tenants(h) || input.grant_shared_state) {
                 wanted.insert(h.clone());
             }
         }
@@ -298,19 +328,6 @@ pub fn render(input: &RenderInput) -> Result<String, RenderError> {
                 ("wasi", "blobstore", _) => {
                     s.push_str("          config:\n");
                     s.push_str(&format!("            buckets: {bucket}\n"));
-                }
-                // NOT isolated, and saying so beats pretending. The bucket a
-                // component gets is the one it passes to `store::open(name)`, matched
-                // against a hostInterfaces entry's `name`. Every capability in this
-                // catalog hardcodes `open("default")` (records:store:47), so a
-                // `config: bucket:` key here is read by nothing — it was stamped for
-                // two deploys and isolated nothing, proven by a second tenant reading
-                // the first's records. See ADR-0012.
-                ("wasi", "keyvalue", _) => {
-                    s.push_str("          # NOT tenant-isolated: the component opens\n");
-                    s.push_str("          # `default` and the host has one keyvalue backend.\n");
-                    s.push_str("          # See docs/adr/0012 — do not add a bucket key here\n");
-                    s.push_str("          # expecting it to isolate anything.\n");
                 }
                 _ => {}
             }
@@ -460,7 +477,46 @@ mod tests {
             plan,
             http_host: "api.tenant-acme.svc.cluster.local",
             environment: "",
+            grant_shared_state: false,
         }
+    }
+
+    #[test]
+    fn shared_state_interfaces_are_denied_on_a_shared_host() {
+        // keyvalue is not grantable: the guest names the bucket and the host applies
+        // no restriction, so granting it on a shared host means tenants read each
+        // other's records (ADR-0012, measured on a cluster).
+        let parts = vec![part(
+            "api",
+            true,
+            vec![
+                iface("wasi", "keyvalue", "store"),
+                iface("wasmcloud", "messaging", "handler"),
+                iface("wasi", "config", "store"),
+                iface("wasi", "blobstore", "container"),
+            ],
+        )];
+        let plan = Plan::default();
+        let out = render(&input(&parts, Strategy::Fused, &plan)).unwrap();
+
+        // Denied — and absence is enforcement: the host refuses to instantiate a
+        // component whose import has no implementation in the linker.
+        assert!(!out.contains("package: keyvalue"), "kv must not be granted: {out}");
+        assert!(!out.contains("package: messaging"), "messaging must not be granted: {out}");
+        // Granted — the host enforces isolation for these itself.
+        assert!(out.contains("package: config"));
+        assert!(out.contains("package: blobstore"));
+        assert!(out.contains("buckets: t-acme"), "blobstore is allow-listed per tenant");
+        assert!(out.contains("package: http"));
+
+        // A tenant with a host to itself may have them.
+        let mut dedicated = input(&parts, Strategy::Fused, &plan);
+        dedicated.grant_shared_state = true;
+        dedicated.environment = "tenant-acme";
+        let out = render(&dedicated).unwrap();
+        assert!(out.contains("package: keyvalue"), "dedicated host: {out}");
+        assert!(out.contains("package: messaging"));
+        assert!(out.contains("environment: tenant-acme"));
     }
 
     #[test]
@@ -514,7 +570,11 @@ mod tests {
             ],
         )];
         let plan = Plan::default();
-        let out = render(&input(&parts, Strategy::Fused, &plan)).unwrap();
+        // keyvalue is only granted to a tenant that owns its host (ADR-0013);
+        // this test is about the entry MECHANICS, so grant it.
+        let mut i = input(&parts, Strategy::Fused, &plan);
+        i.grant_shared_state = true;
+        let out = render(&i).unwrap();
 
         assert!(out.contains("interfaces: [store]"), "{out}");
         assert!(out.contains("interfaces: [atomics]"));
@@ -531,7 +591,11 @@ mod tests {
             part("breaker", false, vec![]),
         ];
         let plan = Plan::default();
-        let out = render(&input(&parts, Strategy::Linked, &plan)).unwrap();
+        // keyvalue is only granted to a tenant that owns its host (ADR-0013);
+        // this test is about the entry MECHANICS, so grant it.
+        let mut i = input(&parts, Strategy::Linked, &plan);
+        i.grant_shared_state = true;
+        let out = render(&i).unwrap();
 
         assert_eq!(out.matches("        - name: ").count(), 3, "all three components: {out}");
         // The union, deduped: two components want keyvalue/store, one entry.
@@ -554,11 +618,12 @@ mod tests {
         // blobstore: the one storage mechanism with a working precedent.
         assert!(out.contains("buckets: t-acme"), "blobstore container allow-list: {out}");
 
-        // keyvalue: NOT isolated, and the manifest says so rather than carrying a
-        // bucket key nothing reads. Proven on a cluster — a second tenant read the
-        // first's records straight through it (ADR-0012).
+        // keyvalue cannot be isolated per tenant on a shared host — proven on a
+        // cluster, where a second tenant read the first's records straight through
+        // it (ADR-0012). So it is not stamped and not bound: omitting the
+        // hostInterfaces entry fails closed in the linker (ADR-0013).
         assert!(!out.contains("bucket: t-acme"), "must not pretend to isolate kv: {out}");
-        assert!(out.contains("NOT tenant-isolated"), "{out}");
+        assert!(!out.contains("interfaces: [store]"), "kv must not be bound: {out}");
 
         // Egress in both forms — a bare-only list silently fails closed on a port.
         assert!(out.contains("- \"api.example.com\""));
@@ -628,7 +693,11 @@ mod tests {
             ],
         )];
         let plan = Plan::default();
-        let out = render(&input(&parts, Strategy::Fused, &plan)).unwrap();
+        // keyvalue is only granted to a tenant that owns its host (ADR-0013);
+        // this test is about the entry MECHANICS, so grant it.
+        let mut i = input(&parts, Strategy::Fused, &plan);
+        i.grant_shared_state = true;
+        let out = render(&i).unwrap();
         assert!(!out.contains("interfaces: [types]"), "type-only, unbindable: {out}");
         assert!(out.contains("interfaces: [outgoing-handler]"));
         assert!(out.contains("interfaces: [incoming-handler]"), "it serves http");
@@ -709,7 +778,11 @@ mod tests {
             ],
         )];
         let plan = Plan::default();
-        let out = render(&input(&parts, Strategy::Fused, &plan)).unwrap();
+        // keyvalue is only granted to a tenant that owns its host (ADR-0013);
+        // this test is about the entry MECHANICS, so grant it.
+        let mut i = input(&parts, Strategy::Fused, &plan);
+        i.grant_shared_state = true;
+        let out = render(&i).unwrap();
 
         // Declared: the two the operator binds, plus http because it serves.
         assert!(out.contains("package: keyvalue"), "{out}");

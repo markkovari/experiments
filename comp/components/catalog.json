@@ -1228,12 +1228,24 @@
         "description": "DNS suffix for the operator's Host routing"
       },
       {
+        "name": "grant-shared-state",
+        "description": "bind `wasi:keyvalue` / `wasmcloud:messaging` for tenant"
+      },
+      {
+        "name": "allow-multi-tenant",
+        "description": "permit a second tenant while grant-shared-state is on;"
+      },
+      {
         "name": "id",
+        "description": ""
+      },
+      {
+        "name": "environment",
         "description": ""
       }
     ],
-    "wasm_size_bytes": 279953,
-    "wasm_sha256_12": "bad082bbaed6",
+    "wasm_size_bytes": 284868,
+    "wasm_sha256_12": "d227cd49c01a",
     "reusable_as_is": true
   },
   {

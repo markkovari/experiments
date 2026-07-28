@@ -75,7 +75,7 @@ capabilities, so anything marked reusable drops into another app via
 | **pdf** | `pdf:codec@0.1.0` | pure compute | — | 54 KiB | ✓ |
 | **pii-redact** | `pii:redact@0.1.0` | pure compute | — | 73 KiB | ✓ |
 | **pipeline-domain** | `pipeline:app@0.1.0` | event:bus/bus, id:generate/generator, outbox:dispatch/queue | — | 151 KiB | ✓ |
-| **platform-domain** | `platform:app@0.1.0` | auth:identity/accounts, auth:identity/authorizer, auth:identity/types, blob:store/blobstore, policy:guard/guard, quota:meter/meter, records:store/store, config/store, http/outgoing-handler, wit:reflect/composer, wit:reflect/inspector | `applier-url`, `applier-secret`, `registry`, `cluster-suffix`, `id` | 273 KiB | ✓ |
+| **platform-domain** | `platform:app@0.1.0` | auth:identity/accounts, auth:identity/authorizer, auth:identity/types, blob:store/blobstore, policy:guard/guard, quota:meter/meter, records:store/store, config/store, http/outgoing-handler, wit:reflect/composer, wit:reflect/inspector | `applier-url`, `applier-secret`, `registry`, `cluster-suffix`, `grant-shared-state`, `allow-multi-tenant`, `id`, `environment` | 278 KiB | ✓ |
 | **policy-guard** | `policy:guard@0.1.0` | kv:store | — | 161 KiB | ✓ |
 | **proxy-route** | `proxy:route@0.1.0` | config/store, http/outgoing-handler | `routes` | 101 KiB | ✓ |
 | **pulse-domain** | `pulse:app@0.1.0` | event:bus/bus, id:generate/generator, records:store/store | — | 163 KiB | ✓ |

@@ -12,6 +12,12 @@
 //!   applier-secret  shared secret; the applier rejects requests without it
 //!   registry        OCI prefix images are pushed to and pinned from
 //!   cluster-suffix  DNS suffix for the operator's Host routing
+//!   grant-shared-state  bind `wasi:keyvalue` / `wasmcloud:messaging` for tenant
+//!                   code (default false). Only correct when the tenant owns its
+//!                   host environment — on a shared host it lets tenants read each
+//!                   other's data, measured (docs/adr/0012, docs/adr/0013)
+//!   allow-multi-tenant  permit a second tenant while grant-shared-state is on;
+//!                   the release gate ADR-0008 asked for (default false)
 
 #[allow(warnings)]
 mod bindings;
@@ -95,6 +101,39 @@ fn now() -> u64 {
 
 fn cfg(key: &str, default: &str) -> String {
     config::get(key).ok().flatten().unwrap_or_else(|| default.to_string())
+}
+
+/// May tenant code be granted host interfaces whose isolation the host does NOT
+/// enforce — `wasi:keyvalue`, `wasmcloud:messaging`? Only true when every tenant has
+/// a host to itself (a dedicated `environment` with its own data NATS). Default
+/// false: on a shared host these are shared state, measured (ADR-0012/0013).
+fn grants_shared_state() -> bool {
+    cfg("grant-shared-state", "false") == "true"
+}
+
+/// Host interfaces the host isolates per workload, so they are safe on a shared host.
+const TENANT_GRANTABLE: &[(&str, &str)] =
+    &[("wasi", "http"), ("wasi", "config"), ("wasi", "blobstore")];
+
+/// What a graph would need that the platform will not grant it here. Returns the
+/// offending interfaces so the refusal can name them.
+fn ungrantable(parts: &[Part]) -> Vec<String> {
+    if grants_shared_state() {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for p in parts {
+        for h in &p.host_imports {
+            let ok = TENANT_GRANTABLE
+                .iter()
+                .any(|(ns, pkg)| *ns == h.namespace && *pkg == h.pkg);
+            let raw = format!("{}:{}/{}", h.namespace, h.pkg, h.iface);
+            if !ok && !out.contains(&raw) {
+                out.push(raw);
+            }
+        }
+    }
+    out
 }
 
 fn usage() -> Outcome {
@@ -687,28 +726,25 @@ fn deployment_save(request: &IncomingRequest, id: &str) -> Outcome {
     let Some((rec, rev, mut doc)) = owned_deployment(&p, id) else {
         return Outcome::Err(404, "not_found".into());
     };
-    // ADR-0008's release gate, and it is no longer hypothetical: the adversarial
-    // test FAILED on a real cluster (ADR-0012). Two tenants running the same app
-    // share one keyvalue bucket, so a second tenant's deployment would read the
-    // first's records. Refuse until storage isolation actually works.
-    if cfg("allow-multi-tenant", "false") != "true" {
+    // ADR-0013: multi-tenancy is safe here BECAUSE tenant code is not granted any
+    // host interface whose isolation the host doesn't enforce. If an operator turns
+    // that grant on (a dedicated host per tenant), the old blanket gate applies
+    // again, because then two tenants on one host would share state for real.
+    if grants_shared_state() && cfg("allow-multi-tenant", "false") != "true" {
         let tenants = records::list_records(ACCOUNTS, 100, "")
-            .map(|page| page.entries.len())
-            .unwrap_or(0);
-        let first = records::list_records(ACCOUNTS, 100, "")
             .map(|page| page.entries)
-            .unwrap_or_default()
-            .into_iter()
+            .unwrap_or_default();
+        let first = tenants
+            .iter()
             .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok())
             .min_by_key(|v| v["created"].as_u64().unwrap_or(0))
             .and_then(|v| v["tenant"].as_str().map(String::from))
             .unwrap_or_default();
-        if tenants > 1 && first != p.tenant {
+        if tenants.len() > 1 && first != p.tenant {
             return Outcome::Err(
                 403,
                 format!(
-                    "multi-tenant deploys are gated: two tenants on this host share one keyvalue bucket, so `{}` would read `{first}`'s records (docs/adr/0012). Set allow-multi-tenant=true only on a host where storage isolation is proven.",
-                    p.tenant
+                    "grant-shared-state is on, so a second tenant on this host would share `{first}`'s keyvalue (docs/adr/0012). Give each tenant its own host environment, or set allow-multi-tenant=true if they are already separated."
                 ),
             );
         }
@@ -729,6 +765,19 @@ fn deployment_save(request: &IncomingRequest, id: &str) -> Outcome {
         Ok(parts) => parts,
         Err(o) => return o,
     };
+    // Fail fast with the reason. The renderer would omit these anyway, and the host
+    // would then refuse to instantiate the component ("a matching implementation was
+    // not found in the linker") — a 409 here beats a workload stuck at ready=0.
+    let denied = ungrantable(&parts);
+    if !denied.is_empty() {
+        return Outcome::Err(
+            409,
+            format!(
+                "this graph needs {}, which the platform does not grant on a shared host: the bucket/subject is chosen by the component and the host applies no per-workload restriction, so granting it would let tenants read each other's data (docs/adr/0013). Options: use your own database over an egress allow-list, or ask for a dedicated host environment.",
+                denied.join(", ")
+            ),
+        );
+    }
     let tenant_plan = plan_of(&p.tenant);
     let name = doc["name"].as_str().unwrap_or("app").to_string();
     let suffix = cfg("cluster-suffix", "svc.cluster.local");
@@ -743,6 +792,7 @@ fn deployment_save(request: &IncomingRequest, id: &str) -> Outcome {
         http_host: &http_host,
         // Shared-host scheduling: platform infrastructure, not tenant input.
         environment: &cfg("environment", ""),
+        grant_shared_state: grants_shared_state(),
     }) {
         Ok(m) => m,
         Err(e) => return Outcome::Err(422, e.detail()),

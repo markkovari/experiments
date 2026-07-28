@@ -20,6 +20,7 @@ inside it. Where they disagree, the ADR wins.
 | [0010](0010-config-and-secrets.md) | Config is `wasi:config`; secrets never enter a manifest | accepted |
 | [0011](0011-slice-one-scope.md) | Slice 1 is single-tenant, both strategies, one cluster | accepted |
 | [0012](0012-keyvalue-isolation-needs-a-cooperative-component.md) | Per-tenant keyvalue isolation needs a cooperative component | accepted |
+| [0013](0013-unenforceable-capabilities-are-denied-by-omission.md) | A capability the host cannot partition is denied by omission | accepted |
 
 ## The shape these add up to
 
@@ -39,18 +40,21 @@ inside it. Where they disagree, the ADR wins.
 
 | piece | where | state |
 |---|---|---|
-| renderer (`(graph, strategy, tenant, plan) → manifests`) | `components/platform-domain/src/render.rs` | **done** — pure, 16 unit tests |
+| renderer (`(graph, strategy, tenant, plan) → manifests`) | `components/platform-domain/src/render.rs` | **done** — pure, 17 unit tests |
 | control plane (accounts, catalog, deployments, revisions) | `components/platform-domain/src/lib.rs` | **done** |
 | applier (SSA + validation + re-apply loop) | `applier/` | **done** — 7 unit tests, validate-only mode needs no cluster |
 | both strategies, planner-validated | ADR-0005 | **done** — refuses a strategy the graph can't support |
 | digest pinning enforced | ADR-0006 | **done** — a save with no digest is a 409 |
-| isolation stamp (namespace, egress, blobstore containers) | ADR-0008 | **partial** — namespace + egress + blobstore work; **keyvalue does not isolate** (ADR-0012) |
+| isolation stamp (namespace, egress, blobstore containers) | ADR-0008 | **partial** — namespace + egress + blobstore work; **keyvalue does not isolate** (ADR-0012), so it is not bound at all (ADR-0013) |
+| default-deny of unpartitionable capabilities | ADR-0013 | **done** — `wasi:keyvalue` / `wasmcloud:messaging` are refused with a `409` at save; omitting the entry was verified to fail closed in the host's linker |
 | e2e | `examples/platform/tests/platform.rs` | **done** — no cluster required |
 | registry push (the digest source) | — | **the gap.** `POST /api/internal/pushed` is the seam; nothing pushes yet |
 | `public` visibility | ADR-0007 | refused with `501` until signing exists |
 | tenant secrets | ADR-0010 | refused until `secretFrom` is proven |
 | studio canvas as the editor | ADR-0011 item 9 | not wired — the API is what exists |
-| a second tenant | ADR-0008 gate | **blocked** — adversarial test written, run on a cluster, and FAILED (ADR-0012). Refusal now enforced in code |
+| a second tenant, apps that touch keyvalue | ADR-0008 gate | **blocked** — adversarial test run on a cluster and FAILED (ADR-0012); enforced in code |
+| a second tenant, apps that do not | ADR-0013 | **open** — HTTP/config/blobstore-only graphs are host-partitioned, so the gate does not apply to them |
+| dedicated host per tenant (the escape hatch, and the tier) | ADR-0013 | **available** — `grant-shared-state=true` plus `template.spec.environment`, no catalog change needed |
 | tenant config (`localResources.config`) | ADR-0010 | not wired — a deployed app cannot be configured yet, so `mesh` on the cluster answers `no route configured` |
 | shared-host scheduling (`template.spec.environment`) | — | **done** — a workload in `tenant-<x>` runs on the shared host in another namespace |
 
@@ -65,7 +69,11 @@ client, so the default loop cannot touch a cluster), `just e2e-platform`,
   same records. The bucket is chosen by the guest's `store::open(name)`, not by
   manifest config, and every capability here hardcodes `"default"`. See
   [ADR-0012](0012-keyvalue-isolation-needs-a-cooperative-component.md); the gate is
-  now enforced in code, not in prose.
+  now enforced in code, not in prose. **What we do instead** (ADR-0013): the entry is
+  not emitted at all, which was measured to fail closed in the host's linker
+  (`a matching implementation was not found ... unbinding all plugins`), and a save
+  that needs it is refused with a `409` naming the interface. Apps that need keyvalue
+  run on a host environment of their own.
 - **Namespace `NetworkPolicy` is inert for shared-host workloads** — the component
   runs in a pod in the HOST's namespace, so a policy in the tenant's namespace
   selects nothing. Egress control rests entirely on `allowedHosts` (found in the
