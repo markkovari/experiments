@@ -107,7 +107,27 @@ fn record_push(key: &str, digest: &str) -> u16 {
     }
 }
 
+/// Refuse to run against someone else's process. Every e2e in this repo assumes its
+/// port is free, and when it is not the test silently talks to a stranger — which has
+/// produced two confusing failures already (a passkey run asserting against a
+/// tailnet-configured host, and a platform run finding `ada` already registered).
+fn require_port_free(addr: &str, what: &str) {
+    if std::net::TcpStream::connect_timeout(
+        &addr.parse().expect("addr"),
+        Duration::from_millis(300),
+    )
+    .is_ok()
+    {
+        panic!(
+            "{addr} is already in use, so this test would run against that process instead of its own {what}. \
+             Stop it first (e.g. `pkill -f vet-host`, `pkill -f release/applier`)."
+        );
+    }
+}
+
 fn start_all() -> (Kill, Kill) {
+    require_port_free(PLATFORM, "platform");
+    require_port_free(APPLIER, "applier");
     // The applier first — validate-only, so no Kubernetes client is ever built.
     let applier_bin = root().join("applier/target/release/applier");
     assert!(applier_bin.exists(), "applier not built (run `just e2e-platform`)");
@@ -244,8 +264,11 @@ fn platform_signs_in_renders_and_applies() {
     // 0005: one hostInterfaces entry per interface, never merged.
     assert!(yaml.contains("interfaces: [store]"), "{yaml}");
     assert!(!yaml.contains("interfaces: [store, atomics]"));
-    // 0008: the isolation stamp, which the tenant never wrote.
-    assert!(yaml.contains("bucket: t-ada"), "tenant bucket: {yaml}");
+    // 0008/0012: the isolation stamp the tenant never wrote. keyvalue is NOT
+    // isolated — proven on a real cluster — so the manifest says so instead of
+    // carrying a bucket key nothing reads.
+    assert!(yaml.contains("NOT tenant-isolated"), "kv honesty: {yaml}");
+    assert!(!yaml.contains("bucket: t-ada"), "must not fake kv isolation: {yaml}");
     assert!(yaml.contains("allowedHosts:"), "fail-closed egress is explicit: {yaml}");
     assert!(yaml.contains("permits no egress"), "this plan has none: {yaml}");
 
@@ -314,12 +337,15 @@ fn platform_signs_in_renders_and_applies() {
     assert_eq!(code, 201, "creating a draft is fine");
     let (_, eve_deployments) = req("GET", "/api/deployments", Some(&eve), None);
     let sid = eve_deployments["deployments"][0]["id"].as_str().unwrap().to_string();
+    // ADR-0012's gate fires before anything else: two tenants on one host share a
+    // keyvalue bucket, proven on a real cluster, so a second tenant cannot deploy at
+    // all until that is fixed. This is the release gate ADR-0008 asked for, in code.
     let (code, denied) = req("POST", &format!("/api/deployments/{sid}/save"), Some(&eve), Some(json!({})));
-    assert_eq!(code, 422, "{denied}");
-    assert!(
-        denied["error"].as_str().unwrap().contains("not visible to you"),
-        "0007: {denied}"
-    );
+    assert_eq!(code, 403, "{denied}");
+    let msg = denied["error"].as_str().unwrap();
+    assert!(msg.contains("multi-tenant deploys are gated"), "{msg}");
+    assert!(msg.contains("share one keyvalue bucket"), "{msg}");
+    assert!(msg.contains("adr/0012"), "the refusal cites the evidence: {msg}");
     // Eve cannot read ada's deployment at all.
     assert_eq!(req("GET", &format!("/api/deployments/{id}"), Some(&eve), None).0, 404);
     assert_eq!(req("GET", &format!("/api/deployments/{id}/manifests"), Some(&eve), None).0, 404);

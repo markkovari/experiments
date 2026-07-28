@@ -687,6 +687,32 @@ fn deployment_save(request: &IncomingRequest, id: &str) -> Outcome {
     let Some((rec, rev, mut doc)) = owned_deployment(&p, id) else {
         return Outcome::Err(404, "not_found".into());
     };
+    // ADR-0008's release gate, and it is no longer hypothetical: the adversarial
+    // test FAILED on a real cluster (ADR-0012). Two tenants running the same app
+    // share one keyvalue bucket, so a second tenant's deployment would read the
+    // first's records. Refuse until storage isolation actually works.
+    if cfg("allow-multi-tenant", "false") != "true" {
+        let tenants = records::list_records(ACCOUNTS, 100, "")
+            .map(|page| page.entries.len())
+            .unwrap_or(0);
+        let first = records::list_records(ACCOUNTS, 100, "")
+            .map(|page| page.entries)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok())
+            .min_by_key(|v| v["created"].as_u64().unwrap_or(0))
+            .and_then(|v| v["tenant"].as_str().map(String::from))
+            .unwrap_or_default();
+        if tenants > 1 && first != p.tenant {
+            return Outcome::Err(
+                403,
+                format!(
+                    "multi-tenant deploys are gated: two tenants on this host share one keyvalue bucket, so `{}` would read `{first}`'s records (docs/adr/0012). Set allow-multi-tenant=true only on a host where storage isolation is proven.",
+                    p.tenant
+                ),
+            );
+        }
+    }
     // A save may also update the graph in the same request.
     if let Ok(b) = body(request) {
         for key in ["nodes", "edges", "strategy"] {
@@ -715,6 +741,8 @@ fn deployment_save(request: &IncomingRequest, id: &str) -> Outcome {
         parts: &parts,
         plan: &tenant_plan,
         http_host: &http_host,
+        // Shared-host scheduling: platform infrastructure, not tenant input.
+        environment: &cfg("environment", ""),
     }) {
         Ok(m) => m,
         Err(e) => return Outcome::Err(422, e.detail()),

@@ -129,6 +129,17 @@ pub struct HostIface {
 
 pub struct RenderInput<'a> {
     pub tenant: &'a str,
+    /// The host ENVIRONMENT to schedule onto. Per the operator's CRD: "Environment,
+    /// if set, scopes scheduling to Hosts whose Environment matches this value,
+    /// regardless of the Workload's own namespace... only honored when the operator
+    /// is started with allowSharedHosts=true".
+    ///
+    /// This is what makes ADR-0002 (a namespace per tenant) compatible with
+    /// PLATFORM.md's shared-hostgroup density bet: the workload object lives in the
+    /// tenant's namespace, the component runs on a shared host elsewhere. Platform
+    /// infrastructure config, never tenant input. Empty omits the field, in which
+    /// case scheduling falls back to hosts in the workload's own namespace.
+    pub environment: &'a str,
     /// Deployment name, already validated as a DNS label by the caller.
     pub name: &'a str,
     pub strategy: Strategy,
@@ -244,6 +255,9 @@ pub fn render(input: &RenderInput) -> Result<String, RenderError> {
     s.push_str("spec:\n");
     s.push_str(&format!("  replicas: {}\n", input.plan.replicas.max(1)));
     s.push_str("  template:\n    spec:\n");
+    if !input.environment.is_empty() {
+        s.push_str(&format!("      environment: {}\n", input.environment));
+    }
     if serves_http {
         s.push_str("      kubernetes:\n        service:\n");
         s.push_str(&format!("          name: {}\n", input.name));
@@ -279,15 +293,24 @@ pub fn render(input: &RenderInput) -> Result<String, RenderError> {
                     s.push_str("          config:\n");
                     s.push_str(&format!("            host: {}\n", input.http_host));
                 }
-                // The isolation stamp: the workload may only reach this tenant's
-                // container/bucket. Tenants never write this (ADR-0008).
+                // blobstore DOES allow-list containers per workload — the one
+                // storage isolation mechanism with a working precedent.
                 ("wasi", "blobstore", _) => {
                     s.push_str("          config:\n");
                     s.push_str(&format!("            buckets: {bucket}\n"));
                 }
+                // NOT isolated, and saying so beats pretending. The bucket a
+                // component gets is the one it passes to `store::open(name)`, matched
+                // against a hostInterfaces entry's `name`. Every capability in this
+                // catalog hardcodes `open("default")` (records:store:47), so a
+                // `config: bucket:` key here is read by nothing — it was stamped for
+                // two deploys and isolated nothing, proven by a second tenant reading
+                // the first's records. See ADR-0012.
                 ("wasi", "keyvalue", _) => {
-                    s.push_str("          config:\n");
-                    s.push_str(&format!("            bucket: {bucket}\n"));
+                    s.push_str("          # NOT tenant-isolated: the component opens\n");
+                    s.push_str("          # `default` and the host has one keyvalue backend.\n");
+                    s.push_str("          # See docs/adr/0012 — do not add a bucket key here\n");
+                    s.push_str("          # expecting it to isolate anything.\n");
                 }
                 _ => {}
             }
@@ -436,7 +459,25 @@ mod tests {
             parts,
             plan,
             http_host: "api.tenant-acme.svc.cluster.local",
+            environment: "",
         }
+    }
+
+    #[test]
+    fn the_environment_targets_a_shared_host_in_another_namespace() {
+        // The workload object lives in the tenant's namespace; the component runs on
+        // a shared host whose Environment matches. Without this the operator looks
+        // for a host in tenant-<x>, finds none, and the workload never schedules.
+        let parts = vec![part("api", true, vec![])];
+        let plan = Plan::default();
+        let mut i = input(&parts, Strategy::Fused, &plan);
+        i.environment = "jobs";
+        let out = render(&i).unwrap();
+        assert!(out.contains("      environment: jobs\n"), "{out}");
+        assert!(out.contains("namespace: tenant-acme"), "the object still belongs to the tenant");
+        // Omitted when unset, so a single-namespace deployment behaves as before.
+        let out = render(&input(&parts, Strategy::Fused, &plan)).unwrap();
+        assert!(!out.contains("environment:"), "{out}");
     }
 
     #[test]
@@ -501,7 +542,7 @@ mod tests {
     }
 
     #[test]
-    fn isolation_is_stamped_on_storage_and_egress() {
+    fn isolation_is_stamped_where_it_actually_works() {
         let parts = vec![part(
             "api",
             false,
@@ -510,9 +551,15 @@ mod tests {
         let plan = Plan { egress: vec!["api.example.com".into()], ..Plan::default() };
         let out = render(&input(&parts, Strategy::Fused, &plan)).unwrap();
 
-        // The tenant's prefix, which the tenant never sets or sees.
-        assert!(out.contains("bucket: t-acme"), "keyvalue stamped: {out}");
-        assert!(out.contains("buckets: t-acme"), "blobstore stamped: {out}");
+        // blobstore: the one storage mechanism with a working precedent.
+        assert!(out.contains("buckets: t-acme"), "blobstore container allow-list: {out}");
+
+        // keyvalue: NOT isolated, and the manifest says so rather than carrying a
+        // bucket key nothing reads. Proven on a cluster — a second tenant read the
+        // first's records straight through it (ADR-0012).
+        assert!(!out.contains("bucket: t-acme"), "must not pretend to isolate kv: {out}");
+        assert!(out.contains("NOT tenant-isolated"), "{out}");
+
         // Egress in both forms — a bare-only list silently fails closed on a port.
         assert!(out.contains("- \"api.example.com\""));
         assert!(out.contains("- \"api.example.com:443\""), "{out}");
