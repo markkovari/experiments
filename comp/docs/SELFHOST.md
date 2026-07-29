@@ -22,14 +22,35 @@ Start at tier 1. Go up when a measurement tells you to, not before.
 
 ## Tier 1 — `comp-host` + systemd, one URL per app
 
-**This is built and it works today.** One app, one process, one hostname.
+One app, one process, one hostname.
 
 ```bash
+just selfhost-bootstrap my-vps       # ONCE per box: install comp-host, wire Caddy
 just compose-gate                    # components -> one .wasm
-just selfhost-render gate            # see the unit, env file and route
+just selfhost-render gate            # read the unit, env file and route first
 just selfhost-deploy gate my-vps     # ship it
 just selfhost-status gate my-vps
 ```
+
+`selfhost-bootstrap` cross-builds a **static** `comp-host` (musl, so no glibc version to
+match — one binary runs on Debian, Ubuntu or Alpine), installs it, creates the
+directories, appends `import /etc/caddy/comp/*.caddy` to the Caddyfile, and pins `TS_IP`.
+Skipping it would install a unit pointing at a binary that is not there and drop site
+files where Caddy never looks — it would appear to work and serve nothing, so
+`selfhost-deploy` refuses to run until the binary exists.
+
+For an ARM box: `just selfhost-bootstrap my-pi aarch64`.
+
+### What each box needs
+
+| | |
+|---|---|
+| ssh + sudo | the recipes are `scp` and `systemctl`, nothing more |
+| tailscale, joined | for `access = "tailnet"`; `selfhost-tsip` reads its address |
+| caddy | `selfhost-bootstrap` adds the import line; validates the config |
+| `comp-host` | installed by `selfhost-bootstrap`, 38 MB, static |
+| a DNS record per app | pointing the hostname at the box's `100.x` address (tailnet custom record or split DNS) |
+| Caddy's root trusted | once per device you browse from, for `tls internal` |
 
 The spec:
 
@@ -198,6 +219,8 @@ forfeits the one advantage the whole approach is for. Tier 3 is the v2 operator,
 | | |
 |---|---|
 | `apps/<name>.toml` | the app spec — the only file you write |
+| `just selfhost-bootstrap <host>` | one-time box prep: static comp-host, dirs, Caddy import, TS_IP |
+| `just selfhost-deploy-all <host>` | every app in `apps/` to one box |
 | `selfhost/` | tier-1 renderer, pure and tested (10 tests, incl. one that checks the flags it emits actually exist on `comp-host`) |
 | `host/` | `comp-host` — the runtime for tiers 1 and 2 |
 | `components/platform-domain/src/render.rs` | the tier-3 renderer |

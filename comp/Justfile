@@ -1673,6 +1673,44 @@ check: wit-check validate
 build-selfhost:
     cd selfhost && cargo build --release
 
+# Cross-build a STATIC comp-host for a Linux box.
+#
+# musl on purpose: the result has no glibc version to match, so one binary runs on
+# Debian, Ubuntu or Alpine. Needs `cross` and a running docker/orbstack. Takes ~4
+# minutes cold, because wasmtime.
+#
+#   just selfhost-build-host              # x86_64 (most VPSes)
+#   just selfhost-build-host aarch64      # ARM boxes, Pi, Hetzner/Oracle ARM
+selfhost-build-host arch="x86_64":
+    cd host && cross build --release --target {{arch}}-unknown-linux-musl
+    @file host/target/{{arch}}-unknown-linux-musl/release/comp-host
+    @ls -la host/target/{{arch}}-unknown-linux-musl/release/comp-host | awk '{printf "  %.0f MB\n", $5/1048576}'
+
+# ONE-TIME per box. Installs the runtime and makes Caddy read what this lane writes.
+#
+# Without this, `selfhost-deploy` would install a unit pointing at a comp-host that
+# does not exist, and drop site files into a directory Caddy never reads — so it would
+# look like it worked and serve nothing.
+selfhost-bootstrap host arch="x86_64": (selfhost-build-host arch)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    BIN=host/target/{{arch}}-unknown-linux-musl/release/comp-host
+    scp "$BIN" {{host}}:/tmp/comp-host
+    ssh {{host}} "set -e; \
+      sudo install -m 0755 /tmp/comp-host /usr/local/bin/comp-host; rm -f /tmp/comp-host; \
+      sudo mkdir -p /srv/comp /etc/comp /etc/caddy/comp; \
+      sudo chmod 0711 /etc/comp; \
+      /usr/local/bin/comp-host --help >/dev/null && echo '  comp-host installed:' && /usr/local/bin/comp-host --help | head -1"
+    @# Caddy only reads files it is told to. An import line at the end of the Caddyfile
+    @# is top-level, which is where site blocks belong.
+    ssh {{host}} "set -e; \
+      sudo touch /etc/caddy/Caddyfile; \
+      grep -qF 'import /etc/caddy/comp/*.caddy' /etc/caddy/Caddyfile || \
+        echo 'import /etc/caddy/comp/*.caddy' | sudo tee -a /etc/caddy/Caddyfile >/dev/null; \
+      sudo caddy validate --config /etc/caddy/Caddyfile 2>&1 | tail -2 || true"
+    just selfhost-tsip {{host}}
+    @echo "  bootstrapped {{host}} — `just selfhost-deploy <app> {{host}}` will work now"
+
 # Render one app's systemd unit, env file and route WITHOUT touching a box.
 # Read the output before you trust it to a server.
 selfhost-render app router="caddy": build-selfhost
@@ -1700,6 +1738,12 @@ selfhost-deploy app host router="caddy": build-selfhost
       exit 1
     fi
     ./selfhost/target/release/selfhost validate apps/*.toml
+    # Fail here, not with a unit that cannot start. The binary is the one thing the
+    # deploy does NOT ship — it is 38 MB and identical for every app on the box.
+    if ! ssh {{host}} "test -x /usr/local/bin/comp-host"; then
+      echo "{{host}} has no /usr/local/bin/comp-host — run: just selfhost-bootstrap {{host}}" >&2
+      exit 1
+    fi
     ./selfhost/target/release/selfhost render apps/{{app}}.toml --out target/selfhost --router {{router}}
     D=target/selfhost/{{app}}
     # 0644 on the artifact: the unit runs under DynamicUser, a transient uid that
@@ -1767,3 +1811,11 @@ selfhost-remove app host:
       sudo rm -rf /srv/comp/{{app}} /var/lib/private/comp/{{app}} /var/lib/comp/{{app}}; \
       sudo systemctl daemon-reload; sudo systemctl reload caddy 2>/dev/null || true"
     @echo "removed {{app}} from {{host}} (including its state)"
+
+# Ship every app in apps/ to one box. The fleet-of-one-machine case.
+selfhost-deploy-all host router="caddy":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for f in apps/*.toml; do
+      just selfhost-deploy "$(basename "$f" .toml)" {{host}} {{router}}
+    done
