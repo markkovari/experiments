@@ -34,8 +34,23 @@ whether the pieces share a host:
 | network hops between them | **0** | up to 7 |
 
 The shape of it: a **70 Mi floor** for the host runtime, then **2.3 Mi per additional
-component** — each with eight warm instances ready to serve. Extrapolated, 100 components
-in one host is ~296 Mi against ~7 GB as 100 pods.
+component** — each with eight warm instances ready to serve. (Those are cold-start figures;
+a pod that has served traffic settles nearer 233 Mi, and the *ratio* is what holds.)
+
+**Under load it gets better, not worse.** Same 200 connections on one node, arranged two
+ways ([ADR-0020](adr/0020-the-density-number-under-load.md)):
+
+| | one pod, 4 components | four pods, 1 each |
+|---|---|---|
+| throughput | 20 041 rps | 20 064 rps |
+| CPU | 5 078 m | 5 172 m |
+| memory | **257 Mi** | 820 Mi |
+| **p99** | **16.5 ms** | 26.0 ms |
+
+Identical throughput, identical CPU, **3.2× less memory, and a 36 % better tail** — fewer
+pods means fewer independent schedulers and pools on one request's critical path. Adding
+three components to a host cost 1.6 % throughput; a million requests over 60 s showed no
+leak. So this is not a memory-for-speed trade: packing is both cheaper and steadier.
 
 So the decomposition decision stops being an economic one. Four components or forty, it
 is one pod, one endpoint, one thing to operate, and no hop between the pieces.
@@ -90,8 +105,9 @@ both were restored and the app answered with its data intact.
   the *second* component onward.
 - **Many tenants packed onto one host.** That was the original bet and it is currently
   impossible: `wasi:keyvalue` cannot be partitioned per workload, so each app gets its own
-  host and its own bus. The prize is large — 24× memory at 100 apps — and blocked on one
-  upstream fix, which is now a quantified ask rather than a wish.
+  host and its own bus. The prize is large — **~24× less memory** for 100 apps (~300 Mi
+  instead of ~7 GB) — and blocked on one upstream fix, which is now a quantified ask
+  rather than a wish.
 - **High-density shared state.** A private message bus per app is isolation by
   duplication. A shared database with per-tenant credentials is denser *and* a stronger
   boundary. Until a host can be handed a scoped NATS identity, this is a real cost.
@@ -107,8 +123,9 @@ two values); two tenants isolated at the API and in storage; delete removing an 
 footprint including the host's self-registered object; drift corrected automatically; and
 the density and hop numbers above.
 
-**Not proven**: anything under load — every measurement here was taken idle, so there is
-no p99, no concurrency profile, no soak. Also unbuilt: tenant configuration (a deployed app
+**Not proven**: more than one node; a large component (everything here used a 75 KB one, to
+isolate platform overhead rather than app cost); behaviour at `maxInvocations`; a hostile or
+hot neighbour inside a packed host; and anything longer than a minute of load. Also unbuilt: tenant configuration (a deployed app
 cannot yet be told anything), rollback (revisions are stored, the verb is missing), secrets,
 public sharing, and the platform hosting itself.
 

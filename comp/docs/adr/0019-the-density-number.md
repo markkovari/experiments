@@ -24,6 +24,12 @@ buy? That number had never been measured, and it is the entire case. So it was m
 Same eight components (`kv-probe`, 75 KB), same `poolSize: 8`, two shapes, idle, on one
 node. Actual usage from `metrics-server`, not requests.
 
+**Which runtime these belong to**, because two are in play and attributing them wrongly
+would waste someone's day: the app hosts are `ghcr.io/wasmcloud/wash:2.5.2`, embedding
+whatever wasmtime that release vendors — *not* the `wasmtime = "47"` pinned by this repo's
+own `host/` crate, which runs the platform component, the e2e and the native vet-clinic
+lane. Every figure below is wash 2.5.2's.
+
 | | shape A: 8 components, ONE host pod | shape B: 1 component per host pod |
 |---|---|---|
 | pods | **1** | 8 |
@@ -43,12 +49,13 @@ same host with 8 components:        86 Mi
 marginal cost per component:        2.3 Mi   (8 warm instances each)
 ```
 
-Extrapolated, and the reason the original bet was attractive:
+Extrapolated, and the reason the original bet was attractive — **cold-start figures**, so
+multiply by ~3 for a host that has served traffic ([ADR-0020](0020-the-density-number-under-load.md)):
 
 | components | one host | pod per app | ratio |
 |---|---|---|---|
 | 10 | 91 Mi, 1 pod | 700 Mi, 10 pods | 8× |
-| 100 | 296 Mi, 1 pod | 7 000 Mi, 100 pods | 24× |
+| 100 | 296 Mi, 1 pod | 7 000 Mi, 100 pods | 24× less memory |
 | 1000 | 2.4 Gi, 1 pod | 70 Gi, 1000 pods | 30× |
 
 And the hop, measured from inside the cluster against a real workload:
@@ -78,8 +85,9 @@ build for it.**
 - **The 24–30× prize is real and blocked upstream by exactly one thing.** Many apps per
   host is where wasm beats containers by an order of magnitude, and the only blocker is
   per-workload keyvalue partitioning (ADR-0012, ADR-0015). That is now a *quantified*
-  upstream ask: fixing `hostInterfaces[].name` is worth 24× memory at 100 apps, not a
-  tidiness improvement.
+  upstream ask: fixing `hostInterfaces[].name` would cut memory for 100 apps by roughly
+  **24×** (~7 GB → ~300 Mi), not a tidiness improvement. ("24×" is a ratio, not a version
+  number — a real reader tripped on that phrasing.)
 - **Nothing in the control plane changes.** The applier holding the only credential
   (0003), reconcile and drift (0004), digest pinning (0006), delete-by-label with an
   orphan sweep (0016), the push queue (0017) — all substrate-agnostic. If this ever
@@ -97,10 +105,11 @@ build for it.**
   what you can, link the rest, and never split into pods without a reason.
 - **A per-app 70 Mi floor should be visible to the tenant**, because it is most of the
   cost of a small app and it does not shrink. Metering that is honest; hiding it is not.
-- **These are idle floors, not throughput.** Every measurement here sat at `1m` CPU.
-  Nothing has been load-tested — no p99 under concurrency, no behaviour at
-  `maxInvocations`, no memory growth under sustained traffic. The density claim is proven;
-  the *performance* claim is not even attempted.
+- ~~These are idle floors, not throughput.~~ **Now measured — see
+  [ADR-0020](0020-the-density-number-under-load.md).** Under load the ratio holds and gets
+  better (identical throughput and CPU, 3.2× less memory, 36% lower p99), but the absolute
+  figures here are **cold-start**: a host pod that has served traffic settles near 233 Mi,
+  not 86 Mi. Quote 0020's numbers publicly, not these.
 - **One component was measured, small.** `kv-probe` is 75 KB. A 173 KB `mesh-domain` or a
   1 MB `wit-reflect` will have a larger slope. The 2.3 Mi is a floor for small components,
   not a universal constant.

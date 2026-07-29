@@ -10,7 +10,9 @@ inside it. Where they disagree, the ADR wins.
 **Read [ADR-0019](0019-the-density-number.md) for the numbers themselves.** The
 multi-tenant density bet PLATFORM.md was built on is falsified (ADR-0012, ADR-0014). What
 survives, measured: **2.3 Mi per extra component inside a host against 70 Mi for a
-component in its own pod, and 1.2 ms saved per network hop avoided.** So the value here is
+component in its own pod, and 1.2 ms saved per network hop avoided** — and under load,
+**identical throughput and CPU, 3.2× less memory, and a 36% better p99**
+([ADR-0020](0020-the-density-number-under-load.md)). So the value here is
 decomposing one app into many components, not packing many tenants onto one host — and a
 single-component app should be a container, not a wasm workload.
 
@@ -34,7 +36,8 @@ single-component app should be a container, not a wasm workload.
 | [0016](0016-deleting-an-app-is-reconciled-not-remembered.md) | Deleting an app is reconciled, not remembered | accepted |
 | [0017](0017-the-applier-pushes-and-the-registry-is-a-cache.md) | The applier pushes, and the registry is a cache | accepted; auth reasoning corrected by [0018](0018-the-platform-deploys-a-running-app.md) |
 | [0018](0018-the-platform-deploys-a-running-app.md) | The platform deploys a running app, and what that took | accepted |
-| [0019](0019-the-density-number.md) | The density number, measured: 2.3 Mi per component, 70 Mi per app | accepted |
+| [0019](0019-the-density-number.md) | The density number, measured: 2.3 Mi per component, 70 Mi per app | accepted (idle/cold-start figures) |
+| [0020](0020-the-density-number-under-load.md) | The same density number, under load: free throughput, 3.2× memory, better tail | accepted |
 
 ## The shape these add up to
 
