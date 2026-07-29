@@ -124,7 +124,7 @@ fn require_port_free(addr: &str, what: &str) {
     {
         panic!(
             "{addr} is already in use, so this test would run against that process instead of its own {what}. \
-             Stop it first (e.g. `pkill -f vet-host`, `pkill -f release/applier`)."
+             Stop it first (e.g. `pkill -f comp-host`, `pkill -f release/applier`)."
         );
     }
 }
@@ -147,7 +147,7 @@ fn start_all() -> (Kill, Kill) {
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    let host = root().join("host/target/release/vet-host");
+    let host = root().join("host/target/release/comp-host");
     let component = root().join("components/target/platform_domain.composed.wasm");
     assert!(component.exists(), "composed wasm missing (just compose-platform)");
     let platform = Command::new(&host)
@@ -158,7 +158,7 @@ fn start_all() -> (Kill, Kill) {
         .env("CFG_REGISTRY", "registry.platform.svc.cluster.local:5000")
         .env("CFG_CLUSTER_SUFFIX", "svc.cluster.local")
         .spawn()
-        .expect("spawn vet-host");
+        .expect("spawn comp-host");
     let platform = Kill(platform);
     for _ in 0..200 {
         if let Ok(r) = ureq::get(&format!("http://{PLATFORM}/")).call() {
