@@ -1664,3 +1664,75 @@ k8s-collapse:
 # Full local check: vendor (if needed), validate WIT, build, validate components.
 check: wit-check validate
     @echo "OK — contract resolves and both components build clean"
+
+# ---------------------------------------------------------------------------
+# Self-hosting lane (tier 1 of docs/SELFHOST.md): comp-host + systemd + a
+# per-app URL. No Kubernetes, no operator, no NATS.
+# ---------------------------------------------------------------------------
+
+build-selfhost:
+    cd selfhost && cargo build --release
+
+# Render one app's systemd unit, env file and route WITHOUT touching a box.
+# Read the output before you trust it to a server.
+selfhost-render app router="caddy": build-selfhost
+    ./selfhost/target/release/selfhost render apps/{{app}}.toml \
+      --out target/selfhost --router {{router}}
+    @echo "--- unit ---";  cat target/selfhost/{{app}}/comp-{{app}}.service
+    @echo "--- route ---"; cat target/selfhost/{{app}}/{{app}}.*
+
+# Refuse the collisions a single spec cannot see: two apps on one port, one
+# domain, or one name. Run it in CI over apps/*.toml.
+selfhost-check: build-selfhost
+    ./selfhost/target/release/selfhost validate apps/*.toml
+
+# Ship one app to one box: compose, render, copy, restart, route.
+#
+# Needs on the box: comp-host at /usr/local/bin, caddy (or traefik), and an ssh
+# key. It is deliberately plain scp+systemctl — for a handful of machines a
+# control plane costs more than it saves (docs/SELFHOST.md).
+selfhost-deploy app host router="caddy": build-selfhost
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ART=$(python3 -c "import tomllib,sys;print(tomllib.load(open('apps/{{app}}.toml','rb'))['artifact'])")
+    if [ ! -f "$ART" ]; then
+      echo "missing $ART — run the app's compose recipe first (just compose-{{app}})" >&2
+      exit 1
+    fi
+    ./selfhost/target/release/selfhost validate apps/*.toml
+    ./selfhost/target/release/selfhost render apps/{{app}}.toml --out target/selfhost --router {{router}}
+    D=target/selfhost/{{app}}
+    # 0644 on the artifact: the unit runs under DynamicUser, a transient uid that
+    # must still be able to read it. 0600 on the env file: it may hold secrets and
+    # systemd reads it as root before dropping privileges.
+    ssh {{host}} "sudo mkdir -p /srv/comp/{{app}} /etc/comp /etc/caddy/comp"
+    scp "$ART" {{host}}:/tmp/{{app}}.wasm
+    scp "$D/comp-{{app}}.service" {{host}}:/tmp/
+    scp "$D/{{app}}.env" {{host}}:/tmp/
+    scp "$D"/{{app}}.caddy {{host}}:/tmp/ 2>/dev/null || scp "$D"/{{app}}.yml {{host}}:/tmp/
+    ssh {{host}} "set -e; \
+      sudo install -m 0644 /tmp/{{app}}.wasm /srv/comp/{{app}}/app.wasm; \
+      sudo install -m 0600 /tmp/{{app}}.env /etc/comp/{{app}}.env; \
+      sudo install -m 0644 /tmp/comp-{{app}}.service /etc/systemd/system/comp-{{app}}.service; \
+      sudo install -m 0644 /tmp/{{app}}.caddy /etc/caddy/comp/{{app}}.caddy 2>/dev/null || \
+        sudo install -m 0644 /tmp/{{app}}.yml /etc/traefik/comp/{{app}}.yml; \
+      sudo systemctl daemon-reload; \
+      sudo systemctl enable --now comp-{{app}}; \
+      sudo systemctl restart comp-{{app}}; \
+      sudo systemctl reload caddy 2>/dev/null || true; \
+      rm -f /tmp/{{app}}.wasm /tmp/comp-{{app}}.service /tmp/{{app}}.env /tmp/{{app}}.caddy /tmp/{{app}}.yml"
+    @echo "deployed {{app}} to {{host}}"
+
+# Is it up, and what is it doing?
+selfhost-status app host:
+    ssh {{host}} "systemctl status comp-{{app}} --no-pager -n 15 || true"
+
+# Remove an app from a box, including its state.
+selfhost-remove app host:
+    ssh {{host}} "set -e; \
+      sudo systemctl disable --now comp-{{app}} || true; \
+      sudo rm -f /etc/systemd/system/comp-{{app}}.service /etc/comp/{{app}}.env \
+                 /etc/caddy/comp/{{app}}.caddy /etc/traefik/comp/{{app}}.yml; \
+      sudo rm -rf /srv/comp/{{app}} /var/lib/private/comp/{{app}} /var/lib/comp/{{app}}; \
+      sudo systemctl daemon-reload; sudo systemctl reload caddy 2>/dev/null || true"
+    @echo "removed {{app}} from {{host}} (including its state)"

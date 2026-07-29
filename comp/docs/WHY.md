@@ -98,6 +98,14 @@ reconcile from stored revisions — so a half-finished delete, a crash or a hand
 converge. Proven by deleting a Service and scaling an app's host to zero: one pass later
 both were restored and the app answered with its data intact.
 
+## Running it yourself
+
+For your own apps on your own machines, most of the platform is unnecessary — the
+multi-tenancy machinery defends strangers from each other. [`SELFHOST.md`](SELFHOST.md)
+is the progressive path: `comp-host` + systemd + a per-app URL to start (built, one
+`just selfhost-deploy` away), many-apps-per-host when RAM demands it, k3s + the operator
+only when placement across machines becomes a chore.
+
 ## What it is honestly not for
 
 - **A single-component app.** You would pay a 70 Mi host to run a 75 KB component. Use a
