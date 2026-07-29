@@ -6,7 +6,8 @@ in [ADR-0001](0001-use-adrs.md).
 `PLATFORM.md` remains the narrative plan and the phase order; these own the forks
 inside it. Where they disagree, the ADR wins.
 
-**Read [ADR-0019](0019-the-density-number.md) first if you want the point of this.** The
+**[`../WHY.md`](../WHY.md) is the value proposition, with the measurements behind it.**
+**Read [ADR-0019](0019-the-density-number.md) for the numbers themselves.** The
 multi-tenant density bet PLATFORM.md was built on is falsified (ADR-0012, ADR-0014). What
 survives, measured: **2.3 Mi per extra component inside a host against 70 Mi for a
 component in its own pod, and 1.2 ms saved per network hop avoided.** So the value here is
