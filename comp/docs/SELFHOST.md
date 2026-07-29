@@ -35,6 +35,7 @@ The spec:
 
 ```toml
 name = "gate"
+access = "tailnet"                   # the default; "public" for the few things strangers need
 domain = "gate.example.com"
 artifact = "components/target/gate_domain.composed.wasm"
 kv = "memory"                        # or redis / nats
@@ -45,15 +46,54 @@ grace-period-secs = "5"
 ```
 
 From that, `selfhost` renders three files: a hardened systemd unit, a `CFG_*` environment
-file, and a Caddy site (or `--router traefik`) so the app gets its own URL with automatic
-TLS.
+file, and a route so the app gets its own URL over HTTPS — a Caddy site by default,
+`--router traefik` or `--router tailscale-serve` if you prefer those.
 
 **Per-app URLs.** Every app binds `127.0.0.1:<port>` and nothing else — the unit is tested
-to never emit `0.0.0.0`. The proxy is the only public listener, it routes by hostname, and
-it obtains certificates itself. Ports are derived from the app name, *stably*, so a
+to never emit `0.0.0.0`. The proxy is the only listener that faces anything, it routes by
+hostname, and it handles certificates. Ports are derived from the app name, *stably*, so a
 re-render never moves a running app out from under its route; `just selfhost-check` refuses
 two apps landing on the same port, domain or name, which is the one collision a single spec
 cannot see.
+
+### Reaching them: `access = "tailnet"` (the default) or `"public"`
+
+`tailnet` renders a Caddy site with two directives that do the work:
+
+```
+gate.example.com {
+	bind {$TS_IP}      # the Tailscale address ONLY — not the VPS's public interface
+	tls internal       # a cert from Caddy's own CA: no ACME, no DNS provider, no record
+	reverse_proxy 127.0.0.1:30386
+}
+```
+
+`just selfhost-deploy` pins `TS_IP` into Caddy's unit from `tailscale ip -4` on the box.
+That step is load-bearing: Caddy expands `{$TS_IP}` from its own environment, so if nothing
+sets it the bind resolves to empty and Caddy listens on **every** interface — private by
+intention, public in fact. `just selfhost-tsip <host>` does it alone and is idempotent.
+
+You then need the hostname to resolve to that `100.x` address, which Tailscale can do
+without any external DNS: a custom DNS record in the tailnet, or a split-DNS entry.
+MagicDNS by itself gives one name per *machine*, not per app.
+
+`tls internal` costs one thing: trusting Caddy's root on each device you browse from
+(`caddy trust`, or install its `root.crt`). Worth doing rather than dropping to plain
+HTTP — WireGuard already encrypts the wire, but a **secure context** is what passkeys,
+service workers and the clipboard API require, and this repo has a passkey app.
+
+**The alternatives, and why they lose here:**
+
+| | URL | cost |
+|---|---|---|
+| **Caddy + `tls internal`** *(rendered)* | `https://gate.example.com` | trust one CA per device |
+| `tailscale serve` (`--router tailscale-serve`) | `https://box.tailnet.ts.net/gate` | a real cert for free, but **one hostname per machine** — apps split by path, which breaks anything assuming `/` |
+| one `tailscaled` per app | `https://gate.tailnet.ts.net` | the nicest names and free certs, but tens of MiB per app — it fights the density argument |
+| DNS-01 with a public CA | `https://gate.example.com` | a browser-trusted cert with no CA to install, but needs a DNS provider API and a custom Caddy build |
+| MagicDNS + plain HTTP | `http://box.tailnet.ts.net:30386` | nothing to set up; no secure context, ugly ports |
+
+`--router tailscale-serve` is rendered and available if you would rather have zero
+certificate work and can live with paths.
 
 **Why nothing collides.** Nothing is shared:
 
@@ -69,7 +109,7 @@ That is isolation by process and filesystem, which is what Unix has always done.
 platform's per-app hosts and private buses exist to defend *strangers* from each other; on
 your own box you do not need them.
 
-**Hardening**, because this serves the internet: `DynamicUser` (a transient uid per app),
+**Hardening**, because it serves a network either way: `DynamicUser` (a transient uid per app),
 `ProtectSystem=strict`, `ProtectHome`, `NoNewPrivileges`, `PrivateTmp`, `PrivateDevices`,
 `RestrictNamespaces`, `RestrictAddressFamilies`, `LockPersonality`. The one thing that
 cannot be tightened is `MemoryDenyWriteExecute` — wasmtime JITs, so it needs W^X, and the

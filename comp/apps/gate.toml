@@ -4,6 +4,10 @@
 #   just selfhost-render gate            # see what would be written
 #   just selfhost-deploy gate my-vps     # compose, ship, restart, route
 name = "gate"
+# Tailnet-only, which is the default — a forgotten `access` must not put an app on
+# the public internet. The name has to resolve to the box's Tailscale address (a custom
+# DNS record in the tailnet, or split DNS); MagicDNS alone gives one name per machine.
+access = "tailnet"
 domain = "gate.example.com"
 artifact = "components/target/gate_domain.composed.wasm"
 

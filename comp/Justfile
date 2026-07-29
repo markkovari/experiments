@@ -1714,14 +1714,45 @@ selfhost-deploy app host router="caddy": build-selfhost
       sudo install -m 0644 /tmp/{{app}}.wasm /srv/comp/{{app}}/app.wasm; \
       sudo install -m 0600 /tmp/{{app}}.env /etc/comp/{{app}}.env; \
       sudo install -m 0644 /tmp/comp-{{app}}.service /etc/systemd/system/comp-{{app}}.service; \
-      sudo install -m 0644 /tmp/{{app}}.caddy /etc/caddy/comp/{{app}}.caddy 2>/dev/null || \
+      if [ -f /tmp/{{app}}.serve.sh ]; then \
+        sudo install -m 0755 /tmp/{{app}}.serve.sh /srv/comp/{{app}}/serve.sh; \
+      elif [ -f /tmp/{{app}}.caddy ]; then \
+        sudo install -m 0644 /tmp/{{app}}.caddy /etc/caddy/comp/{{app}}.caddy; \
+      else \
         sudo install -m 0644 /tmp/{{app}}.yml /etc/traefik/comp/{{app}}.yml; \
+      fi; \
       sudo systemctl daemon-reload; \
       sudo systemctl enable --now comp-{{app}}; \
       sudo systemctl restart comp-{{app}}; \
-      sudo systemctl reload caddy 2>/dev/null || true; \
-      rm -f /tmp/{{app}}.wasm /tmp/comp-{{app}}.service /tmp/{{app}}.env /tmp/{{app}}.caddy /tmp/{{app}}.yml"
+      if [ -f /srv/comp/{{app}}/serve.sh ]; then sudo /srv/comp/{{app}}/serve.sh; fi; \
+      rm -f /tmp/{{app}}.wasm /tmp/comp-{{app}}.service /tmp/{{app}}.env \
+            /tmp/{{app}}.caddy /tmp/{{app}}.yml /tmp/{{app}}.serve.sh"
+    just selfhost-tsip {{host}}
+    ssh {{host}} "sudo systemctl reload caddy 2>/dev/null || sudo systemctl restart caddy 2>/dev/null || true"
     @echo "deployed {{app}} to {{host}}"
+
+# Pin Caddy's TS_IP to this box's Tailscale address, so that `bind {$TS_IP}` in a
+# tailnet route means what it says.
+#
+# This matters more than it looks: Caddy substitutes {$TS_IP} from its OWN
+# environment, so if nothing sets it the bind resolves to empty and Caddy listens on
+# EVERY interface — the exact opposite of private, silently. Idempotent; on a box with
+# no tailscale it reports that and changes nothing.
+selfhost-tsip host:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    IP=$(ssh {{host}} "tailscale ip -4 2>/dev/null | head -1" || true)
+    if [ -z "$IP" ]; then
+      echo "  {{host}}: no tailscale address — a tailnet route here would bind nothing." >&2
+      echo "  Install tailscale, or set access = \"public\" for apps on this box." >&2
+      exit 0
+    fi
+    ssh {{host}} "set -e; \
+      sudo mkdir -p /etc/systemd/system/caddy.service.d; \
+      printf '[Service]\nEnvironment=TS_IP=%s\n' '$IP' | \
+        sudo tee /etc/systemd/system/caddy.service.d/ts-ip.conf >/dev/null; \
+      sudo systemctl daemon-reload"
+    echo "  {{host}}: Caddy TS_IP=$IP (tailnet routes bind there only)"
 
 # Is it up, and what is it doing?
 selfhost-status app host:
