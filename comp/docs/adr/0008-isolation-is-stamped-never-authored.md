@@ -1,6 +1,13 @@
 # ADR-0008 — Isolation is stamped by the platform, never authored by tenants
 
-- **Status:** accepted
+- **Status:** **partly superseded — the storage half is falsified.** The principle (the
+  platform stamps isolation, tenants never author it) stands and is still the rule. The
+  *mechanism* does not: per-tenant bucket stamping was measured leaking in
+  [ADR-0012](0012-keyvalue-isolation-needs-a-cooperative-component.md), the granularity
+  was wrong (the isolation unit is the application, not the tenant —
+  [ADR-0014](0014-an-application-owns-a-host.md)), and this ADR's own release gate was
+  prose that did not stop a deploy. Do not cite the `hostInterfaces` bucket stamp from
+  here; see [ADR-0015](0015-a-bucket-name-is-not-a-boundary.md).
 - **Date:** 2026-07-27
 - **Supersedes:** —
 

@@ -1,6 +1,10 @@
 # ADR-0011 — Slice 1 is single-tenant, both strategies, one cluster
 
-- **Status:** accepted
+- **Status:** accepted — **scope delivered**, see
+  [ADR-0018](0018-the-platform-deploys-a-running-app.md). Historical: this describes what
+  slice 1 *was*, not what the platform is now. The single-tenant restriction it sets is
+  still in force, and still enforced in code by `platform-domain`
+  ([ADR-0012](0012-keyvalue-isolation-needs-a-cooperative-component.md)).
 - **Date:** 2026-07-27
 - **Supersedes:** —
 

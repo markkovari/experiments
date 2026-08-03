@@ -111,11 +111,17 @@ only when placement across machines becomes a chore.
 - **A single-component app.** You would pay a 70 Mi host to run a 75 KB component. Use a
   container: a Go or Rust binary's floor is 5–15 Mi. This platform earns its keep from
   the *second* component onward.
+- **A FaaS.** The machinery looks like one — on-demand instantiation, warm floors,
+  per-invocation metering — but a FaaS's unit is a single function, and decomposing across
+  functions costs a cold start and a hop per piece. That is the exact tax this platform
+  removes. Sixteen components in one deployment unit with no internal hops is not a shape
+  a FaaS can express. See [ADR-0021](adr/0021-this-is-not-a-faas.md).
 - **Many tenants packed onto one host.** That was the original bet and it is currently
   impossible: `wasi:keyvalue` cannot be partitioned per workload, so each app gets its own
   host and its own bus. The prize is large — **~24× less memory** for 100 apps (~300 Mi
   instead of ~7 GB) — and blocked on one upstream fix, which is now a quantified ask
-  rather than a wish.
+  rather than a wish. *(Under active challenge: the fix may not need to be upstream —
+  see [REQUIREMENTS-DENSITY.md](REQUIREMENTS-DENSITY.md), gated on an unproven probe.)*
 - **High-density shared state.** A private message bus per app is isolation by
   duplication. A shared database with per-tenant credentials is denser *and* a stronger
   boundary. Until a host can be handed a scoped NATS identity, this is a real cost.

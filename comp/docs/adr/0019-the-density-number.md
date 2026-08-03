@@ -1,6 +1,9 @@
 # ADR-0019 — The density number, measured: 2.3 Mi per component, 70 Mi per app
 
-- **Status:** accepted
+- **Status:** accepted — **but the figures here are cold-start; do not quote them.** A host
+  that has served traffic settles near 233 Mi, not 86 Mi. Quote
+  [ADR-0020](0020-the-density-number-under-load.md)'s numbers publicly. The *ratios* and
+  the positioning below hold.
 - **Date:** 2026-07-29
 - **Revises:** the *reason* to use wasmCloud here. Not a code change — a repositioning, with numbers.
 

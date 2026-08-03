@@ -3,6 +3,12 @@
 Numbered, dated, one decision each, superseded rather than edited. Format and rules
 in [ADR-0001](0001-use-adrs.md).
 
+**Two companions, and they do different jobs.** [PRINCIPLES.md](../PRINCIPLES.md) is the
+standard an ADR is judged against — it guards against *drift*.
+[CLAIMS.md](../CLAIMS.md) is the register of every load-bearing belief and its evidence
+status — it guards against *being wrong about facts*, which is what actually went wrong
+here (0008, 0012, 0015). Check a design's claims before depending on it.
+
 `PLATFORM.md` remains the narrative plan and the phase order; these own the forks
 inside it. Where they disagree, the ADR wins.
 
@@ -16,28 +22,40 @@ component in its own pod, and 1.2 ms saved per network hop avoided** — and und
 decomposing one app into many components, not packing many tenants onto one host — and a
 single-component app should be a container, not a wasm workload.
 
+**Legend.** ✅ current — build on it. ⚠️ current with a caveat — read the caveat before
+citing. ❌ **superseded or falsified — do not build on it**; kept because the reasoning or
+the measurement still teaches something. 📜 historical — describes a past state accurately.
+
 | # | decision | status |
 |---|---|---|
-| [0001](0001-use-adrs.md) | Record architecture decisions as ADRs | accepted |
-| [0002](0002-tenant-is-a-namespace.md) | A tenant is a Kubernetes namespace | accepted; isolation unit revised by [0014](0014-an-application-owns-a-host.md) |
-| [0003](0003-control-plane-is-wasm-plus-applier.md) | The control plane is a wasm app plus a small native applier | accepted |
-| [0004](0004-reconcile-by-server-side-apply-on-save.md) | Reconcile by server-side apply on save | accepted |
-| [0005](0005-deployment-strategy-is-a-tenant-choice.md) | Deployment strategy is a tenant choice: fused or linked | accepted |
-| [0006](0006-artifacts-are-digest-pinned-oci.md) | Artifacts are digest-pinned OCI; the WIT surface is the contract | accepted; durability + auth revised by [0017](0017-the-applier-pushes-and-the-registry-is-a-cache.md) |
-| [0007](0007-component-visibility-and-sharing.md) | Component visibility: private, org, public — and what public costs | accepted |
-| [0008](0008-isolation-is-stamped-never-authored.md) | Isolation is stamped by the platform, never authored by tenants | storage half superseded by [0012](0012-keyvalue-isolation-needs-a-cooperative-component.md) |
-| [0009](0009-identity-reuses-auth-guard.md) | Sign-in reuses `auth-guard`; OIDC is a later swap | accepted |
-| [0010](0010-config-and-secrets.md) | Config is `wasi:config`; secrets never enter a manifest | accepted |
-| [0011](0011-slice-one-scope.md) | Slice 1 is single-tenant, both strategies, one cluster | accepted |
-| [0012](0012-keyvalue-isolation-needs-a-cooperative-component.md) | Per-tenant keyvalue isolation needs a cooperative component | accepted |
-| [0013](0013-unenforceable-capabilities-are-denied-by-omission.md) | A capability the host cannot partition is denied by omission | superseded by [0014](0014-an-application-owns-a-host.md) |
-| [0014](0014-an-application-owns-a-host.md) | An application owns a host | accepted, confirmed by [0015](0015-a-bucket-name-is-not-a-boundary.md) |
-| [0015](0015-a-bucket-name-is-not-a-boundary.md) | A bucket name is not a boundary, and `hostInterfaces[].name` does not work | accepted |
-| [0016](0016-deleting-an-app-is-reconciled-not-remembered.md) | Deleting an app is reconciled, not remembered | accepted |
-| [0017](0017-the-applier-pushes-and-the-registry-is-a-cache.md) | The applier pushes, and the registry is a cache | accepted; auth reasoning corrected by [0018](0018-the-platform-deploys-a-running-app.md) |
-| [0018](0018-the-platform-deploys-a-running-app.md) | The platform deploys a running app, and what that took | accepted |
-| [0019](0019-the-density-number.md) | The density number, measured: 2.3 Mi per component, 70 Mi per app | accepted (idle/cold-start figures) |
-| [0020](0020-the-density-number-under-load.md) | The same density number, under load: free throughput, 3.2× memory, better tail | accepted |
+| [0001](0001-use-adrs.md) | Record architecture decisions as ADRs | ✅ accepted |
+| [0002](0002-tenant-is-a-namespace.md) | A tenant is a Kubernetes namespace | ⚠️ accepted; isolation unit revised by [0014](0014-an-application-owns-a-host.md) — a namespace is the outer ring, not the isolation unit |
+| [0003](0003-control-plane-is-wasm-plus-applier.md) | The control plane is a wasm app plus a small native applier | ✅ accepted |
+| [0004](0004-reconcile-by-server-side-apply-on-save.md) | Reconcile by server-side apply on save | ✅ accepted |
+| [0005](0005-deployment-strategy-is-a-tenant-choice.md) | Deployment strategy is a tenant choice: fused or linked | ✅ accepted |
+| [0006](0006-artifacts-are-digest-pinned-oci.md) | Artifacts are digest-pinned OCI; the WIT surface is the contract | ⚠️ accepted; durability + auth revised by [0017](0017-the-applier-pushes-and-the-registry-is-a-cache.md) |
+| [0007](0007-component-visibility-and-sharing.md) | Component visibility: private, org, public — and what public costs | ✅ accepted |
+| [0008](0008-isolation-is-stamped-never-authored.md) | Isolation is stamped by the platform, never authored by tenants | ❌ **storage half falsified** by [0012](0012-keyvalue-isolation-needs-a-cooperative-component.md)/[0015](0015-a-bucket-name-is-not-a-boundary.md); wrong granularity per [0014](0014-an-application-owns-a-host.md). The *principle* stands, the mechanism does not |
+| [0009](0009-identity-reuses-auth-guard.md) | Sign-in reuses `auth-guard`; OIDC is a later swap | ✅ accepted |
+| [0010](0010-config-and-secrets.md) | Config is `wasi:config`; secrets never enter a manifest | ✅ accepted |
+| [0011](0011-slice-one-scope.md) | Slice 1 is single-tenant, both strategies, one cluster | 📜 delivered — see [0018](0018-the-platform-deploys-a-running-app.md); the single-tenant gate is still in force |
+| [0012](0012-keyvalue-isolation-needs-a-cooperative-component.md) | Per-tenant keyvalue isolation needs a cooperative component | ⚠️ accepted; its *fix* (cooperative components reading a bucket from `wasi:config`) was never taken — [0014](0014-an-application-owns-a-host.md) solved it by giving each app a private data plane instead. The **measured leak** is the durable part |
+| [0013](0013-unenforceable-capabilities-are-denied-by-omission.md) | A capability the host cannot partition is denied by omission | ❌ **superseded by [0014](0014-an-application-owns-a-host.md)** — reversed one day later; keyvalue and messaging *are* granted |
+| [0014](0014-an-application-owns-a-host.md) | An application owns a host | ⚠️ accepted, confirmed by [0015](0015-a-bucket-name-is-not-a-boundary.md) — **but see [REQUIREMENTS-DENSITY.md](../REQUIREMENTS-DENSITY.md)**, which proposes narrowing it from a universal rule to one placement option, pending [G-1](../REQUIREMENTS-DENSITY.md#g-1--the-isolation-probe) |
+| [0015](0015-a-bucket-name-is-not-a-boundary.md) | A bucket name is not a boundary, and `hostInterfaces[].name` does not work | ✅ accepted — and the reason to be sceptical of any *new* proposed isolation mechanism |
+| [0016](0016-deleting-an-app-is-reconciled-not-remembered.md) | Deleting an app is reconciled, not remembered | ✅ accepted |
+| [0017](0017-the-applier-pushes-and-the-registry-is-a-cache.md) | The applier pushes, and the registry is a cache | ⚠️ accepted; auth reasoning corrected by [0018](0018-the-platform-deploys-a-running-app.md) |
+| [0018](0018-the-platform-deploys-a-running-app.md) | The platform deploys a running app, and what that took | ✅ accepted |
+| [0019](0019-the-density-number.md) | The density number, measured: 2.3 Mi per component, 70 Mi per app | ⚠️ accepted — **cold-start figures; do not quote.** Use [0020](0020-the-density-number-under-load.md)'s. Ratios and positioning hold |
+| [0020](0020-the-density-number-under-load.md) | The same density number, under load: free throughput, 3.2× memory, better tail | ✅ accepted — **these are the quotable numbers** |
+| [0021](0021-this-is-not-a-faas.md) | This is not a FaaS, and the difference is the product | ✅ accepted — positioning, no code |
+
+## Open proposals, not yet decided
+
+| doc | what it proposes | gate |
+|---|---|---|
+| [REQUIREMENTS-DENSITY.md](../REQUIREMENTS-DENSITY.md) | Many apps per cell, isolation from platform-authored link identity rather than a private data plane per app; metering; fairness | [G-1](../REQUIREMENTS-DENSITY.md#g-1--the-isolation-probe) — unproven |
+| [TOPOLOGY-MULTIREGION.md](../TOPOLOGY-MULTIREGION.md) | Multi-cloud/region failover tiers; unfinished work lives in a durable bus, not in a cell | depends on G-1 |
 
 ## The shape these add up to
 

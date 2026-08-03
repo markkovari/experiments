@@ -33,12 +33,27 @@ monotonically, never renumbered. Each one is:
 - Status: proposed | accepted | superseded by ADR-MMMM | rejected
 - Date: YYYY-MM-DD
 - Supersedes: ADR-MMMM (or —)
+- Evidence: what this decision KNOWS vs ASSUMES — see below
 
 ## Context      what forces the decision, including measurements and constraints
 ## Decision     the choice, in the active voice
 ## Consequences what this now obliges us to do, and what it costs
 ## Alternatives what was rejected and the specific reason
 ```
+
+**The `Evidence` field** (added 2026-08-02, after
+[ADR-0008](0008-isolation-is-stamped-never-authored.md),
+[ADR-0012](0012-keyvalue-isolation-needs-a-cooperative-component.md) and
+[ADR-0015](0015-a-bucket-name-is-not-a-boundary.md)). Every load-bearing belief in the
+decision is listed with its status from [CLAIMS.md](../CLAIMS.md) — `MEASURED`,
+`DOCUMENTED`, or `ASSUMED` — and any `DOCUMENTED` or `ASSUMED` claim names the test that
+would settle it.
+
+This exists because ADR-0008 *did* say its mechanism was unproven, in prose, in the
+Context — and shipped a storage leak through two deploys and a green test suite anyway. A
+sentence in the Context is not a blocker; a field that must be filled in is closer to one.
+A `DOCUMENTED` claim is not safe by virtue of being documented: ADR-0015 killed a field
+that was documented *and* required by its own docs.
 
 Rules that keep them useful rather than ceremonial:
 
@@ -54,6 +69,12 @@ Rules that keep them useful rather than ceremonial:
 5. **ADRs decide; design docs describe.** `PLATFORM.md` stays the narrative plan
    and the phase order; ADRs own the forks inside it. Where they disagree, the
    ADR wins and `PLATFORM.md` gets updated.
+6. **An ADR is judged against [PRINCIPLES.md](../PRINCIPLES.md).** Violating a
+   principle is allowed; doing it silently is not — name the principle and say
+   what the violation buys.
+7. **A claim an ADR depends on goes in [CLAIMS.md](../CLAIMS.md)**, with its
+   status. An `ASSUMED` claim cannot gate a release, and a `DOCUMENTED` one gets
+   an adversarial test before anything depends on it.
 
 An ADR may be written *before* the code (to settle a fork) or *after* (to record
 one that got settled by discovery). Both are legitimate; the date says which.

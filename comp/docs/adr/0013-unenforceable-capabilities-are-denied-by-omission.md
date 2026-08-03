@@ -1,6 +1,12 @@
 # ADR-0013 — A capability the host cannot partition is denied by omission
 
-- **Status:** accepted
+- **Status:** **superseded by [ADR-0014](0014-an-application-owns-a-host.md)** — do not
+  build on this. The decision here (refuse `wasi:keyvalue` and `wasmcloud:messaging` to
+  tenant code) was reversed one day later: ADR-0014 found the partition mechanism in
+  `wash host`'s separate `--data-nats-url` flag, so the capabilities are granted, not
+  denied. Kept for the reasoning, which stands: *a capability the host cannot partition
+  must not be offered as if it were partitioned.* ADR-0014 changed what the host can
+  partition, not that principle.
 - **Date:** 2026-07-28
 - **Supersedes:** —
 - **Builds on:** [ADR-0012](0012-keyvalue-isolation-needs-a-cooperative-component.md)
