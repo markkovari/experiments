@@ -1772,3 +1772,17 @@ selfhost-deploy-all host router="caddy":
     for f in apps/*.toml; do
       just selfhost-deploy "$(basename "$f" .toml)" {{host}} {{router}}
     done
+
+# ADR-0023's falsifying measurement, ADR-0026's numbers: two tenants in ONE
+# comp-host process, one of them hostile, isolation and throughput from the SAME
+# run. Needs nats-server and oha; needs no cluster and no second machine.
+#
+#   just adversarial                                    # address backstop (the real test)
+#   MANIFEST=bench/adversarial/two-tenants-denyall.json just adversarial
+#
+# Re-run this when the linker gains a capability, a kv backend changes, or anyone
+# proposes relaxing the address deny-list.
+adversarial: compose-gate build-reconciler
+    cd components && cargo component build -p adversary --release --target wasm32-wasip2
+    cd host && cargo build --release --bin comp-host
+    bash bench/adversarial/run.sh

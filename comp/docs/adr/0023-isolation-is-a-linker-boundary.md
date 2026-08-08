@@ -113,9 +113,12 @@ node's own listener and the tailnet; and every subject it can construct.
 `p99` **from the same run**, so the density claim and the isolation claim are measured
 together instead of in separate documents.
 
-Partially discharged today: two tenants on one shared sqlite file, the same component, the
-same hardcoded bucket name and the same key — separate stores, `b-app-alice-shop` and
-`b-app-eve-shop`, with each seeing a full quota. That is the ADR-0012 scenario returning
-zeros. The adversarial dictionary and the egress half are unit-tested but have not been
-run as one adversarial component against a live node, and until they have, this ADR's
-claim is "the known leak is closed", not "the boundary holds".
+**Discharged by [ADR-0026](0026-the-adversarial-run.md)**, which ran it: two tenants in one
+process on one sqlite file, a hostile component sweeping a dictionary of leak-shaped bucket
+names and dialling the bus, the metadata endpoint and the tailnet — zero foreign opens,
+zero keys read, zero lateral connections, taken at 10.5k rps under load. Note the `10^6`
+framing above is superseded there: a dictionary of the shapes a real leak takes is a
+stronger instrument than a large number of random ones.
+
+The two unmitigated risks named earlier in this ADR — side channels and per-tenant memory
+accounting — are NOT addressed by that run and remain open.
