@@ -61,9 +61,38 @@ version ahead of a dependency that will move anyway. Following wRPC and bumping 
 bumps is the cheaper direction, and the pin is documented in `host/Cargo.toml` with
 instructions to move all four crates together.
 
+## Integration risk, settled
+
+The question everything else rests on is whether this host's `Host` state can satisfy
+wRPC's traits. It can, and `host/src/rpc.rs` proves it at compile time rather than leaving
+it to be discovered after placement and a two-machine harness were built on the assumption.
+
+`WrpcCtx` wants four things — a per-invocation context, an `Invoke` client, a table of
+shared exported resources, and an optional timeout — and all four are things a `Scope`
+already knows or a NATS client already is. One wrinkle found and recorded: `Invoke` is
+implemented on `Client`, not on `Arc<Client>`, so the client is cloned per instance rather
+than shared behind a pointer. It is a handle over one connection, so that is cheap.
+
 ## What is still not built
 
-The deferral itself stands: nothing in this repo has yet made a WIT call over a wire.
+The deferral itself stands: nothing in this repo has yet made a WIT call over a wire. The
+remaining work is placement and lifecycle rather than protocol, in this order:
+
+1. `Host` gains an `RpcCtx` and an `impl WrpcView` — one method returning
+   `WrpcCtxView { ctx, table }`. Cheap, but it changes `Host` construction on the
+   per-request path, so it wants measuring after.
+2. **Call side**: at start, for every link-table entry whose target is not in the local
+   instance table, `polyfill::link_function` binds that import to a wRPC invocation. The
+   local case must keep the direct in-process path — that is ADR-0019's 1.2 ms and the
+   entire reason for co-locating by default.
+3. **Serve side**: `ServeExt::serve_function` for each export another node might call, on
+   the instance's own subject with a queue group so replicas share the work.
+4. **Placement**: `plan.rs` co-locates every component of an app onto the root's nodes
+   today. Spanning means placing them independently and marking each link-table entry
+   local or remote — which is also where a graph whose edges cannot be remoted must be
+   refused rather than discovered on first call.
+5. **Which interfaces are remotable**, below, which (4) cannot enforce until something
+   classifies them.
 Graphs co-locate, and a `linked` plug still needs a fused artifact. What changed is that
 the work ahead is *wiring an existing protocol* rather than *designing a wire format*, and
 the pieces are in the tree ready for it.

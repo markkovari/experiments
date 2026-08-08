@@ -24,6 +24,7 @@
 
 mod agent;
 mod kv;
+mod rpc;
 mod tenant;
 use kv::KvBackend;
 use tenant::{BucketId, InstanceId, Limits, SharedScope, StartCommand};
