@@ -45,10 +45,17 @@ unreachable reconciler is not an instruction to stop.
 hysteresis, capability partitioning, artifact distribution, the CLI.
 
 **Out, and stated rather than quietly dropped:** cross-node WIT calls. Freely distributed
-graphs are the architecture, but nothing in this repo has ever made a WIT call over a
-wire, and the `Val`↔JSON codec carries a hard ceiling — resource handles are indices into
-one process's table and cannot cross a node. Graphs co-locate; a `linked` plug needs a
-fused artifact, and the host says so rather than failing obscurely.
+graphs are the architecture, but nothing in this repo has ever made a WIT call over a wire.
+Graphs co-locate; a `linked` plug needs a fused artifact, and the host says so rather than
+failing obscurely.
+
+> **Corrected by [ADR-0028](0028-cross-node-calls-are-wrpc.md).** An earlier version of
+> this paragraph justified the deferral with a hand-rolled `Val`↔JSON codec and "a hard
+> ceiling — resource handles are indices into one process's table and cannot cross a node".
+> Both halves were wrong: the codec should never have been written, because wRPC already
+> specifies one, and the ceiling is narrower than claimed — wRPC fully supports `stream`
+> and `future`, and encodes resources as opaque `list<u8>` whose meaning is
+> application-specific. The deferral stands; the reasoning for it does not.
 
 Also out: tenant config and secrets (ADR-0010 still promises both), `public` visibility and
 signing (ADR-0007 rule 3), org-scoped catalogue visibility, per-version catalogue keys, a

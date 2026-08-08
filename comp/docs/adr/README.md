@@ -42,9 +42,10 @@ single-component app should be a container, not a wasm workload.
 | [0022](0022-desired-state-is-a-manifest.md) | Desired state is a manifest; the reconciler pulls it | accepted |
 | [0023](0023-isolation-is-a-linker-boundary.md) | Isolation is a linker boundary, not a process boundary | accepted; measured in [0026](0026-the-adversarial-run.md); its backend table corrected by [0027](0027-a-spread-app-needs-a-shared-store.md) |
 | [0024](0024-artifacts-are-content-addressed.md) | An artifact is its digest, and the object store is a cache | accepted |
-| [0025](0025-slice-one-on-the-lattice.md) | Slice one, on the lattice: two boxes, one killed node | accepted |
+| [0025](0025-slice-one-on-the-lattice.md) | Slice one, on the lattice: two boxes, one killed node | accepted; its cross-node reasoning corrected by [0028](0028-cross-node-calls-are-wrpc.md) |
 | [0026](0026-the-adversarial-run.md) | The adversarial run: contained, at 10.5k rps, in 56 MiB | accepted; **discharges 0023's measurement** |
 | [0027](0027-a-spread-app-needs-a-shared-store.md) | A spread app needs a shared store, and the platform now refuses otherwise | accepted |
+| [0028](0028-cross-node-calls-are-wrpc.md) | Cross-node calls are wRPC; the codec I designed should never have existed | accepted |
 
 ## The shape these add up to
 
