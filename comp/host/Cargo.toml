@@ -28,9 +28,12 @@ clap = { version = "4", features = ["derive"] }
 # TLS (rustls + webpki roots) so `--kv redis` can dial managed `rediss://`
 # endpoints (DO Managed Valkey, Upstash, …) from a minimal container.
 redis = { version = "0.27", features = ["tls-rustls", "tls-rustls-webpki-roots"] }
-# The lattice client: inventory, commands, and artifact distribution. Async, unlike
-# the `nats` 0.25 above, because a held subscription cannot share a thread with a
-# blocking KV call. The two coexist for now — `--kv nats` still uses the old one.
+# The fabric between a node and the reconciler, as three traits (inventory,
+# commands, artifacts) with one implementation over NATS. The host holds
+# `Arc<dyn ...>` and never names a broker.
+comp-lattice = { path = "../lattice" }
+# Still direct for `--kv nats`, which is a STORE and not the transport — see
+# docs/adr/0027 on why conflating those two was the mistake.
 async-nats = "0.38"
 futures = "0.3"
 # `bundled` compiles SQLite itself: no system libsqlite3 to match, which keeps the

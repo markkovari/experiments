@@ -21,17 +21,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use futures::StreamExt;
+use comp_lattice::{Artifacts, CommandBus, Inventory};
 use serde::{Deserialize, Serialize};
 
 use crate::tenant::{instance_id, Limits, StartCommand};
 use crate::{Instance, Instances, Routes};
-
-/// Written by every host, read by the reconciler. The TTL on this bucket is what
-/// makes a departed node disappear without anyone reaping anything.
-const INVENTORY_BUCKET: &str = "comp-inventory";
-/// Artifacts, keyed by their own sha256 (ADR-0024: the digest is the identity).
-const ARTIFACT_BUCKET: &str = "comp-artifacts";
 
 /// The capabilities this host can actually grant.
 ///
@@ -66,7 +60,7 @@ pub struct RunningInstance {
 }
 
 #[derive(Serialize)]
-struct Inventory<'a> {
+struct Snapshot<'a> {
     node: &'a str,
     labels: &'a BTreeMap<String, String>,
     host_ifaces: &'a [&'a str],
@@ -150,7 +144,15 @@ impl Agent {
 /// compiled instance cannot be.
 type Ledger = Arc<std::sync::Mutex<BTreeMap<String, StartCommand>>>;
 
-pub async fn run(agent: Arc<Agent>, nats_url: &str) -> Result<()> {
+/// The fabric this node is joined to. Three traits, one implementation today —
+/// nothing below this line names a broker.
+pub struct Fabric {
+    pub inventory: Arc<dyn Inventory>,
+    pub commands: Arc<dyn CommandBus>,
+    pub artifacts: Arc<dyn Artifacts>,
+}
+
+pub async fn run(agent: Arc<Agent>, fabric: Fabric) -> Result<()> {
     std::fs::create_dir_all(agent.artifact_dir())
         .with_context(|| format!("creating {}", agent.artifact_dir().display()))?;
 
@@ -173,28 +175,7 @@ pub async fn run(agent: Arc<Agent>, nats_url: &str) -> Result<()> {
         }
     }
 
-    let client = async_nats::connect(nats_url)
-        .await
-        .with_context(|| format!("connecting to NATS at {nats_url}"))?;
-    let js = async_nats::jetstream::new(client.clone());
-
-    let inventory = js
-        .create_key_value(async_nats::jetstream::kv::Config {
-            bucket: INVENTORY_BUCKET.into(),
-            // Three missed beats. A flaky tailnet gets chances; a dead node does
-            // not linger long enough to hold a replica hostage.
-            max_age: Duration::from_secs(agent.heartbeat_secs * 3),
-            ..Default::default()
-        })
-        .await
-        .context("opening the inventory bucket")?;
-    let artifacts = js
-        .create_object_store(async_nats::jetstream::object_store::Config {
-            bucket: ARTIFACT_BUCKET.into(),
-            ..Default::default()
-        })
-        .await
-        .context("opening the artifact store")?;
+    let Fabric { inventory, commands, artifacts } = fabric;
 
     // Heartbeat. Separate task so a slow command cannot make this node look dead
     // and get its work rescheduled underneath it.
@@ -205,7 +186,7 @@ pub async fn run(agent: Arc<Agent>, nats_url: &str) -> Result<()> {
             let mut tick = tokio::time::interval(Duration::from_secs(agent.heartbeat_secs));
             loop {
                 tick.tick().await;
-                let inv = Inventory {
+                let inv = Snapshot {
                     node: &agent.node,
                     labels: &agent.labels,
                     host_ifaces: HOST_IFACES,
@@ -218,7 +199,10 @@ pub async fn run(agent: Arc<Agent>, nats_url: &str) -> Result<()> {
                 };
                 match serde_json::to_vec(&inv) {
                     Ok(bytes) => {
-                        if let Err(e) = inventory.put(agent.node.as_str(), bytes.into()).await {
+                        // Three missed beats. A flaky tailnet gets chances; a dead
+                        // node does not linger long enough to hold a replica hostage.
+                        let ttl = Duration::from_secs(agent.heartbeat_secs * 3);
+                        if let Err(e) = inventory.publish(&agent.node, bytes, ttl).await {
                             eprintln!("comp-host: heartbeat failed: {e}");
                         }
                     }
@@ -228,35 +212,29 @@ pub async fn run(agent: Arc<Agent>, nats_url: &str) -> Result<()> {
         });
     }
 
-    let subject = format!("comp.{}.cmd.{}.>", agent.lattice, agent.node);
-    let mut sub = client.subscribe(subject.clone()).await.context("subscribing to commands")?;
+    let mut inbox = commands.serve(&agent.node).await.context("taking delivery of commands")?;
     eprintln!("comp-host: joined lattice {} as node {}", agent.lattice, agent.node);
-    eprintln!("comp-host: listening on {subject}");
 
-    while let Some(msg) = sub.next().await {
-        let verb = msg.subject.rsplit('.').next().unwrap_or("").to_string();
-        let reply = msg.reply.clone();
-        let result = handle(&agent, &artifacts, &ledger, &verb, &msg.payload).await;
+    while let Some(cmd) = inbox.recv().await {
+        let result = handle(&agent, artifacts.as_ref(), &ledger, &cmd.verb, &cmd.payload).await;
 
         // Acked only after the instance is built, so "started" means "will serve"
         // rather than "is downloading".
         let body = match &result {
             Ok(note) => serde_json::json!({ "ok": true, "note": note }),
             Err(e) => {
-                eprintln!("comp-host: {verb} failed: {e:#}");
+                eprintln!("comp-host: {} failed: {e:#}", cmd.verb);
                 serde_json::json!({ "error": format!("{e:#}") })
             }
         };
-        if let Some(reply) = reply {
-            let _ = client.publish(reply, body.to_string().into()).await;
-        }
+        let _ = cmd.reply.send(body.to_string().into_bytes());
     }
-    bail!("the command subscription ended — NATS closed the connection")
+    bail!("the command stream ended — the fabric closed the connection")
 }
 
 async fn handle(
     agent: &Arc<Agent>,
-    artifacts: &async_nats::jetstream::object_store::ObjectStore,
+    artifacts: &dyn Artifacts,
     ledger: &Ledger,
     verb: &str,
     payload: &[u8],
@@ -327,7 +305,7 @@ async fn handle(
 async fn start(
     agent: &Arc<Agent>,
     cmd: StartCommand,
-    artifacts: Option<&async_nats::jetstream::object_store::ObjectStore>,
+    artifacts: Option<&dyn Artifacts>,
 ) -> Result<()> {
     let id = instance_id(&cmd.tenant, &cmd.app, &cmd.component);
     let ingress_host = cmd.ingress_host.clone();
@@ -417,7 +395,7 @@ async fn start(
 async fn fetch_artifact(
     agent: &Arc<Agent>,
     digest: &str,
-    artifacts: Option<&async_nats::jetstream::object_store::ObjectStore>,
+    artifacts: Option<&dyn Artifacts>,
 ) -> Result<PathBuf> {
     let short = digest.trim_start_matches("sha256:");
     if short.is_empty() || !short.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -431,14 +409,10 @@ async fn fetch_artifact(
         bail!("{digest} is not in the local cache and there is no store to fetch it from");
     };
 
-    let mut object = store
+    let bytes = store
         .get(digest)
         .await
         .with_context(|| format!("fetching {digest} from the artifact store"))?;
-    let mut bytes = Vec::new();
-    tokio::io::AsyncReadExt::read_to_end(&mut object, &mut bytes)
-        .await
-        .context("reading the artifact")?;
 
     let got = sha256_hex(&bytes);
     if got != short {

@@ -129,14 +129,35 @@ The adversarial sweep was re-run on the NATS backend: **0 foreign store opens, 0
 isolation claim is a property of the host's linker, not of the backend, which is what
 ADR-0023 argued and this confirms by changing the backend underneath it.
 
-## The transport is still hard-wired, and that is a separate problem
+## The transport is an interface too, in `comp/lattice`
 
-`host/src/agent.rs` and the reconciler talk to `async-nats` directly for inventory,
-commands and artifact distribution. That is a genuine hard dependency and this ADR does not
-address it — it is deliberately *not* the same question as the store, which is the whole
-point of the paragraph above. Abstracting a transport behind a trait with one
-implementation is usually a way to pay for flexibility twice, so the seam is named here
-rather than built, and stays that way until something concrete wants a second one.
+Named first as a seam and then built, because the same argument applies to it: the fabric
+between a node and the reconciler is not one dependency either. It is **three**, and they
+want different things.
+
+| trait | what it is for | wants |
+|---|---|---|
+| `Inventory` | nodes say what they run; entries expire | low latency, a TTL |
+| `CommandBus` | start/stop, request/reply | low latency, an ack |
+| `Artifacts` | bulk bytes by digest | durability, cheap storage |
+
+`NatsLattice` implements all three, and the host and reconciler hold `Arc<dyn …>` — neither
+binary names a broker any more. `async_nats` survives in exactly one place in the host,
+`kv.rs`, which is the **store** and a different concern; that separation is the whole point
+of this ADR and it is now visible in the imports.
+
+Three traits rather than one because a second implementation of any single one is
+plausible on its own: `--oci-mirror` in the reconciler is already most of a second
+`Artifacts`, and swapping it should not require reimplementing command delivery.
+
+**`MemoryLattice` implements all three as well, and that is not a toy.** An interface with
+exactly one implementation has never been shown to be an interface: everything
+broker-shaped that leaked into a signature shows up there as something awkward or
+impossible to write. It found one real thing immediately — NATS applies `max_age` per
+*bucket*, so `Inventory::publish`'s per-entry `ttl` is honoured at connect time rather than
+per call. That is written down in `NatsLattice::connect` rather than left as a surprise.
+It also lets the failover path be tested without waiting out a real TTL, and without a
+broker running at all.
 
 ## What is still wrong
 

@@ -16,15 +16,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use comp_lattice::{nats::NatsLattice, Artifacts, CommandBus, Inventory};
 use comp_reconciler::oci;
 use comp_reconciler::plan::{plan, Cfg, Command, Hysteresis, Manifest, NodeInventory, Outcome};
-use futures::StreamExt;
 use serde_json::json;
-
-/// Inventory the hosts write. Read-only from here.
-const INVENTORY_BUCKET: &str = "comp-inventory";
-/// Artifacts, keyed by their own sha256. ADR-0024: the digest is the identity.
-const ARTIFACT_BUCKET: &str = "comp-artifacts";
 
 #[derive(Parser, Clone)]
 #[command(name = "comp-reconciler", about = "Makes the lattice match the platform's manifests")]
@@ -95,28 +90,14 @@ async fn main() -> Result<()> {
         );
     }
 
-    let client = async_nats::connect(&args.nats_url)
-        .await
-        .with_context(|| format!("connecting to NATS at {}", args.nats_url))?;
-    let js = async_nats::jetstream::new(client.clone());
-
-    // Created here rather than assumed, so a fresh lattice needs no setup step. The
-    // TTL is what makes a departed node disappear on its own.
-    let inventory = js
-        .create_key_value(async_nats::jetstream::kv::Config {
-            bucket: INVENTORY_BUCKET.into(),
-            max_age: Duration::from_secs(args.inventory_ttl),
-            ..Default::default()
-        })
-        .await
-        .context("opening the inventory bucket")?;
-    let artifacts = js
-        .create_object_store(async_nats::jetstream::object_store::Config {
-            bucket: ARTIFACT_BUCKET.into(),
-            ..Default::default()
-        })
-        .await
-        .context("opening the artifact store")?;
+    // One implementation today; the loop below only ever sees the traits.
+    let fabric = std::sync::Arc::new(
+        NatsLattice::connect(&args.nats_url, &args.lattice, Duration::from_secs(args.inventory_ttl))
+            .await?,
+    );
+    let inventory: std::sync::Arc<dyn Inventory> = fabric.clone();
+    let commands: std::sync::Arc<dyn CommandBus> = fabric.clone();
+    let artifacts: std::sync::Arc<dyn Artifacts> = fabric.clone();
 
     eprintln!(
         "comp-reconciler: lattice={} nats={} platform={} | every {}s{}",
@@ -140,7 +121,7 @@ async fn main() -> Result<()> {
         // cannot start at all — distributing first means one pass takes an upload
         // all the way to running, instead of two.
         if !args.no_push && !args.dry_run {
-            match push_pass(&args, &http, &artifacts).await {
+            match push_pass(&args, &http, artifacts.as_ref()).await {
                 Ok(0) => {}
                 Ok(n) => eprintln!("comp-reconciler: distributed {n} artifact(s)"),
                 Err(e) => eprintln!("comp-reconciler: distribution pass failed: {e:#}"),
@@ -153,7 +134,7 @@ async fn main() -> Result<()> {
         // running instance on the fleet.
         let Some(desired) = fetch_manifests(&args, &http).await else { continue };
 
-        let observed = match fetch_inventory(&inventory).await {
+        let observed = match fetch_inventory(inventory.as_ref()).await {
             Ok(o) => o,
             Err(e) => {
                 // Same rule, other half. An unreadable inventory is not an empty
@@ -183,7 +164,7 @@ async fn main() -> Result<()> {
             continue;
         }
         for c in &outcome.commands {
-            if let Err(e) = send(&client, &args, c).await {
+            if let Err(e) = send(commands.as_ref(), &args, c).await {
                 // Logged and dropped on purpose. The next pass re-derives from
                 // scratch, so a failed command costs one interval — cheaper and far
                 // more predictable than a per-command retry state machine.
@@ -240,46 +221,36 @@ async fn fetch_manifests(args: &Args, http: &reqwest::Client) -> Option<Vec<Mani
     Some(out)
 }
 
-async fn fetch_inventory(
-    kv: &async_nats::jetstream::kv::Store,
-) -> Result<Vec<NodeInventory>> {
-    let mut keys = kv.keys().await.context("listing inventory keys")?;
+async fn fetch_inventory(inventory: &dyn Inventory) -> Result<Vec<NodeInventory>> {
     let mut out = Vec::new();
-    while let Some(key) = keys.next().await {
-        let key = key.context("reading an inventory key")?;
-        let Some(raw) = kv.get(&key).await.context("reading an inventory entry")? else {
-            // Expired between listing and reading. That is the mechanism working,
-            // not an error.
-            continue;
-        };
-        match serde_json::from_slice::<NodeInventory>(&raw) {
+    for entry in inventory.read_all().await? {
+        match serde_json::from_slice::<NodeInventory>(&entry.value) {
             Ok(inv) => out.push(inv),
-            Err(e) => eprintln!("comp-reconciler: node {key} wrote unreadable inventory: {e}"),
+            Err(e) => {
+                eprintln!("comp-reconciler: node {} wrote unreadable inventory: {e}", entry.key)
+            }
         }
     }
     Ok(out)
 }
 
-async fn send(client: &async_nats::Client, args: &Args, cmd: &Command) -> Result<()> {
+async fn send(bus: &dyn CommandBus, args: &Args, cmd: &Command) -> Result<()> {
     let verb = match cmd {
         Command::Start { .. } => "start",
         Command::Stop { .. } => "stop",
     };
-    let subject = format!("comp.{}.cmd.{}.{verb}", args.lattice, cmd.node());
-    let payload = serde_json::to_vec(cmd)?;
+    // "Nothing is listening on that node" and "that node is slow" are kept distinct
+    // by the implementation; both surface here as an error with the reason.
+    let reply = bus
+        .send(
+            cmd.node(),
+            verb,
+            serde_json::to_vec(cmd)?,
+            Duration::from_secs(args.command_timeout),
+        )
+        .await?;
 
-    let reply = tokio::time::timeout(
-        Duration::from_secs(args.command_timeout),
-        client.request(subject.clone(), payload.into()),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("no reply within {}s", args.command_timeout))?
-    // A host that is not subscribed answers immediately rather than after the
-    // timeout, so "nothing is listening on that node" reads differently from
-    // "that node is slow". Worth keeping distinct: they have different fixes.
-    .with_context(|| format!("publishing to {subject}"))?;
-
-    let ack: serde_json::Value = serde_json::from_slice(&reply.payload).unwrap_or_default();
+    let ack: serde_json::Value = serde_json::from_slice(&reply).unwrap_or_default();
     if let Some(err) = ack["error"].as_str() {
         anyhow::bail!("host refused: {err}");
     }
@@ -313,7 +284,7 @@ async fn report(args: &Args, http: &reqwest::Client, outcome: &Outcome) {
 async fn push_pass(
     args: &Args,
     http: &reqwest::Client,
-    store: &async_nats::jetstream::object_store::ObjectStore,
+    store: &dyn Artifacts,
 ) -> Result<usize> {
     let base = args.platform_url.trim_end_matches('/');
     let pending = http
@@ -367,9 +338,9 @@ async fn push_pass(
         }
 
         let digest = oci::digest_of(&bytes);
-        if store.info(&digest).await.is_err() {
+        if !store.has(&digest).await {
             store
-                .put(digest.as_str(), &mut bytes.as_slice())
+                .put(&digest, bytes.clone())
                 .await
                 .with_context(|| format!("storing {key} as {digest}"))?;
         }

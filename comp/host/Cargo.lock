@@ -363,6 +363,7 @@ dependencies = [
  "async-nats",
  "bytes",
  "clap",
+ "comp-lattice",
  "futures",
  "http-body-util",
  "hyper",
@@ -376,6 +377,18 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
+]
+
+[[package]]
+name = "comp-lattice"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "async-trait",
+ "bytes",
+ "futures",
+ "tokio",
 ]
 
 [[package]]

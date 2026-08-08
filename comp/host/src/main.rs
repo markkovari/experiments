@@ -705,7 +705,8 @@ async fn main() -> Result<()> {
                 if args.pool { "pooling" } else { "on-demand" }
             );
         }
-        Some(nats_url) => {
+        Some(lattice_url) => {
+            let nats_url_for_lattice: &str = lattice_url;
             let node = args.node.clone().unwrap_or_else(|| {
                 hostname().unwrap_or_else(|| format!("node-{}", std::process::id()))
             });
@@ -734,9 +735,23 @@ async fn main() -> Result<()> {
                     "NODE-LOCAL — this node will not accept a spread stateful app"
                 }
             );
-            let nats_url = nats_url.clone();
+            // One implementation today. The agent takes three trait objects and
+            // never learns which broker is underneath them.
+            let fabric = Arc::new(
+                comp_lattice::nats::NatsLattice::connect(
+                    nats_url_for_lattice,
+                    &args.lattice,
+                    std::time::Duration::from_secs(args.heartbeat_secs * 3),
+                )
+                .await?,
+            );
+            let fab = agent::Fabric {
+                inventory: fabric.clone(),
+                commands: fabric.clone(),
+                artifacts: fabric,
+            };
             tokio::spawn(async move {
-                if let Err(e) = agent::run(ag, &nats_url).await {
+                if let Err(e) = agent::run(ag, fab).await {
                     // Deliberately not fatal. Losing the bus degrades cross-node
                     // work; it does not mean this node should stop serving what it
                     // already has (see agent.rs).
