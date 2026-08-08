@@ -145,20 +145,207 @@ impl KvBackend for RedisKv {
     }
 }
 
-// ---- nats: removed --------------------------------------------------------
+// ---- nats (JetStream KV) --------------------------------------------------
 //
-// `NatsKv` used to live here, on the synchronous `nats` 0.25 client. It is gone,
-// and the reason is worth recording rather than rediscovering: that client pulls
-// `nuid`, whose loose `rand` requirement cannot unify with the `rand` that
-// `async-nats` needs — and `async-nats` is not optional, because the lattice
-// requires a held subscription. The old Cargo.toml comment predicted exactly this
-// and named the fix.
+// The only backend on this list where TWO REPLICAS OF ONE APP SEE ONE STORE.
 //
-// Nothing of value is lost. Per ADR-0015's law, a JetStream KV bucket per app is a
-// real boundary only when the host holds a per-tenant NATS account; on a shared
-// account it is a naming convention, the same as redis without ACLs. The boundary
-// that actually ships is sqlite, one file per app. `--kv nats` now refuses with
-// that explanation instead of implying an isolation it never had.
+// That is not a nicety, it is the difference between a rate limiter that rate-limits
+// and one that does not. `memory` and `sqlite` are node-local: spread an app over two
+// nodes and each replica gets its own store under the same bucket name, so a counter
+// counts wrong, a session vanishes on every other request, and a failover moves the
+// placement without moving the data. Measured, and it is why this came back.
+//
+// It runs on `async-nats` — the same client the lattice agent uses, because the sync
+// one cannot unify `rand` with it. `KvBackend` is a sync trait called from sync
+// bindgen imports, so each method bridges with `block_in_place` + `Handle::block_on`.
+// That is legal on the multi-threaded runtime (`#[tokio::main]`'s default): it tells
+// tokio this worker is about to block so the others are not starved.
+//
+// ponytail: block_in_place per call; the principled fix is async bindgen imports and
+// an async KvBackend, which is a refactor touching every impl in main.rs. Do it when
+// something other than this needs it.
+
+use async_nats::jetstream::kv::Store as JsStore;
+
+pub struct NatsKv {
+    handle: tokio::runtime::Handle,
+    js: async_nats::jetstream::Context,
+    stores: Mutex<HashMap<String, JsStore>>,
+}
+
+impl NatsKv {
+    pub async fn connect(url: &str) -> Result<Self> {
+        let client = async_nats::connect(url)
+            .await
+            .with_context(|| format!("connecting to NATS at {url}"))?;
+        Ok(Self {
+            handle: tokio::runtime::Handle::current(),
+            js: async_nats::jetstream::new(client),
+            stores: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// NATS KV bucket names have a restricted charset.
+    fn bucket_name(bucket: &str) -> String {
+        let mut s: String = bucket
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
+        if s.is_empty() {
+            s.push('x');
+        }
+        s
+    }
+
+    /// Hex-escape a guest key into a NATS-KV-legal token. Guest keys are arbitrary
+    /// bytes; KV keys are not.
+    fn safe_key(key: &str) -> String {
+        let mut out = String::with_capacity(key.len());
+        for b in key.bytes() {
+            match b {
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'=' | b'.' => {
+                    out.push(b as char)
+                }
+                _ => out.push_str(&format!("_{b:02X}")),
+            }
+        }
+        out
+    }
+
+    fn store_for(&self, bucket: &str) -> Result<JsStore> {
+        let name = Self::bucket_name(bucket);
+        if let Some(s) = self.stores.lock().unwrap().get(&name) {
+            return Ok(s.clone());
+        }
+        let store = self.block(async {
+            match self.js.get_key_value(&name).await {
+                Ok(s) => Ok(s),
+                Err(_) => self
+                    .js
+                    .create_key_value(async_nats::jetstream::kv::Config {
+                        bucket: name.clone(),
+                        history: 1,
+                        ..Default::default()
+                    })
+                    .await
+                    .map_err(anyhow::Error::from),
+            }
+        })?;
+        self.stores.lock().unwrap().insert(name, store.clone());
+        Ok(store)
+    }
+
+    fn block<F: std::future::Future>(&self, fut: F) -> F::Output {
+        tokio::task::block_in_place(|| self.handle.block_on(fut))
+    }
+}
+
+impl KvBackend for NatsKv {
+    fn get(&self, bucket: &BucketId, key: &str) -> Result<Option<Vec<u8>>> {
+        let s = self.store_for(bucket.as_str())?;
+        let k = Self::safe_key(key);
+        Ok(self.block(async move { s.get(&k).await })?.map(|b| b.to_vec()))
+    }
+
+    fn set(&self, bucket: &BucketId, key: &str, value: &[u8]) -> Result<()> {
+        let s = self.store_for(bucket.as_str())?;
+        let (k, v) = (Self::safe_key(key), value.to_vec());
+        self.block(async move { s.put(&k, v.into()).await }).context("nats kv put")?;
+        Ok(())
+    }
+
+    fn delete(&self, bucket: &BucketId, key: &str) -> Result<()> {
+        let s = self.store_for(bucket.as_str())?;
+        let k = Self::safe_key(key);
+        self.block(async move { s.delete(&k).await }).context("nats kv delete")?;
+        Ok(())
+    }
+
+    fn exists(&self, bucket: &BucketId, key: &str) -> Result<bool> {
+        Ok(self.get(bucket, key)?.is_some())
+    }
+
+    fn list_keys(&self, bucket: &BucketId) -> Result<Vec<String>> {
+        use futures::StreamExt;
+        let s = self.store_for(bucket.as_str())?;
+        let keys = self.block(async move {
+            let mut out = Vec::new();
+            match s.keys().await {
+                Ok(mut stream) => {
+                    while let Some(k) = stream.next().await {
+                        if let Ok(k) = k {
+                            out.push(unescape(&k));
+                        }
+                    }
+                }
+                Err(_) => {}
+            }
+            out
+        });
+        Ok(keys)
+    }
+
+    /// Genuinely atomic ACROSS NODES, which no other backend here manages.
+    ///
+    /// JetStream KV gives every entry a revision and `update` fails if the revision
+    /// moved, so this is a compare-and-swap retry loop rather than the
+    /// read-modify-write the old synchronous client did. Two replicas of one app
+    /// incrementing the same counter cannot lose an update — which is the entire
+    /// reason a spread deployment can hold state at all.
+    ///
+    /// `wasi:keyvalue` still exposes no CAS to the GUEST, so a guest doing
+    /// read-then-write across two calls is racy whatever this does (ADR-0008).
+    fn increment(&self, bucket: &BucketId, key: &str, delta: u64) -> Result<u64> {
+        let s = self.store_for(bucket.as_str())?;
+        let k = Self::safe_key(key);
+        self.block(async move {
+            for _ in 0..32 {
+                let current = s.entry(&k).await.ok().flatten();
+                let (n, rev) = match &current {
+                    Some(e) if !e.value.is_empty() => (
+                        String::from_utf8_lossy(&e.value).trim().parse::<u64>().unwrap_or(0),
+                        e.revision,
+                    ),
+                    _ => (0, 0),
+                };
+                let next = n.saturating_add(delta);
+                let bytes: bytes::Bytes = next.to_string().into_bytes().into();
+                let ok = if rev == 0 {
+                    // `create` fails if someone else got there first, which is the
+                    // CAS for the absent case.
+                    s.create(&k, bytes).await.is_ok()
+                } else {
+                    s.update(&k, bytes, rev).await.is_ok()
+                };
+                if ok {
+                    return Ok(next);
+                }
+            }
+            anyhow::bail!("nats kv increment: 32 CAS attempts all lost the race")
+        })
+    }
+}
+
+/// Reverse of `NatsKv::safe_key`.
+fn unescape(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'_' && i + 2 < bytes.len() {
+            if let Ok(b) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
 
 // ---- sqlite ---------------------------------------------------------------
 // One file, one table, `(bucket, key)` as the primary key. The point of it is the
@@ -307,9 +494,19 @@ impl KvBackend for SqliteKv {
 }
 
 /// Build the backend named by `--kv`.
-pub fn build(
+/// Is this backend visible to every replica of an app, wherever it runs?
+///
+/// The reconciler refuses to spread a stateful app across nodes that answer `false`,
+/// because the replicas would each get their own store under the same bucket name
+/// and diverge in silence.
+pub fn is_shared(kind: &str) -> bool {
+    matches!(kind, "nats" | "redis")
+}
+
+pub async fn build(
     kind: &str,
     redis_url: &str,
+    nats_url: &str,
     sqlite_path: &str,
 ) -> Result<std::sync::Arc<dyn KvBackend>> {
     use std::sync::Arc;
@@ -317,13 +514,8 @@ pub fn build(
         "memory" => Ok(Arc::new(MemoryKv::default())),
         "redis" => Ok(Arc::new(RedisKv::connect(redis_url)?)),
         "sqlite" => Ok(Arc::new(SqliteKv::open(sqlite_path)?)),
-        "nats" => anyhow::bail!(
-            "--kv nats was removed: its synchronous client cannot coexist with the async \
-             one the lattice needs, and a shared-account JetStream bucket was a naming \
-             convention rather than a boundary anyway. Use --kv sqlite (one file per app, \
-             a real boundary) or --kv redis."
-        ),
-        other => anyhow::bail!("unknown --kv backend: {other} (use memory|redis|sqlite)"),
+        "nats" => Ok(Arc::new(NatsKv::connect(nats_url).await?)),
+        other => anyhow::bail!("unknown --kv backend: {other} (use memory|redis|nats|sqlite)"),
     }
 }
 
@@ -472,15 +664,42 @@ mod tests {
         assert_eq!(SqliteKv::default_path(), "comp-kv.db");
     }
 
-    #[test]
-    fn build_names_sqlite_and_rejects_nonsense() {
+    #[tokio::test]
+    async fn build_names_sqlite_and_rejects_nonsense() {
         let s = Scratch::new("build");
-        assert!(build("sqlite", "", &s.0).is_ok());
+        assert!(build("sqlite", "", "", &s.0).await.is_ok());
         // `dyn KvBackend` is not Debug, so match rather than unwrap_err.
-        let err = match build("postgres", "", &s.0) {
+        let err = match build("postgres", "", "", &s.0).await {
             Err(e) => e.to_string(),
             Ok(_) => panic!("postgres is not a backend"),
         };
-        assert!(err.contains("memory|redis|sqlite"), "{err}");
+        assert!(err.contains("memory|redis|nats|sqlite"), "{err}");
+    }
+
+    /// Which backends every replica of an app can see.
+    ///
+    /// Getting this wrong in either direction is expensive: `true` for a
+    /// node-local store places an app somewhere it silently diverges (the bug
+    /// ADR-0027 is about), and `false` for a shared one refuses a deployment that
+    /// would have been fine.
+    #[test]
+    fn only_the_shared_backends_claim_to_be_shared() {
+        assert!(is_shared("nats"));
+        assert!(is_shared("redis"));
+        assert!(!is_shared("sqlite"), "one file per node is not one store");
+        assert!(!is_shared("memory"));
+        // An unknown backend must read as node-local, not as shared.
+        assert!(!is_shared("postgres"));
+        assert!(!is_shared(""));
+    }
+
+    #[test]
+    fn nats_keys_survive_a_round_trip_through_escaping() {
+        // NATS KV keys are restricted to [-/_=.a-zA-Z0-9]; guest keys are arbitrary.
+        // A key that does not come back is a record that silently disappears.
+        for key in ["plain", "with space", "a/b", "sess:abc-123", "emoji-\u{1f600}", "a_b", "="] {
+            let round = unescape(&NatsKv::safe_key(key));
+            assert_eq!(round, key, "{key:?} did not survive escaping");
+        }
     }
 }

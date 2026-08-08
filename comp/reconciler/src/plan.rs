@@ -158,9 +158,16 @@ pub struct NodeInventory {
     pub node: String,
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
-    /// Host capabilities this node can grant, e.g. `wasi:keyvalue/store@0.2.0-draft`.
+    /// Host capabilities this node can grant, e.g. `wasi:keyvalue/store`.
     #[serde(default)]
     pub host_ifaces: Vec<String>,
+    /// Can every replica of an app see this node's store, wherever it runs?
+    ///
+    /// Defaults to FALSE, which matters: a node that predates this field, or one
+    /// whose inventory we could not fully parse, must read as node-local. Guessing
+    /// "shared" would place a stateful app across nodes that silently diverge.
+    #[serde(default)]
+    pub kv_shared: bool,
     #[serde(default)]
     pub instances: Vec<RunningInstance>,
 }
@@ -278,6 +285,38 @@ pub fn plan(
                 continue;
             }
         };
+
+        // Spreading a STATEFUL app over nodes with node-local stores gives every
+        // replica its own store under the same bucket name. Nothing errors; the
+        // counter just counts wrong and the failover moves the placement without
+        // the data. Measured, and the reason this check exists.
+        //
+        // Refused rather than quietly placed, which is ADR-0013's "deny by
+        // omission" instinct applied to storage: a capability nobody can partition
+        // correctly is not granted at all.
+        if nodes.len() > 1 && holds_state(m) {
+            let local: Vec<&str> = nodes
+                .iter()
+                .filter(|(n, _)| {
+                    !observed.iter().any(|o| o.node == *n && o.kv_shared)
+                })
+                .map(|(n, _)| n.as_str())
+                .collect();
+            if !local.is_empty() {
+                out.unschedulable.push(Unschedulable {
+                    tenant: m.tenant.clone(),
+                    app: m.app.clone(),
+                    reason: format!(
+                        "spread across {} nodes but {local:?} have node-local stores — every \
+                         replica would get its own store under the same bucket name and \
+                         diverge in silence. Use replicas: 1, or run those nodes with a \
+                         shared backend (--kv nats).",
+                        nodes.len()
+                    ),
+                });
+                continue;
+            }
+        }
         for (node, count) in &nodes {
             want.insert(key(m, &root.id, &root.digest, node), (*count, m, root));
         }
@@ -387,6 +426,21 @@ pub fn plan(
     out
 }
 
+/// Does any component in this app keep state a second replica would need to see?
+///
+/// Derived from `host_needs` rather than declared, because `host_needs` is already
+/// stamped from the real WIT surface and a separate `stateful:` flag would be a
+/// second source of truth that could disagree with the imports.
+// ponytail: any keyvalue import counts. An app that only ever writes node-local
+// scratch is indistinguishable from one that does not, and the safe reading of an
+// ambiguity here is the one that refuses.
+fn holds_state(m: &Manifest) -> bool {
+    m.components
+        .iter()
+        .flat_map(|c| c.host_needs.iter())
+        .any(|h| h.starts_with("wasi:keyvalue/") || h.starts_with("wasi:blobstore/"))
+}
+
 fn key(m: &Manifest, component: &str, digest: &str, node: &str) -> Key {
     (m.tenant.clone(), m.app.clone(), component.into(), digest.into(), node.into())
 }
@@ -464,7 +518,21 @@ mod tests {
             node: name.into(),
             labels: labels.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             host_ifaces: ifaces.iter().map(|s| s.to_string()).collect(),
+            kv_shared: false,
             instances: Vec::new(),
+        }
+    }
+
+    /// A node whose store every replica can see — `--kv nats`.
+    fn shared(name: &str) -> NodeInventory {
+        NodeInventory { kv_shared: true, ..node(name, &[], &[]) }
+    }
+
+    /// A component that keeps state, so the split-brain check applies to it.
+    fn stateful(id: &str, digest: &str, replicas: u32) -> Component {
+        Component {
+            host_needs: vec!["wasi:keyvalue/store".into()],
+            ..comp(id, digest, replicas)
         }
     }
 
@@ -794,6 +862,86 @@ mod tests {
         let out = plan(&[m], &obs, &mut Hysteresis::default(), &cfg);
         assert_eq!(out.commands.len(), 20);
         assert_eq!(out.deferred, 30);
+    }
+
+
+    /// THE test. This is the bug that shipped: two replicas, node-local stores,
+    /// each getting its own store under the same bucket name. Nothing errored — the
+    /// rate limiter just stopped rate-limiting, and the failover moved placement
+    /// without the data.
+    #[test]
+    fn a_stateful_app_is_refused_rather_than_split_across_local_stores() {
+        let m = app(vec![stateful("api", "sha256:a", 2)], vec![], Strategy::Linked);
+        let obs = vec![node("box-a", &[], &["wasi:keyvalue/store"]),
+                       node("box-b", &[], &["wasi:keyvalue/store"])];
+        let out = plan(&[m], &obs, &mut Hysteresis::default(), &Cfg::default());
+        assert!(out.commands.is_empty(), "nothing may be placed: {:?}", out.commands);
+        let reason = &out.unschedulable[0].reason;
+        assert!(reason.contains("diverge in silence"), "{reason}");
+        // The reason has to name the offending nodes, or the operator cannot act.
+        assert!(reason.contains("box-a") && reason.contains("box-b"), "{reason}");
+    }
+
+    #[test]
+    fn the_same_app_places_fine_on_nodes_with_a_shared_store() {
+        let m = app(vec![stateful("api", "sha256:a", 2)], vec![], Strategy::Linked);
+        let mut a = shared("box-a");
+        let mut b = shared("box-b");
+        a.host_ifaces = vec!["wasi:keyvalue/store".into()];
+        b.host_ifaces = vec!["wasi:keyvalue/store".into()];
+        let out = plan(&[m], &[a, b], &mut Hysteresis::default(), &Cfg::default());
+        assert_eq!(out.commands.len(), 2, "{:?}", out.unschedulable);
+        assert!(out.unschedulable.is_empty());
+    }
+
+    #[test]
+    fn one_replica_on_a_local_store_is_fine() {
+        // The single-node self-hosting lane, which is where sqlite came from and
+        // where it is exactly right. Refusing this would break that lane.
+        let m = app(vec![stateful("api", "sha256:a", 1)], vec![], Strategy::Linked);
+        let obs = vec![node("box-a", &[], &["wasi:keyvalue/store"]),
+                       node("box-b", &[], &["wasi:keyvalue/store"])];
+        let out = plan(&[m], &obs, &mut Hysteresis::default(), &Cfg::default());
+        assert_eq!(out.commands.len(), 1);
+        assert!(out.unschedulable.is_empty());
+    }
+
+    #[test]
+    fn a_stateless_app_spreads_freely_over_local_stores() {
+        // No keyvalue import, nothing to diverge. The check must not become a
+        // blanket ban on spreading.
+        let m = app(vec![comp("api", "sha256:a", 2)], vec![], Strategy::Linked);
+        let obs = vec![node("box-a", &[], &[]), node("box-b", &[], &[])];
+        let out = plan(&[m], &obs, &mut Hysteresis::default(), &Cfg::default());
+        assert_eq!(out.commands.len(), 2);
+        assert!(out.unschedulable.is_empty());
+    }
+
+    #[test]
+    fn a_plug_holding_state_counts_even_when_the_root_does_not() {
+        // The graph is co-located, so a stateful PLUG lands on every node the root
+        // does. Looking only at the root would miss it.
+        let m = app(
+            vec![comp("api", "sha256:a", 2), stateful("store", "sha256:b", 1)],
+            vec![Link { plug: "store".into(), socket: "api".into(), iface: "records:store/store@0.1.0".into() }],
+            Strategy::Linked,
+        );
+        let obs = vec![node("box-a", &[], &["wasi:keyvalue/store"]),
+                       node("box-b", &[], &["wasi:keyvalue/store"])];
+        let out = plan(&[m], &obs, &mut Hysteresis::default(), &Cfg::default());
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
+        assert!(out.unschedulable[0].reason.contains("diverge"));
+    }
+
+    #[test]
+    fn an_unreported_kv_shared_reads_as_node_local() {
+        // Fail closed. A node predating this field, or one whose inventory we only
+        // partly parsed, must not be treated as safe to spread onto.
+        let inv: NodeInventory = serde_json::from_str(
+            r#"{"node":"old","host_ifaces":["wasi:keyvalue/store"],"instances":[]}"#,
+        )
+        .expect("parses");
+        assert!(!inv.kv_shared, "an absent kv_shared must read as node-local");
     }
 
     #[test]

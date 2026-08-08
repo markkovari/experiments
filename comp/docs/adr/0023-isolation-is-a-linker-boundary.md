@@ -63,7 +63,13 @@ Clause (1) now holds everywhere; clause (2) discriminates.
 | memory | **Real.** No forgeable id, no second path into the heap. |
 | sqlite | **Real.** A host-named bucket in a composite primary key, and the file is the host's. |
 | redis | **A naming convention.** One keyspace, one credential, `SCAN` sees everything. Sufficient while the host is the only client; false the moment an ops script holds that credential. The real fix is one ACL user per tenant. |
-| nats | **Removed.** Its synchronous client cannot unify `rand` with the `async-nats` the lattice requires. No loss: a JetStream bucket on a shared account was redis's situation, and the per-tenant NATS account that would have made it real was never built. |
+| nats | **Restored in [ADR-0027](0027-a-spread-app-needs-a-shared-store.md).** The removal here was forced by a dependency conflict and justified after the fact by the per-account argument below — which is true but beside the point, since the host names the bucket on every backend. It is also the only backend where two replicas of one app share a store. |
+
+> **Corrected by [ADR-0027](0027-a-spread-app-needs-a-shared-store.md).** This table
+> conflates two properties. *Isolated* is about what a guest can reach and holds on every
+> row above. *Shared* is about whether two replicas of one app see one store, and only
+> `nats` and `redis` have it — spreading a stateful app across nodes with `memory` or
+> `sqlite` silently gives each replica its own store. The reconciler now refuses that.
 
 ### Egress
 

@@ -9,18 +9,18 @@
 //! the component's imports host-side:
 //!   - standard WASI (cli/clocks/random/io/filesystem) via wasmtime-wasi
 //!   - wasi:http via wasmtime-wasi-http
-//!   - wasi:keyvalue@0.2.0-draft  -> in-memory, sqlite, Redis or NATS (--kv). Only
-//!     `memory` loses its contents on restart; the other three survive one.
-//!   - wasi:config@0.2.0-draft    -> the process environment, two ways:
-//!       * `CFG_GRACE_PERIOD_SECS=5` -> config key `grace-period-secs` (generic,
-//!         use this for anything new — it is how the platform component is run)
-//!       * a block of vet-clinic defaults overridable with `VET_*`, kept because
-//!         the older example suites rely on them. App-specific, and a cleanup
-//!         candidate once nothing needs it.
+//!   - wasi:keyvalue@0.2.0-draft  -> memory, sqlite, redis or NATS (--kv). Two axes,
+//!     and they are not the same: `memory` loses everything on restart, and
+//!     `memory`/`sqlite` are NODE-LOCAL, so two replicas of one app on two nodes get
+//!     two stores under one bucket name. The reconciler refuses to spread a stateful
+//!     app onto them (docs/adr/0027).
+//!   - wasi:config@0.2.0-draft    -> per-instance, from the start command or
+//!     `--config k=v` / `--config-file`. NOT the process environment: in a host
+//!     shared by every tenant on the node that would be a cross-tenant read.
 //!
-//! The SAME .wasm runs under jco (examples/jco-vet-domain) and on wasmCloud;
-//! this is a third host, proving the component is host-agnostic. Swap the
-//! in-memory KV for redis/NATS and the component is unchanged.
+//! Two lanes, one binary: without `--lattice-nats` it serves one `--component`;
+//! with it, instances arrive as start commands and it holds every tenant on the
+//! node at once (docs/adr/0021, 0023).
 
 mod agent;
 mod kv;
@@ -593,7 +593,7 @@ async fn main() -> Result<()> {
 
     // shared, process-lifetime state.
     let sqlite_path = args.sqlite_path.clone().unwrap_or_else(kv::SqliteKv::default_path);
-    let kv_backend: Kv = kv::build(&args.kv, &args.redis_url, &sqlite_path)?;
+    let kv_backend: Kv = kv::build(&args.kv, &args.redis_url, &args.nats_url, &sqlite_path).await?;
     let cache_backing: CacheBacking = Arc::new(Mutex::new(HashMap::new()));
     let static_dir: Arc<Option<std::path::PathBuf>> =
         Arc::new(args.static_dir.clone().map(std::path::PathBuf::from));
@@ -694,8 +694,17 @@ async fn main() -> Result<()> {
                     || std::path::PathBuf::from(state_dir_default()),
                 ),
                 heartbeat_secs: args.heartbeat_secs,
+                kv_shared: kv::is_shared(&args.kv),
             });
-            println!("comp-host: lattice node, listening on http://{addr}");
+            println!(
+                "comp-host: lattice node, listening on http://{addr} | kv = {} ({})",
+                args.kv,
+                if kv::is_shared(&args.kv) {
+                    "shared — a spread app keeps one store"
+                } else {
+                    "NODE-LOCAL — this node will not accept a spread stateful app"
+                }
+            );
             let nats_url = nats_url.clone();
             tokio::spawn(async move {
                 if let Err(e) = agent::run(ag, &nats_url).await {

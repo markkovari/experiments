@@ -70,6 +70,7 @@ struct Inventory<'a> {
     node: &'a str,
     labels: &'a BTreeMap<String, String>,
     host_ifaces: &'a [&'a str],
+    kv_shared: bool,
     capacity: Capacity,
     instances: Vec<RunningInstance>,
 }
@@ -93,6 +94,11 @@ pub struct Agent {
     pub limits: Limits,
     pub state_dir: PathBuf,
     pub heartbeat_secs: u64,
+    /// Can every replica of an app see this node's store, wherever it runs?
+    ///
+    /// Advertised so the reconciler can refuse to spread a stateful app across
+    /// nodes where it would silently diverge. `--kv sqlite`/`memory` say false.
+    pub kv_shared: bool,
 }
 
 impl Agent {
@@ -203,6 +209,7 @@ pub async fn run(agent: Arc<Agent>, nats_url: &str) -> Result<()> {
                     node: &agent.node,
                     labels: &agent.labels,
                     host_ifaces: HOST_IFACES,
+                    kv_shared: agent.kv_shared,
                     capacity: Capacity {
                         cpus: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
                         instances: agent.instances.read().unwrap().len(),

@@ -19,7 +19,7 @@ sleep 2
 # ONE host process. Both tenants live in it. That is the whole point.
 ./host/target/release/comp-host --lattice-nats nats://127.0.0.1:4232 --node solo \
   --lattice adv --addr 127.0.0.1:3401 --state-dir $SP/adv \
-  --kv sqlite --sqlite-path $SP/adv/kv.db >$SP/solo.log 2>&1 & PIDS+=($!)
+  --kv ${KV:-sqlite} --nats-url 127.0.0.1:4232 --sqlite-path $SP/adv/kv.db >$SP/solo.log 2>&1 & PIDS+=($!)
 sleep 2
 ./reconciler/target/release/comp-reconciler --platform-url http://127.0.0.1:8099 \
   --secret test-secret --nats-url nats://127.0.0.1:4232 --lattice adv \
@@ -42,8 +42,8 @@ for i in range(25):
     except Exception as e: print("  seed failed:", str(e)[:70]); break
 else: print("  wrote 25 rate-limit records into eve's store")
 PY
-echo "  eve's rows in the shared database:"
-sqlite3 $SP/adv/kv.db "SELECT bucket, count(*) FROM kv GROUP BY bucket;" | sed 's/^/    /'
+echo "  eve's rows (sqlite only; nats keeps them in JetStream):"
+sqlite3 $SP/adv/kv.db "SELECT bucket, count(*) FROM kv GROUP BY bucket;" 2>/dev/null | sed 's/^/    /' || echo "    (nats backend)"
 
 echo
 echo "=== load on eve, and the sweep runs while it is under load ==="
