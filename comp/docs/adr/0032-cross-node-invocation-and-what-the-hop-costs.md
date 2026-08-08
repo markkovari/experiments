@@ -1,4 +1,4 @@
-# ADR-0032 — Cross-node invocation works, and costs 50×
+# ADR-0032 — Cross-node invocation works, and the hop is nearly free
 
 - **Status:** accepted
 - **Date:** 2026-08-08
@@ -29,25 +29,60 @@ The counter advancing is the proof: rate-limit records can only be written and r
 `record-store`, which is on the Pi. A component called a component on another machine, and
 neither knew — the import was bound in the linker, so the guest sees a function call.
 
-## And it costs 50×
+## What the hop actually costs
 
-Same graph, same load, only placement changed:
+**An earlier version of this ADR said 50×. That was a bad measurement and the number was
+wrong.** It is kept below as the third column, because the mistake is more instructive than
+the correction.
 
-| | co-located | split across machines |
-|---|---|---|
-| throughput | 2,788 rps | **55 rps** |
-| p50 | 1.39 ms | **41.9 ms** |
-| p99 | 2.40 ms | **613 ms** |
+Same graph, same load, three placements:
 
-**Co-location stays the default and that is not a detail.** A `linked` graph co-locates
-unless a component is given placement of its own; spanning is opted into, never fallen
-into. The right reasons to span are the ones a 50× tax cannot outweigh — a GPU only one
-node has, data that must not leave a jurisdiction — and never "it seemed tidier".
+| | co-located | split, two local nodes | split, Mac ↔ Pi |
+|---|---|---|---|
+| throughput | 2,788 rps | **2,682 rps** | 55 rps |
+| p50 | 1.39 ms | **1.43 ms** | 41.9 ms |
+| p99 | 2.40 ms | **2.56 ms** | 613 ms |
 
-The tail is worse than the median suggests (613 ms p99 against 41.9 ms p50). That is a LAN
-hop to a Pi whose own store is remote (ADR-0030 measured that separately at 78 rps), so
-this figure is close to a worst case rather than a typical one. It has not been measured
-between two comparable machines, and it should be before anyone quotes it.
+**The wRPC hop costs about 4% of throughput and 0.04 ms of median latency.** Between
+comparable nodes it is very nearly free, which is roughly what ADR-0019 implied when it
+priced an in-process link at 1.2 ms saved per hop against wasmCloud's lattice.
+
+The 55 rps column measures something else entirely. That node is a Raspberry Pi **whose own
+store is on the other machine** — so every `records:store` call went Mac → Pi over the LAN,
+and then Pi → Mac again for each NATS KV read and write. A double crossing, terminating in
+the slowest hardware in the fleet, which ADR-0030 had already measured standalone at 78 rps.
+
+Attributing that to the RPC layer was wrong. It measured [ADR-0030](0030-least-outstanding.md)'s
+finding — that a node whose store is remote is dramatically slower — a second time, in a
+place where the transport happened to be in frame.
+
+## What that means for placement
+
+Co-location stays the default, but for a smaller reason than "50×": it is simpler, it needs
+no bus, and it keeps a graph's failure modes together. Spanning is now a real option rather
+than a last resort — a GPU-pinned component or a jurisdiction-bound one costs a few percent,
+not two orders of magnitude.
+
+The thing that *is* expensive is unchanged and was already known: **putting a component far
+from its store.** That is a storage decision, not an RPC one, and ADR-0027's shared-store
+requirement is what forces the trade.
+
+## How the wrong number happened
+
+Worth writing down, because it is the fourth measurement in this line of work to read
+convincingly and mean something else:
+
+* two nodes both returning `4.0` looked like isolation working, and also meant state was
+  per-node (ADR-0027);
+* a token bucket refilling looked like data loss after a node died (it had not);
+* three nodes balancing perfectly looked like a passing five-node test, with two nodes
+  silently absent on a stale binary;
+* and here, a split graph looked like an RPC cost when it was a storage cost.
+
+The common shape: **the measurement had more than one variable in it, and the result was
+attributed to the interesting one.** The fix each time was the same — isolate one variable
+and re-run. Two local nodes was a five-minute test that should have come before the
+cross-machine one, not after it.
 
 ## The design, in one line each
 
