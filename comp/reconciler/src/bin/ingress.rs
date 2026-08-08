@@ -56,6 +56,23 @@ struct Args {
     /// Seconds to wait on a backend before trying another replica.
     #[arg(long, default_value = "30")]
     backend_timeout: u64,
+
+    /// How to choose among the replicas of an app.
+    ///
+    /// `least-outstanding` sends each request to whichever replica currently has
+    /// the fewest in flight. That is the same as round robin when every backend is
+    /// equally fast, and strictly better when one is not: a slow node accumulates
+    /// in-flight requests and stops being chosen, without anyone measuring latency
+    /// or configuring a weight. Round robin is kept so the two can be compared on
+    /// one fleet.
+    #[arg(long, value_enum, default_value_t = Balance::LeastOutstanding)]
+    balance: Balance,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum Balance {
+    RoundRobin,
+    LeastOutstanding,
 }
 
 /// `Host` header -> the nodes that answer to it.
@@ -68,6 +85,63 @@ struct Table {
 struct Backend {
     node: String,
     address: String,
+}
+
+/// Requests currently in flight per node.
+///
+/// Keyed by node name and held OUTSIDE the routing table on purpose: the table is
+/// replaced wholesale on every inventory refresh, and counters that were replaced
+/// with it would reset to zero every few seconds — which is exactly often enough to
+/// hide the imbalance they exist to correct.
+type InFlight = Arc<RwLock<BTreeMap<String, Arc<AtomicUsize>>>>;
+
+fn counter(inflight: &InFlight, node: &str) -> Arc<AtomicUsize> {
+    if let Some(c) = inflight.read().unwrap().get(node) {
+        return c.clone();
+    }
+    inflight.write().unwrap().entry(node.to_string()).or_default().clone()
+}
+
+/// Decrements on drop, so a panic or an early return cannot leak a count and
+/// permanently retire a healthy backend.
+struct Busy(Arc<AtomicUsize>);
+impl Busy {
+    fn on(c: Arc<AtomicUsize>) -> Self {
+        c.fetch_add(1, Ordering::Relaxed);
+        Busy(c)
+    }
+}
+impl Drop for Busy {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// The backends to try, best first.
+///
+/// Returns an ORDER rather than one choice so the retry path reuses the same
+/// judgement instead of a second, differently-wrong rule.
+fn order<'a>(
+    backends: &'a [Backend],
+    mode: Balance,
+    next: &AtomicUsize,
+    inflight: &InFlight,
+) -> Vec<&'a Backend> {
+    let start = next.fetch_add(1, Ordering::Relaxed);
+    let mut ranked: Vec<&Backend> = backends.iter().collect();
+    match mode {
+        Balance::RoundRobin => {
+            ranked.rotate_left(start % backends.len().max(1));
+        }
+        Balance::LeastOutstanding => {
+            // Rotate FIRST so that ties — which is every request on an idle fleet —
+            // still spread. Without it, least-outstanding degenerates to "always the
+            // alphabetically first node" whenever the fleet is keeping up.
+            ranked.rotate_left(start % backends.len().max(1));
+            ranked.sort_by_key(|b| counter(inflight, &b.node).load(Ordering::Relaxed));
+        }
+    }
+    ranked
 }
 
 /// Build `host -> [node]` from what the nodes themselves advertise.
@@ -153,18 +227,29 @@ async fn main() -> Result<()> {
             .build_http(),
     );
     let next = Arc::new(AtomicUsize::new(0));
+    let inflight: InFlight = Arc::new(RwLock::new(BTreeMap::new()));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    println!("comp-ingress: listening on http://{addr} | lattice {}", args.lattice);
+    println!(
+        "comp-ingress: listening on http://{addr} | lattice {} | balance {:?}",
+        args.lattice, args.balance
+    );
 
     loop {
         let (stream, _) = listener.accept().await?;
         let io = TokioIo::new(stream);
-        let (table, client, next, timeout) =
-            (table.clone(), client.clone(), next.clone(), args.backend_timeout);
+        let (table, client, next, inflight, timeout, mode) = (
+            table.clone(),
+            client.clone(),
+            next.clone(),
+            inflight.clone(),
+            args.backend_timeout,
+            args.balance,
+        );
         tokio::spawn(async move {
             let service = hyper::service::service_fn(move |req| {
-                let (table, client, next) = (table.clone(), client.clone(), next.clone());
-                async move { forward(table, client, next, timeout, req).await }
+                let (table, client, next, inflight) =
+                    (table.clone(), client.clone(), next.clone(), inflight.clone());
+                async move { forward(table, client, next, inflight, mode, timeout, req).await }
             });
             if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
                 eprintln!("comp-ingress: connection error: {e}");
@@ -184,10 +269,13 @@ type Client = Arc<
     >,
 >;
 
+#[allow(clippy::too_many_arguments)]
 async fn forward(
     table: Arc<RwLock<Table>>,
     client: Client,
     next: Arc<AtomicUsize>,
+    inflight: InFlight,
+    mode: Balance,
     timeout: u64,
     req: hyper::Request<hyper::body::Incoming>,
 ) -> Result<hyper::Response<ProxyBody>> {
@@ -208,12 +296,7 @@ async fn forward(
         return Ok(status(503, &format!("no replica of {host:?} is currently placed\n")));
     }
 
-    // Round robin over a stable, sorted list. Deliberately not least-connections or
-    // latency-aware: those need per-backend state and a feedback loop, and nothing
-    // here has shown they are needed.
-    // ponytail: round robin; revisit when one replica is measurably slower than
-    // its peers and the even split actually hurts.
-    let start = next.fetch_add(1, Ordering::Relaxed);
+    let ranked = order(&backends, mode, &next, &inflight);
     let (parts, body) = req.into_parts();
     let bytes = body.collect().await.context("reading the request body")?.to_bytes();
 
@@ -221,8 +304,8 @@ async fn forward(
     // One retry against a DIFFERENT replica. A node that died between inventory
     // refreshes should cost one request a retry, not a failure — but retrying
     // forever would turn one sick backend into a stampede.
-    for hop in 0..backends.len().min(2) {
-        let backend = &backends[(start + hop) % backends.len()];
+    for backend in ranked.into_iter().take(2) {
+        let _busy = Busy::on(counter(&inflight, &backend.node));
         let uri: hyper::Uri = format!(
             "http://{}{}",
             backend.address,
@@ -348,6 +431,81 @@ mod tests {
             ingress_host: None,
         });
         assert!(table_of(&[n]).routes.is_empty());
+    }
+
+    fn inflight_of(pairs: &[(&str, usize)]) -> InFlight {
+        let m: BTreeMap<String, Arc<AtomicUsize>> = pairs
+            .iter()
+            .map(|(n, v)| (n.to_string(), Arc::new(AtomicUsize::new(*v))))
+            .collect();
+        Arc::new(RwLock::new(m))
+    }
+
+    #[test]
+    fn least_outstanding_avoids_the_backend_that_is_falling_behind() {
+        // THE case round robin gets wrong: a node that is up but slow accumulates
+        // in-flight requests, and an even split keeps feeding it anyway.
+        let t = table_of(&[
+            node("fast-1", "10.0.0.1:1", &["a.test"]),
+            node("fast-2", "10.0.0.2:1", &["a.test"]),
+            node("slow", "10.0.0.3:1", &["a.test"]),
+        ]);
+        let b = &t.routes["a.test"];
+        let inflight = inflight_of(&[("fast-1", 0), ("fast-2", 1), ("slow", 40)]);
+        let next = AtomicUsize::new(0);
+        for _ in 0..6 {
+            let picked = order(b, Balance::LeastOutstanding, &next, &inflight);
+            assert_ne!(picked[0].node, "slow", "the backed-up node must not be first");
+        }
+    }
+
+    #[test]
+    fn least_outstanding_still_spreads_when_every_backend_is_idle() {
+        // On a fleet that is keeping up every counter is 0, and a stable sort over
+        // equal keys would hand every request to the same node forever.
+        let t = table_of(&[
+            node("n1", "10.0.0.1:1", &["a.test"]),
+            node("n2", "10.0.0.2:1", &["a.test"]),
+            node("n3", "10.0.0.3:1", &["a.test"]),
+        ]);
+        let b = &t.routes["a.test"];
+        let inflight = inflight_of(&[("n1", 0), ("n2", 0), ("n3", 0)]);
+        let next = AtomicUsize::new(0);
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..3 {
+            seen.insert(order(b, Balance::LeastOutstanding, &next, &inflight)[0].node.clone());
+        }
+        assert_eq!(seen.len(), 3, "an idle fleet must still rotate, got {seen:?}");
+    }
+
+    #[test]
+    fn a_busy_guard_cannot_leak_a_count() {
+        // A leaked increment retires a healthy backend permanently, which is worse
+        // than any imbalance it was meant to fix.
+        let inflight = inflight_of(&[("n1", 0)]);
+        let c = counter(&inflight, "n1");
+        {
+            let _b = Busy::on(c.clone());
+            assert_eq!(c.load(Ordering::Relaxed), 1);
+        }
+        assert_eq!(c.load(Ordering::Relaxed), 0, "the guard must decrement on drop");
+    }
+
+    #[test]
+    fn the_retry_uses_the_same_ranking_rather_than_a_second_rule() {
+        // The fallback is just the next-best backend. A separate retry rule is a
+        // second thing to get wrong, and it would fire exactly when things are
+        // already going badly.
+        let t = table_of(&[
+            node("n1", "10.0.0.1:1", &["a.test"]),
+            node("n2", "10.0.0.2:1", &["a.test"]),
+            node("n3", "10.0.0.3:1", &["a.test"]),
+        ]);
+        let b = &t.routes["a.test"];
+        let inflight = inflight_of(&[("n1", 5), ("n2", 0), ("n3", 2)]);
+        let picked = order(b, Balance::LeastOutstanding, &AtomicUsize::new(0), &inflight);
+        assert_eq!(picked[0].node, "n2");
+        assert_eq!(picked[1].node, "n3", "the retry is the next best, not the first");
     }
 
     #[test]

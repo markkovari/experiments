@@ -43,9 +43,16 @@ sleep 3
 ./reconciler/target/release/comp-reconciler --platform-url http://127.0.0.1:8099 \
   --secret test-secret --nats-url nats://127.0.0.1:4232 --lattice five --interval 3 \
   >"$SP/rec.log" 2>&1 & PIDS+=($!)
+# TWO ingresses. It holds no state beyond a cache of inventory, so "several can
+# run" is either true or it is not — worth checking rather than asserting.
 ./reconciler/target/release/comp-ingress --addr 127.0.0.1:8090 \
   --nats-url nats://127.0.0.1:4232 --lattice five --refresh-secs 2 \
-  >"$SP/ingress.log" 2>&1 & PIDS+=($!)
+  >"$SP/ingress.log" 2>&1 &
+INGRESS_A=$!
+PIDS+=($INGRESS_A)
+./reconciler/target/release/comp-ingress --addr 127.0.0.1:8095 \
+  --nats-url nats://127.0.0.1:4232 --lattice five --refresh-secs 2 \
+  >"$SP/ingress-b.log" 2>&1 & PIDS+=($!)
 
 echo "  settling..."
 sleep 24
@@ -73,6 +80,12 @@ print(f"    {'failed':10} {fail:4}")
 print(f"\\n  {len(seen)} distinct node(s) served; spread {min(seen.values())}-{max(seen.values())}" if seen else "  nothing served")
 PY
 echo
+echo "=== HA: two ingresses, then kill one ==="
+python3 $HERE/ha-check.py
+kill $INGRESS_A 2>/dev/null; sleep 2
+python3 $HERE/ha-check.py --only 8095 --label "ingress A killed; B"
+
+echo
 echo "=== kill both Pi nodes, then 60 more requests ==="
 rsh 'pkill -f comp-lattice/comp-host' >/dev/null 2>&1
 sleep 20
@@ -80,7 +93,7 @@ python3 - <<PY
 import json, urllib.request, collections
 seen = collections.Counter(); fail = 0
 for i in range(60):
-    r = urllib.request.Request("http://127.0.0.1:8090/api/ratelimit",
+    r = urllib.request.Request("http://127.0.0.1:8095/api/ratelimit",
         data=json.dumps({"key": f"post{i}"}).encode(),
         headers={"content-type":"application/json","Host":"shop.eve.test"})
     try:

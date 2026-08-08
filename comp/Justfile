@@ -1807,3 +1807,9 @@ shared-state: compose-gate build-reconciler
 five-nodes: compose-gate build-reconciler
     cd host && cargo build --release --bin comp-host
     bash bench/adversarial/five-nodes.sh
+
+# Round robin's weak case, on a real heterogeneous fleet: 2 Mac nodes + 2 Pi nodes,
+# same load, both algorithms. See docs/adr/0030 — the difference was 10x.
+slow-backend: compose-gate build-reconciler
+    cd host && cargo build --release --bin comp-host
+    bash bench/adversarial/slow-backend.sh
