@@ -18,11 +18,11 @@ python3 $HERE/stub-control-plane.py $HERE/spread-stateful.json \
   '{"gate":"components/target/gate_domain.composed.wasm"}' 8099 >"$SP/plat.log" 2>&1 & PIDS+=($!)
 sleep 2
 
-KV=${KV:-nats}
+KV=${KV:-}   # empty = let the host pick its own default
 for n in 1 2; do
   ./host/target/release/comp-host --lattice-nats nats://127.0.0.1:4232 --node "n$n" \
     --lattice st --addr "127.0.0.1:350$n" --state-dir "$SP/n$n" \
-    --kv "$KV" --nats-url 127.0.0.1:4232 --sqlite-path "$SP/n$n/kv.db" \
+    ${KV:+--kv "$KV"} --sqlite-path "$SP/n$n/kv.db" \
     >"$SP/n$n.log" 2>&1 & PIDS+=($!)
 done
 sleep 2

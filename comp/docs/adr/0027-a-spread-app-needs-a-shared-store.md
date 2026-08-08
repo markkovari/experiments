@@ -77,6 +77,14 @@ somewhere the argument never looked.
    inventory only partly parsed, must read as node-local; guessing "shared" would place an
    app somewhere it silently diverges, which is the failure this ADR exists about.
 
+4. **A lattice node defaults to `--kv nats`.** The old default was `memory`, which on a
+   lattice node is the worst of both: node-local *and* wiped on restart. The refusal in (3)
+   only catches the spread case, so a single-replica app on `memory` lost everything on a
+   restart with nothing said. NATS is already mandatory on a lattice, so defaulting to it
+   costs nothing that was optional. A single-app run still defaults to `memory`, which is
+   the right dev default for a lane that has no NATS at all. Choosing a node-local backend
+   on a lattice node explicitly is still allowed, and warns.
+
 This is ADR-0013's "deny by omission" applied to storage: a capability nobody can partition
 correctly is not granted at all.
 
@@ -108,11 +116,13 @@ ADR-0023 argued and this confirms by changing the backend underneath it.
 
 ## What is still wrong
 
-- **A single-replica app on sqlite still loses its data when its node dies.** The
-  reconciler will reschedule it onto a healthy node, where it will find an empty store.
-  Nothing warns about this, because with `replicas: 1` there is no divergence to detect —
-  only loss. Durability across a node failure is unaddressed and is not the same problem as
-  the one fixed here.
+- **A single-replica app on a node-local store still loses its data when its node dies.**
+  The reconciler will reschedule it onto a healthy node, where it will find an empty store.
+  The default now makes this hard to reach by accident and the host warns when it is chosen
+  deliberately, but nothing *prevents* it, because with `replicas: 1` there is no divergence
+  to detect — only loss. Durability across a node failure is a different problem and is
+  unaddressed; NATS with JetStream replication is the answer, and nothing here configures
+  or verifies that.
 - **`redis` reports `kv_shared: true`** and is therefore now spreadable, while ADR-0023
   correctly notes it is a naming convention rather than a boundary without ACLs. Shared and
   isolated are different properties and this field only claims the first.

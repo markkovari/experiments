@@ -431,10 +431,16 @@ struct Args {
     /// requests that aren't API routes. Omit for API-only.
     #[arg(long)]
     static_dir: Option<String>,
-    /// Key-value backend: memory (default, in-process) | redis | nats. The wasm
-    /// component is identical for all three — only the host store changes.
-    #[arg(long, default_value = "memory")]
-    kv: String,
+    /// Key-value backend: memory | sqlite | redis | nats. The wasm component is
+    /// identical for all four — only the host store changes.
+    ///
+    /// Defaults to `nats` on a lattice node and `memory` for a single-app run. That
+    /// difference is deliberate: NATS is already mandatory on a lattice, and it is
+    /// the only backend where two replicas of one app share a store, so defaulting a
+    /// node to anything else hands you either silent divergence (ADR-0027) or, with
+    /// `memory`, silent loss on the next restart.
+    #[arg(long)]
+    kv: Option<String>,
     /// Redis URL for --kv redis.
     #[arg(long, default_value = "redis://127.0.0.1:6379")]
     redis_url: String,
@@ -443,9 +449,11 @@ struct Args {
     /// `DynamicUser=yes`. Falls back to ./comp-kv.db when run by hand.
     #[arg(long)]
     sqlite_path: Option<String>,
-    /// NATS URL for --kv nats (JetStream KV).
-    #[arg(long, default_value = "127.0.0.1:4222")]
-    nats_url: String,
+    /// NATS URL for `--kv nats`. Defaults to the lattice's own NATS when
+    /// `--lattice-nats` is given, because running a node's store on a different
+    /// cluster from its control bus is a thing to do on purpose, not by default.
+    #[arg(long)]
+    nats_url: Option<String>,
     /// Use wasmtime's POOLING allocator (pre-reserved instance/memory slots,
     /// reused across requests) instead of the default on-demand allocator. This
     /// is what wasmCloud does — it makes per-request component instantiation of
@@ -593,7 +601,27 @@ async fn main() -> Result<()> {
 
     // shared, process-lifetime state.
     let sqlite_path = args.sqlite_path.clone().unwrap_or_else(kv::SqliteKv::default_path);
-    let kv_backend: Kv = kv::build(&args.kv, &args.redis_url, &args.nats_url, &sqlite_path).await?;
+    let lattice_mode = args.lattice_nats.is_some();
+    let kv_kind = args
+        .kv
+        .clone()
+        .unwrap_or_else(|| if lattice_mode { "nats".into() } else { "memory".into() });
+    let nats_url = args
+        .nats_url
+        .clone()
+        .or_else(|| args.lattice_nats.clone())
+        .unwrap_or_else(|| "127.0.0.1:4222".into());
+    if lattice_mode && !kv::is_shared(&kv_kind) {
+        // Not fatal: a single-replica app on a node-local store is a legitimate
+        // arrangement, and the reconciler refuses the spread case on its own. But it
+        // is never what someone means by accident, so it says so.
+        eprintln!(
+            "comp-host: WARNING --kv {kv_kind} is node-local. A spread stateful app will be \
+             refused placement here, and anything running here loses its store if this node \
+             does. Pass --kv nats for a store every replica shares."
+        );
+    }
+    let kv_backend: Kv = kv::build(&kv_kind, &args.redis_url, &nats_url, &sqlite_path).await?;
     let cache_backing: CacheBacking = Arc::new(Mutex::new(HashMap::new()));
     let static_dir: Arc<Option<std::path::PathBuf>> =
         Arc::new(args.static_dir.clone().map(std::path::PathBuf::from));
@@ -672,7 +700,7 @@ async fn main() -> Result<()> {
             println!("comp-host: serving {} on http://{} as {id}", args.component, addr);
             println!(
                 "comp-host: kv backend = {} | allocator = {}",
-                args.kv,
+                kv_kind,
                 if args.pool { "pooling" } else { "on-demand" }
             );
         }
@@ -694,12 +722,12 @@ async fn main() -> Result<()> {
                     || std::path::PathBuf::from(state_dir_default()),
                 ),
                 heartbeat_secs: args.heartbeat_secs,
-                kv_shared: kv::is_shared(&args.kv),
+                kv_shared: kv::is_shared(&kv_kind),
             });
             println!(
                 "comp-host: lattice node, listening on http://{addr} | kv = {} ({})",
-                args.kv,
-                if kv::is_shared(&args.kv) {
+                kv_kind,
+                if kv::is_shared(&kv_kind) {
                     "shared — a spread app keeps one store"
                 } else {
                     "NODE-LOCAL — this node will not accept a spread stateful app"
