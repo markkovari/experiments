@@ -46,6 +46,7 @@ single-component app should be a container, not a wasm workload.
 | [0026](0026-the-adversarial-run.md) | The adversarial run: contained, at 10.5k rps, in 56 MiB | accepted; **discharges 0023's measurement** |
 | [0027](0027-a-spread-app-needs-a-shared-store.md) | A spread app needs a shared store, and the platform now refuses otherwise | accepted |
 | [0028](0028-cross-node-calls-are-wrpc.md) | Cross-node calls are wRPC; the codec I designed should never have existed | accepted |
+| [0029](0029-one-address-in-front-of-n-replicas.md) | One address in front of N replicas, and its table comes from inventory | accepted |
 
 ## The shape these add up to
 

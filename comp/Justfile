@@ -1797,3 +1797,13 @@ adversarial: compose-gate build-reconciler
 shared-state: compose-gate build-reconciler
     cd host && cargo build --release --bin comp-host
     bash bench/adversarial/shared-state.sh
+
+# Routing across replicas, on five nodes and two machines: 3 here, 2 on the Pi,
+# one comp-ingress in front, one deployment with replicas: 5. Every response says
+# which node answered, so the balance is visible from outside. Then both Pi nodes
+# are killed and traffic must keep flowing.
+#
+# Needs nats-server, and ssh to the Pi (override MAC= and PI=). See docs/adr/0029.
+five-nodes: compose-gate build-reconciler
+    cd host && cargo build --release --bin comp-host
+    bash bench/adversarial/five-nodes.sh

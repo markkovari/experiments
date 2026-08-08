@@ -525,6 +525,12 @@ struct Args {
     /// three of these, which is how a departed node disappears.
     #[arg(long, default_value = "5")]
     heartbeat_secs: u64,
+    /// Where an ingress can reach this node, `host:port`. Defaults to `--addr`,
+    /// which is right for a loopback or explicit bind and wrong for `0.0.0.0` — a
+    /// node bound to every interface knows its port and not its address, so a real
+    /// deployment passes this.
+    #[arg(long)]
+    advertise_addr: Option<String>,
 }
 
 /// `k=v`, for `--config`.
@@ -724,6 +730,7 @@ async fn main() -> Result<()> {
                     || std::path::PathBuf::from(state_dir_default()),
                 ),
                 heartbeat_secs: args.heartbeat_secs,
+                address: args.advertise_addr.clone().unwrap_or_else(|| args.addr.clone()),
                 kv_shared,
             });
             println!(

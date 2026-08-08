@@ -144,6 +144,13 @@ pub struct RunningInstance {
     pub digest: String,
     #[serde(default = "one")]
     pub count: u32,
+    /// The Host header this instance answers to, when it is the one serving HTTP.
+    ///
+    /// Advertised so an ingress can build `host -> [node]` from inventory alone and
+    /// never has to ask the control plane. That keeps the data plane working while
+    /// the control plane is down, which is the same property the node ledger buys.
+    #[serde(default)]
+    pub ingress_host: Option<String>,
 }
 
 /// One host's whole inventory, as written to the `comp-inventory` KV bucket.
@@ -168,6 +175,10 @@ pub struct NodeInventory {
     /// "shared" would place a stateful app across nodes that silently diverge.
     #[serde(default)]
     pub kv_shared: bool,
+    /// Where this node can actually be reached, `host:port`. Not derivable from
+    /// anywhere else: a node bound to `0.0.0.0` knows its port and not its address.
+    #[serde(default)]
+    pub address: String,
     #[serde(default)]
     pub instances: Vec<RunningInstance>,
 }
@@ -519,6 +530,7 @@ mod tests {
             labels: labels.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             host_ifaces: ifaces.iter().map(|s| s.to_string()).collect(),
             kv_shared: false,
+            address: String::new(),
             instances: Vec::new(),
         }
     }
@@ -543,6 +555,7 @@ mod tests {
             component: component.into(),
             digest: digest.into(),
             count,
+            ingress_host: None,
         });
     }
 
@@ -600,6 +613,7 @@ mod tests {
                         component: component.clone(),
                         digest: digest.clone(),
                         count: *count,
+                        ingress_host: None,
                     }),
                 }
             }

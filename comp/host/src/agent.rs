@@ -57,6 +57,9 @@ pub struct RunningInstance {
     pub component: String,
     pub digest: String,
     pub count: u32,
+    /// The Host header this instance answers to, so an ingress can build its
+    /// routing table from inventory alone.
+    pub ingress_host: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -65,6 +68,7 @@ struct Snapshot<'a> {
     labels: &'a BTreeMap<String, String>,
     host_ifaces: &'a [&'a str],
     kv_shared: bool,
+    address: &'a str,
     capacity: Capacity,
     instances: Vec<RunningInstance>,
 }
@@ -88,6 +92,9 @@ pub struct Agent {
     pub limits: Limits,
     pub state_dir: PathBuf,
     pub heartbeat_secs: u64,
+    /// Where this node can be reached by an ingress, `host:port`. A node bound to
+    /// `0.0.0.0` knows its port and not its address, so this is told to it.
+    pub address: String,
     /// Can every replica of an app see this node's store, wherever it runs?
     ///
     /// Advertised so the reconciler can refuse to spread a stateful app across
@@ -106,16 +113,26 @@ impl Agent {
 
     /// Everything running here, for the inventory and for the ledger.
     fn snapshot(&self) -> Vec<RunningInstance> {
+        // Reverse the route table once rather than per instance: a node holds few
+        // instances, but this runs on every heartbeat.
+        let routes: BTreeMap<String, String> = self
+            .routes
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(host, id)| (id.clone(), host.clone()))
+            .collect();
         self.instances
             .read()
             .unwrap()
-            .values()
-            .map(|i| RunningInstance {
+            .iter()
+            .map(|(id, i)| RunningInstance {
                 tenant: i.scope.tenant.clone(),
                 app: i.scope.app.clone(),
                 component: i.scope.component.clone(),
                 digest: i.scope.digest.clone(),
                 count: i.count,
+                ingress_host: routes.get(id).cloned(),
             })
             .collect()
     }
@@ -191,6 +208,7 @@ pub async fn run(agent: Arc<Agent>, fabric: Fabric) -> Result<()> {
                     labels: &agent.labels,
                     host_ifaces: HOST_IFACES,
                     kv_shared: agent.kv_shared,
+                    address: &agent.address,
                     capacity: Capacity {
                         cpus: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
                         instances: agent.instances.read().unwrap().len(),
