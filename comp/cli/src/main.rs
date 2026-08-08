@@ -14,6 +14,8 @@
 //! are the same kind — a port collision, an unescaped value, a route pointing at the
 //! wrong process.
 
+mod platform;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -316,7 +318,7 @@ pub fn render_route(spec: &Spec, router: Router) -> String {
 // ---- cli --------------------------------------------------------------------
 
 #[derive(Parser)]
-#[command(name = "selfhost", about = "Render an app spec into systemd + a per-app URL")]
+#[command(name = "comp", version, about = "The comp platform: components, apps, and the nodes they run on")]
 struct Args {
     #[command(subcommand)]
     cmd: Cmd,
@@ -324,7 +326,76 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Write the unit, env file and route for one app.
+    /// Sign in to a platform and remember the session.
+    Login {
+        #[arg(long, env = "COMP_URL", default_value = "http://127.0.0.1:8080")]
+        url: String,
+        #[arg(long)]
+        email: String,
+        #[arg(long)]
+        password: String,
+        /// Create the account first.
+        #[arg(long)]
+        register: bool,
+    },
+    /// Show who the stored session belongs to.
+    Whoami,
+    /// Components: upload them, list them.
+    #[command(subcommand)]
+    Component(ComponentCmd),
+    /// Applications: a graph of components, deployed onto the lattice.
+    #[command(subcommand)]
+    App(AppCmd),
+    /// Nodes: render the files a bare-metal box needs to run one.
+    #[command(subcommand)]
+    Node(NodeCmd),
+}
+
+#[derive(Subcommand)]
+enum ComponentCmd {
+    /// Upload a .wasm. Reflection is the validation (ADR-0006).
+    Push {
+        file: PathBuf,
+        /// Defaults to the filename, minus `.composed`.
+        #[arg(long)]
+        id: Option<String>,
+    },
+    /// What this tenant can use.
+    Ls,
+}
+
+#[derive(Subcommand)]
+enum AppCmd {
+    /// Define an app: components, and the links between them.
+    Create {
+        name: String,
+        #[arg(long, default_value = "linked")]
+        strategy: String,
+        /// Component ids, repeatable.
+        #[arg(long = "component", required = true)]
+        components: Vec<String>,
+        /// `plug:socket:iface`, repeatable.
+        #[arg(long = "link")]
+        links: Vec<String>,
+    },
+    /// Validate, build the manifest, and store it as a revision. The reconciler
+    /// places it on its next pass.
+    Deploy { id: String },
+    Ls,
+    Show { id: String },
+    /// The desired state a revision stores.
+    Manifest { id: String },
+    /// Delete an app. The confirmation is the platform's rule, not this tool's.
+    Rm {
+        id: String,
+        #[arg(long)]
+        confirm: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum NodeCmd {
+    /// Write the unit, env file and route for one app on a self-hosted box.
     Render {
         spec: PathBuf,
         #[arg(long, default_value = "target/selfhost")]
@@ -350,7 +421,25 @@ fn load(path: &Path) -> Result<Spec> {
 
 fn main() -> Result<()> {
     match Args::parse().cmd {
-        Cmd::Render { spec, out, router } => {
+        Cmd::Login { url, email, password, register } => {
+            if register {
+                platform::register(&url, &email, &password)?;
+            } else {
+                platform::login(&url, &email, &password)?;
+            }
+        }
+        Cmd::Whoami => platform::whoami()?,
+        Cmd::Component(ComponentCmd::Push { file, id }) => platform::component_push(&file, id)?,
+        Cmd::Component(ComponentCmd::Ls) => platform::component_ls()?,
+        Cmd::App(AppCmd::Create { name, strategy, components, links }) => {
+            platform::app_create(&name, &strategy, &components, &links)?
+        }
+        Cmd::App(AppCmd::Deploy { id }) => platform::app_deploy(&id)?,
+        Cmd::App(AppCmd::Ls) => platform::app_ls()?,
+        Cmd::App(AppCmd::Show { id }) => platform::app_show(&id)?,
+        Cmd::App(AppCmd::Manifest { id }) => platform::app_manifest(&id)?,
+        Cmd::App(AppCmd::Rm { id, confirm }) => platform::app_rm(&id, &confirm)?,
+        Cmd::Node(NodeCmd::Render { spec, out, router }) => {
             let spec = load(&spec)?;
             let layout = Layout::default();
             let dir = out.join(&spec.name);
@@ -375,7 +464,7 @@ fn main() -> Result<()> {
                 spec.artifact
             );
         }
-        Cmd::Validate { specs } => {
+        Cmd::Node(NodeCmd::Validate { specs }) => {
             let mut ports: BTreeMap<u16, String> = BTreeMap::new();
             let mut domains: BTreeMap<String, String> = BTreeMap::new();
             let mut names: BTreeMap<String, String> = BTreeMap::new();
@@ -395,7 +484,7 @@ fn main() -> Result<()> {
             }
             println!("{} spec(s) ok, no port/domain/name collisions", specs.len());
         }
-        Cmd::Port { spec } => println!("{}", port_of(&load(&spec)?)),
+        Cmd::Node(NodeCmd::Port { spec }) => println!("{}", port_of(&load(&spec)?)),
     }
     Ok(())
 }

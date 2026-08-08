@@ -2,33 +2,36 @@
 //!
 //! The guest (the composed vet-domain wasm) calls `wasi:keyvalue/store` +
 //! `atomics`; the host satisfies them, and WHICH durable store backs them is a
-//! deployment choice — `--kv memory|redis|nats` — not a component change. Same
+//! deployment choice — `--kv memory|redis|sqlite` — not a component change. Same
 //! wasm bytes, different `KvBackend`.
 //!
-//! All methods are SYNCHRONOUS (the bindgen store trait is sync). redis uses the
-//! blocking `redis` client; nats uses the synchronous `nats` JetStream KV client
-//! — both fine in the per-request blocking handler.
+//! All methods are SYNCHRONOUS (the bindgen store trait is sync); redis uses the
+//! blocking client, which is fine in the per-request handler.
 //!
 //! Keys are namespaced `{bucket}\x1f{key}` for the flat stores (redis) so named
-//! buckets don't collide; NATS uses one JetStream KV bucket per `bucket` name;
-//! sqlite uses a `(bucket, key)` primary key in one table.
+//! buckets don't collide; sqlite uses a `(bucket, key)` primary key.
+//!
+//! A `bucket` here is a `BucketId`, which only a `Scope` can mint. That type is
+//! the ADR-0012 fix: nothing a guest says can reach this file.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 
+use crate::tenant::BucketId;
+
 /// A named-bucket key-value store. Errors surface as anyhow; the caller maps
 /// them to the wasi:keyvalue `error` variant.
 pub trait KvBackend: Send + Sync {
-    fn get(&self, bucket: &str, key: &str) -> Result<Option<Vec<u8>>>;
-    fn set(&self, bucket: &str, key: &str, value: &[u8]) -> Result<()>;
-    fn delete(&self, bucket: &str, key: &str) -> Result<()>;
-    fn exists(&self, bucket: &str, key: &str) -> Result<bool>;
-    fn list_keys(&self, bucket: &str) -> Result<Vec<String>>;
+    fn get(&self, bucket: &BucketId, key: &str) -> Result<Option<Vec<u8>>>;
+    fn set(&self, bucket: &BucketId, key: &str, value: &[u8]) -> Result<()>;
+    fn delete(&self, bucket: &BucketId, key: &str) -> Result<()>;
+    fn exists(&self, bucket: &BucketId, key: &str) -> Result<bool>;
+    fn list_keys(&self, bucket: &BucketId) -> Result<Vec<String>>;
     /// Atomic increment of an integer stored as a decimal string. Returns the
-    /// new value. (redis INCRBY; in-memory + nats read-modify-write.)
-    fn increment(&self, bucket: &str, key: &str, delta: u64) -> Result<u64>;
+    /// new value. (redis INCRBY; in-memory read-modify-write; sqlite transactional.)
+    fn increment(&self, bucket: &BucketId, key: &str, delta: u64) -> Result<u64>;
 }
 
 // ---- in-memory (default) -------------------------------------------------
@@ -39,26 +42,32 @@ pub struct MemoryKv {
 }
 
 impl KvBackend for MemoryKv {
-    fn get(&self, bucket: &str, key: &str) -> Result<Option<Vec<u8>>> {
+    fn get(&self, bucket: &BucketId, key: &str) -> Result<Option<Vec<u8>>> {
+        let bucket = bucket.as_str();
         Ok(self.buckets.lock().unwrap().get(bucket).and_then(|b| b.get(key)).cloned())
     }
-    fn set(&self, bucket: &str, key: &str, value: &[u8]) -> Result<()> {
+    fn set(&self, bucket: &BucketId, key: &str, value: &[u8]) -> Result<()> {
+        let bucket = bucket.as_str();
         self.buckets.lock().unwrap().entry(bucket.into()).or_default().insert(key.into(), value.to_vec());
         Ok(())
     }
-    fn delete(&self, bucket: &str, key: &str) -> Result<()> {
+    fn delete(&self, bucket: &BucketId, key: &str) -> Result<()> {
+        let bucket = bucket.as_str();
         if let Some(b) = self.buckets.lock().unwrap().get_mut(bucket) {
             b.remove(key);
         }
         Ok(())
     }
-    fn exists(&self, bucket: &str, key: &str) -> Result<bool> {
+    fn exists(&self, bucket: &BucketId, key: &str) -> Result<bool> {
+        let bucket = bucket.as_str();
         Ok(self.buckets.lock().unwrap().get(bucket).map(|b| b.contains_key(key)).unwrap_or(false))
     }
-    fn list_keys(&self, bucket: &str) -> Result<Vec<String>> {
+    fn list_keys(&self, bucket: &BucketId) -> Result<Vec<String>> {
+        let bucket = bucket.as_str();
         Ok(self.buckets.lock().unwrap().get(bucket).map(|b| b.keys().cloned().collect()).unwrap_or_default())
     }
-    fn increment(&self, bucket: &str, key: &str, delta: u64) -> Result<u64> {
+    fn increment(&self, bucket: &BucketId, key: &str, delta: u64) -> Result<u64> {
+        let bucket = bucket.as_str();
         let mut g = self.buckets.lock().unwrap();
         let b = g.entry(bucket.into()).or_default();
         let cur: u64 = b.get(key).and_then(|v| std::str::from_utf8(v).ok()).and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -91,30 +100,35 @@ impl RedisKv {
 }
 
 impl KvBackend for RedisKv {
-    fn get(&self, bucket: &str, key: &str) -> Result<Option<Vec<u8>>> {
+    fn get(&self, bucket: &BucketId, key: &str) -> Result<Option<Vec<u8>>> {
+        let bucket = bucket.as_str();
         use redis::Commands;
         let mut c = self.conn.lock().unwrap();
         let v: Option<Vec<u8>> = c.get(Self::k(bucket, key)).context("redis get")?;
         Ok(v)
     }
-    fn set(&self, bucket: &str, key: &str, value: &[u8]) -> Result<()> {
+    fn set(&self, bucket: &BucketId, key: &str, value: &[u8]) -> Result<()> {
+        let bucket = bucket.as_str();
         use redis::Commands;
         let mut c = self.conn.lock().unwrap();
         c.set::<_, _, ()>(Self::k(bucket, key), value).context("redis set")?;
         Ok(())
     }
-    fn delete(&self, bucket: &str, key: &str) -> Result<()> {
+    fn delete(&self, bucket: &BucketId, key: &str) -> Result<()> {
+        let bucket = bucket.as_str();
         use redis::Commands;
         let mut c = self.conn.lock().unwrap();
         c.del::<_, ()>(Self::k(bucket, key)).context("redis del")?;
         Ok(())
     }
-    fn exists(&self, bucket: &str, key: &str) -> Result<bool> {
+    fn exists(&self, bucket: &BucketId, key: &str) -> Result<bool> {
+        let bucket = bucket.as_str();
         use redis::Commands;
         let mut c = self.conn.lock().unwrap();
         Ok(c.exists(Self::k(bucket, key)).context("redis exists")?)
     }
-    fn list_keys(&self, bucket: &str) -> Result<Vec<String>> {
+    fn list_keys(&self, bucket: &BucketId) -> Result<Vec<String>> {
+        let bucket = bucket.as_str();
         use redis::Commands;
         let mut c = self.conn.lock().unwrap();
         let prefix = format!("{bucket}{SEP}");
@@ -122,7 +136,8 @@ impl KvBackend for RedisKv {
         let keys: Vec<String> = c.scan_match(pattern).context("redis scan")?.collect();
         Ok(keys.into_iter().map(|k| k.trim_start_matches(&prefix).to_string()).collect())
     }
-    fn increment(&self, bucket: &str, key: &str, delta: u64) -> Result<u64> {
+    fn increment(&self, bucket: &BucketId, key: &str, delta: u64) -> Result<u64> {
+        let bucket = bucket.as_str();
         use redis::Commands;
         let mut c = self.conn.lock().unwrap();
         let next: i64 = c.incr(Self::k(bucket, key), delta as i64).context("redis incrby")?;
@@ -130,116 +145,21 @@ impl KvBackend for RedisKv {
     }
 }
 
-// ---- nats (JetStream KV) --------------------------------------------------
-// One JetStream KV bucket per `bucket` name (created on first use). NATS KV keys
-// must match [-/_=\.a-zA-Z0-9]+, so arbitrary guest keys are hex-escaped.
+// ---- nats: removed --------------------------------------------------------
+//
+// `NatsKv` used to live here, on the synchronous `nats` 0.25 client. It is gone,
+// and the reason is worth recording rather than rediscovering: that client pulls
+// `nuid`, whose loose `rand` requirement cannot unify with the `rand` that
+// `async-nats` needs — and `async-nats` is not optional, because the lattice
+// requires a held subscription. The old Cargo.toml comment predicted exactly this
+// and named the fix.
+//
+// Nothing of value is lost. Per ADR-0015's law, a JetStream KV bucket per app is a
+// real boundary only when the host holds a per-tenant NATS account; on a shared
+// account it is a naming convention, the same as redis without ACLs. The boundary
+// that actually ships is sqlite, one file per app. `--kv nats` now refuses with
+// that explanation instead of implying an isolation it never had.
 
-pub struct NatsKv {
-    ctx: nats::jetstream::JetStream,
-    stores: Mutex<HashMap<String, nats::kv::Store>>,
-}
-
-impl NatsKv {
-    pub fn connect(url: &str) -> Result<Self> {
-        let nc = nats::connect(url).context("nats connect")?;
-        let ctx = nats::jetstream::new(nc);
-        Ok(Self { ctx, stores: Mutex::new(HashMap::new()) })
-    }
-    /// NATS KV bucket names also have a restricted charset; sanitize.
-    fn bucket_name(bucket: &str) -> String {
-        let mut s: String = bucket.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
-        if s.is_empty() {
-            s.push('x');
-        }
-        s
-    }
-    /// Hex-escape a guest key into a NATS-KV-legal token.
-    fn safe_key(key: &str) -> String {
-        let mut out = String::with_capacity(key.len());
-        for b in key.bytes() {
-            match b {
-                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'=' | b'.' => out.push(b as char),
-                _ => out.push_str(&format!("_{b:02X}")),
-            }
-        }
-        out
-    }
-    fn store_for(&self, bucket: &str) -> Result<nats::kv::Store> {
-        let name = Self::bucket_name(bucket);
-        let mut g = self.stores.lock().unwrap();
-        if let Some(s) = g.get(&name) {
-            return Ok(s.clone());
-        }
-        // bind to an existing bucket, or create it.
-        let store = self
-            .ctx
-            .key_value(&name)
-            .or_else(|_| {
-                self.ctx.create_key_value(&nats::kv::Config { bucket: name.clone(), ..Default::default() })
-            })
-            .context("nats kv bucket")?;
-        g.insert(name, store.clone());
-        Ok(store)
-    }
-}
-
-impl KvBackend for NatsKv {
-    fn get(&self, bucket: &str, key: &str) -> Result<Option<Vec<u8>>> {
-        let s = self.store_for(bucket)?;
-        Ok(s.get(&Self::safe_key(key)).context("nats kv get")?)
-    }
-    fn set(&self, bucket: &str, key: &str, value: &[u8]) -> Result<()> {
-        let s = self.store_for(bucket)?;
-        s.put(&Self::safe_key(key), value.to_vec()).context("nats kv put")?;
-        Ok(())
-    }
-    fn delete(&self, bucket: &str, key: &str) -> Result<()> {
-        let s = self.store_for(bucket)?;
-        s.delete(&Self::safe_key(key)).context("nats kv delete")?;
-        Ok(())
-    }
-    fn exists(&self, bucket: &str, key: &str) -> Result<bool> {
-        Ok(self.get(bucket, key)?.is_some())
-    }
-    fn list_keys(&self, bucket: &str) -> Result<Vec<String>> {
-        let s = self.store_for(bucket)?;
-        // NATS KV `keys()` returns the (escaped) keys; unescape back.
-        let keys = s.keys().context("nats kv keys")?;
-        Ok(keys.map(|k| unescape(&k)).collect())
-    }
-    fn increment(&self, bucket: &str, key: &str, delta: u64) -> Result<u64> {
-        // no native atomic incr in the sync client — read-modify-write (the
-        // host is the single writer for these counters in this demo).
-        let cur = self.get(bucket, key)?
-            .and_then(|v| String::from_utf8(v).ok())
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0);
-        let next = cur.saturating_add(delta);
-        self.set(bucket, key, next.to_string().as_bytes())?;
-        Ok(next)
-    }
-}
-
-/// Reverse of `NatsKv::safe_key`.
-fn unescape(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'_' && i + 2 < bytes.len() {
-            if let Ok(b) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16) {
-                out.push(b);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).to_string()
-}
-
-/// Build the backend named by `--kv`.
 // ---- sqlite ---------------------------------------------------------------
 // One file, one table, `(bucket, key)` as the primary key. The point of it is the
 // thing `memory` can never do: survive a restart — and `Restart=always` in a
@@ -308,7 +228,8 @@ impl SqliteKv {
 }
 
 impl KvBackend for SqliteKv {
-    fn get(&self, bucket: &str, key: &str) -> Result<Option<Vec<u8>>> {
+    fn get(&self, bucket: &BucketId, key: &str) -> Result<Option<Vec<u8>>> {
+        let bucket = bucket.as_str();
         let conn = self.conn.lock().unwrap();
         let mut q = conn.prepare_cached("SELECT value FROM kv WHERE bucket = ?1 AND key = ?2")?;
         let mut rows = q.query(rusqlite::params![bucket, key])?;
@@ -318,7 +239,8 @@ impl KvBackend for SqliteKv {
         }
     }
 
-    fn set(&self, bucket: &str, key: &str, value: &[u8]) -> Result<()> {
+    fn set(&self, bucket: &BucketId, key: &str, value: &[u8]) -> Result<()> {
+        let bucket = bucket.as_str();
         let conn = self.conn.lock().unwrap();
         conn.prepare_cached(
             "INSERT INTO kv (bucket, key, value) VALUES (?1, ?2, ?3)
@@ -328,21 +250,24 @@ impl KvBackend for SqliteKv {
         Ok(())
     }
 
-    fn delete(&self, bucket: &str, key: &str) -> Result<()> {
+    fn delete(&self, bucket: &BucketId, key: &str) -> Result<()> {
+        let bucket = bucket.as_str();
         let conn = self.conn.lock().unwrap();
         conn.prepare_cached("DELETE FROM kv WHERE bucket = ?1 AND key = ?2")?
             .execute(rusqlite::params![bucket, key])?;
         Ok(())
     }
 
-    fn exists(&self, bucket: &str, key: &str) -> Result<bool> {
+    fn exists(&self, bucket: &BucketId, key: &str) -> Result<bool> {
+        let bucket = bucket.as_str();
         let conn = self.conn.lock().unwrap();
         let mut q = conn
             .prepare_cached("SELECT 1 FROM kv WHERE bucket = ?1 AND key = ?2")?;
         Ok(q.exists(rusqlite::params![bucket, key])?)
     }
 
-    fn list_keys(&self, bucket: &str) -> Result<Vec<String>> {
+    fn list_keys(&self, bucket: &BucketId) -> Result<Vec<String>> {
+        let bucket = bucket.as_str();
         let conn = self.conn.lock().unwrap();
         let mut q = conn.prepare_cached("SELECT key FROM kv WHERE bucket = ?1 ORDER BY key")?;
         let rows = q.query_map(rusqlite::params![bucket], |r| r.get::<_, String>(0))?;
@@ -356,7 +281,8 @@ impl KvBackend for SqliteKv {
     /// This is as far as atomicity can go here — `wasi:keyvalue` exposes no CAS, so
     /// a GUEST doing read-then-write across two calls is still racy whatever the
     /// backend does (ADR-0008).
-    fn increment(&self, bucket: &str, key: &str, delta: u64) -> Result<u64> {
+    fn increment(&self, bucket: &BucketId, key: &str, delta: u64) -> Result<u64> {
+        let bucket = bucket.as_str();
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let current: Option<Vec<u8>> = tx
@@ -380,25 +306,36 @@ impl KvBackend for SqliteKv {
     }
 }
 
+/// Build the backend named by `--kv`.
 pub fn build(
     kind: &str,
     redis_url: &str,
-    nats_url: &str,
     sqlite_path: &str,
 ) -> Result<std::sync::Arc<dyn KvBackend>> {
     use std::sync::Arc;
     match kind {
         "memory" => Ok(Arc::new(MemoryKv::default())),
         "redis" => Ok(Arc::new(RedisKv::connect(redis_url)?)),
-        "nats" => Ok(Arc::new(NatsKv::connect(nats_url)?)),
         "sqlite" => Ok(Arc::new(SqliteKv::open(sqlite_path)?)),
-        other => anyhow::bail!("unknown --kv backend: {other} (use memory|redis|nats|sqlite)"),
+        "nats" => anyhow::bail!(
+            "--kv nats was removed: its synchronous client cannot coexist with the async \
+             one the lattice needs, and a shared-account JetStream bucket was a naming \
+             convention rather than a boundary anyway. Use --kv sqlite (one file per app, \
+             a real boundary) or --kv redis."
+        ),
+        other => anyhow::bail!("unknown --kv backend: {other} (use memory|redis|sqlite)"),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Backends are handed a host-built id, never a guest string — that is the
+    /// whole point of the type. Tests reach for the same constructor.
+    fn bkt(name: &str) -> BucketId {
+        BucketId::for_test(name)
+    }
 
     /// A unique scratch path per test, cleaned up on drop — including the `-wal` and
     /// `-shm` files WAL mode creates, which a naive cleanup leaves behind.
@@ -430,24 +367,24 @@ mod tests {
         let s = Scratch::new("ops");
         let kv = SqliteKv::open(&s.0).expect("open");
 
-        assert_eq!(kv.get("b", "missing").unwrap(), None);
-        assert!(!kv.exists("b", "missing").unwrap());
+        assert_eq!(kv.get(&bkt("b"), "missing").unwrap(), None);
+        assert!(!kv.exists(&bkt("b"), "missing").unwrap());
 
-        kv.set("b", "k", b"v1").unwrap();
-        assert_eq!(kv.get("b", "k").unwrap().as_deref(), Some(&b"v1"[..]));
-        assert!(kv.exists("b", "k").unwrap());
+        kv.set(&bkt("b"), "k", b"v1").unwrap();
+        assert_eq!(kv.get(&bkt("b"), "k").unwrap().as_deref(), Some(&b"v1"[..]));
+        assert!(kv.exists(&bkt("b"), "k").unwrap());
 
         // set is an upsert, not an insert — a second write must replace, not fail.
-        kv.set("b", "k", b"v2").unwrap();
-        assert_eq!(kv.get("b", "k").unwrap().as_deref(), Some(&b"v2"[..]));
+        kv.set(&bkt("b"), "k", b"v2").unwrap();
+        assert_eq!(kv.get(&bkt("b"), "k").unwrap().as_deref(), Some(&b"v2"[..]));
 
-        kv.set("b", "a", b"x").unwrap();
-        assert_eq!(kv.list_keys("b").unwrap(), vec!["a".to_string(), "k".to_string()]);
+        kv.set(&bkt("b"), "a", b"x").unwrap();
+        assert_eq!(kv.list_keys(&bkt("b")).unwrap(), vec!["a".to_string(), "k".to_string()]);
 
-        kv.delete("b", "k").unwrap();
-        assert_eq!(kv.get("b", "k").unwrap(), None);
+        kv.delete(&bkt("b"), "k").unwrap();
+        assert_eq!(kv.get(&bkt("b"), "k").unwrap(), None);
         // Deleting something absent is not an error — the guest may retry.
-        kv.delete("b", "k").unwrap();
+        kv.delete(&bkt("b"), "k").unwrap();
     }
 
     /// THE test. It is the entire reason this backend exists: `Restart=always` in a
@@ -457,14 +394,14 @@ mod tests {
         let s = Scratch::new("restart");
         {
             let kv = SqliteKv::open(&s.0).expect("first start");
-            kv.set("orders", "42", b"paid").unwrap();
-            kv.increment("stats", "count", 7).unwrap();
+            kv.set(&bkt("orders"), "42", b"paid").unwrap();
+            kv.increment(&bkt("stats"), "count", 7).unwrap();
         } // the process "dies" here — connection dropped, nothing flushed by hand
 
         let kv = SqliteKv::open(&s.0).expect("second start");
-        assert_eq!(kv.get("orders", "42").unwrap().as_deref(), Some(&b"paid"[..]));
-        assert_eq!(kv.get("stats", "count").unwrap().as_deref(), Some(&b"7"[..]));
-        assert_eq!(kv.list_keys("orders").unwrap(), vec!["42".to_string()]);
+        assert_eq!(kv.get(&bkt("orders"), "42").unwrap().as_deref(), Some(&b"paid"[..]));
+        assert_eq!(kv.get(&bkt("stats"), "count").unwrap().as_deref(), Some(&b"7"[..]));
+        assert_eq!(kv.list_keys(&bkt("orders")).unwrap(), vec!["42".to_string()]);
     }
 
     #[test]
@@ -473,21 +410,21 @@ mod tests {
         // whole isolation story rests on, here enforced by a composite primary key.
         let s = Scratch::new("buckets");
         let kv = SqliteKv::open(&s.0).unwrap();
-        kv.set("alice", "secret", b"hers").unwrap();
-        kv.set("bob", "secret", b"his").unwrap();
-        assert_eq!(kv.get("alice", "secret").unwrap().as_deref(), Some(&b"hers"[..]));
-        assert_eq!(kv.get("bob", "secret").unwrap().as_deref(), Some(&b"his"[..]));
-        assert_eq!(kv.list_keys("alice").unwrap(), vec!["secret".to_string()]);
-        kv.delete("alice", "secret").unwrap();
-        assert_eq!(kv.get("bob", "secret").unwrap().as_deref(), Some(&b"his"[..]));
+        kv.set(&bkt("alice"), "secret", b"hers").unwrap();
+        kv.set(&bkt("bob"), "secret", b"his").unwrap();
+        assert_eq!(kv.get(&bkt("alice"), "secret").unwrap().as_deref(), Some(&b"hers"[..]));
+        assert_eq!(kv.get(&bkt("bob"), "secret").unwrap().as_deref(), Some(&b"his"[..]));
+        assert_eq!(kv.list_keys(&bkt("alice")).unwrap(), vec!["secret".to_string()]);
+        kv.delete(&bkt("alice"), "secret").unwrap();
+        assert_eq!(kv.get(&bkt("bob"), "secret").unwrap().as_deref(), Some(&b"his"[..]));
     }
 
     #[test]
     fn increment_counts_from_nothing_and_is_atomic_under_threads() {
         let s = Scratch::new("incr");
         let kv = std::sync::Arc::new(SqliteKv::open(&s.0).unwrap());
-        assert_eq!(kv.increment("c", "n", 1).unwrap(), 1, "absent key starts at zero");
-        assert_eq!(kv.increment("c", "n", 4).unwrap(), 5);
+        assert_eq!(kv.increment(&bkt("c"), "n", 1).unwrap(), 1, "absent key starts at zero");
+        assert_eq!(kv.increment(&bkt("c"), "n", 4).unwrap(), 5);
 
         // The claim this backend makes over memory/nats, which do read-modify-write:
         // concurrent increments cannot lose an update. 8 threads x 50 = 400.
@@ -496,7 +433,7 @@ mod tests {
                 let kv = kv.clone();
                 std::thread::spawn(move || {
                     for _ in 0..50 {
-                        kv.increment("c", "concurrent", 1).unwrap();
+                        kv.increment(&bkt("c"), "concurrent", 1).unwrap();
                     }
                 })
             })
@@ -505,7 +442,7 @@ mod tests {
             t.join().unwrap();
         }
         assert_eq!(
-            kv.get("c", "concurrent").unwrap().as_deref(),
+            kv.get(&bkt("c"), "concurrent").unwrap().as_deref(),
             Some(&b"400"[..]),
             "an increment was lost — the transaction is not doing its job"
         );
@@ -517,9 +454,9 @@ mod tests {
         // written under one backend reads back under another.
         let s = Scratch::new("repr");
         let kv = SqliteKv::open(&s.0).unwrap();
-        kv.set("c", "n", b"41").unwrap();
-        assert_eq!(kv.increment("c", "n", 1).unwrap(), 42);
-        assert_eq!(kv.get("c", "n").unwrap().as_deref(), Some(&b"42"[..]));
+        kv.set(&bkt("c"), "n", b"41").unwrap();
+        assert_eq!(kv.increment(&bkt("c"), "n", 1).unwrap(), 42);
+        assert_eq!(kv.get(&bkt("c"), "n").unwrap().as_deref(), Some(&b"42"[..]));
     }
 
     #[test]
@@ -538,12 +475,12 @@ mod tests {
     #[test]
     fn build_names_sqlite_and_rejects_nonsense() {
         let s = Scratch::new("build");
-        assert!(build("sqlite", "", "", &s.0).is_ok());
+        assert!(build("sqlite", "", &s.0).is_ok());
         // `dyn KvBackend` is not Debug, so match rather than unwrap_err.
-        let err = match build("postgres", "", "", &s.0) {
+        let err = match build("postgres", "", &s.0) {
             Err(e) => e.to_string(),
             Ok(_) => panic!("postgres is not a backend"),
         };
-        assert!(err.contains("memory|redis|nats|sqlite"), "{err}");
+        assert!(err.contains("memory|redis|sqlite"), "{err}");
     }
 }
