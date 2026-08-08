@@ -54,6 +54,7 @@ single-component app should be a container, not a wasm workload.
 | [0034](0034-two-machines-one-fleet.md) | Two machines, one fleet: placement does not map tenants to computers | accepted |
 | [0035](0035-losing-a-machine.md) | Losing a machine, measured through the failure | accepted |
 | [0036](0036-open-loop-stress-and-a-correction.md) | Open-loop stress from a third machine, and a correction to 0033/0034 | accepted |
+| [0037](0037-what-a-cold-start-costs.md) | What a cold start costs, and why scale-to-zero is affordable | accepted |
 
 ## The shape these add up to
 
