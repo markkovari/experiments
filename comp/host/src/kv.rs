@@ -24,6 +24,18 @@ use crate::tenant::BucketId;
 /// A named-bucket key-value store. Errors surface as anyhow; the caller maps
 /// them to the wasi:keyvalue `error` variant.
 pub trait KvBackend: Send + Sync {
+    /// Can every replica of an app see this store, wherever the replica runs?
+    ///
+    /// Deliberately a method on the implementation and NOT a match on a backend
+    /// name somewhere central. "Shared" is a property of what a backend *is*, so a
+    /// new one declares it here and nothing else has to be edited to know.
+    ///
+    /// There is no default. A backend that forgot to answer would be guessed at,
+    /// and both guesses are wrong in expensive ways: `true` places an app somewhere
+    /// it silently diverges, `false` refuses a deployment that would have been fine.
+    /// The compiler asking is cheaper than either.
+    fn shared(&self) -> bool;
+
     fn get(&self, bucket: &BucketId, key: &str) -> Result<Option<Vec<u8>>>;
     fn set(&self, bucket: &BucketId, key: &str, value: &[u8]) -> Result<()>;
     fn delete(&self, bucket: &BucketId, key: &str) -> Result<()>;
@@ -42,6 +54,11 @@ pub struct MemoryKv {
 }
 
 impl KvBackend for MemoryKv {
+    /// One process's heap. Nothing outside it can see this.
+    fn shared(&self) -> bool {
+        false
+    }
+
     fn get(&self, bucket: &BucketId, key: &str) -> Result<Option<Vec<u8>>> {
         let bucket = bucket.as_str();
         Ok(self.buckets.lock().unwrap().get(bucket).and_then(|b| b.get(key)).cloned())
@@ -100,6 +117,12 @@ impl RedisKv {
 }
 
 impl KvBackend for RedisKv {
+    /// One server every node dials. Shared — though see ADR-0023 on why shared and
+    /// isolated are different properties, and this only claims the first.
+    fn shared(&self) -> bool {
+        true
+    }
+
     fn get(&self, bucket: &BucketId, key: &str) -> Result<Option<Vec<u8>>> {
         let bucket = bucket.as_str();
         use redis::Commands;
@@ -241,6 +264,11 @@ impl NatsKv {
 }
 
 impl KvBackend for NatsKv {
+    /// A JetStream bucket, reachable from anywhere on the cluster.
+    fn shared(&self) -> bool {
+        true
+    }
+
     fn get(&self, bucket: &BucketId, key: &str) -> Result<Option<Vec<u8>>> {
         let s = self.store_for(bucket.as_str())?;
         let k = Self::safe_key(key);
@@ -415,6 +443,12 @@ impl SqliteKv {
 }
 
 impl KvBackend for SqliteKv {
+    /// One file on one node's disk. Two replicas would be two files with one name,
+    /// which is the whole of ADR-0027.
+    fn shared(&self) -> bool {
+        false
+    }
+
     fn get(&self, bucket: &BucketId, key: &str) -> Result<Option<Vec<u8>>> {
         let bucket = bucket.as_str();
         let conn = self.conn.lock().unwrap();
@@ -494,14 +528,14 @@ impl KvBackend for SqliteKv {
 }
 
 /// Build the backend named by `--kv`.
-/// Is this backend visible to every replica of an app, wherever it runs?
+/// The backend a lattice node picks when nobody says otherwise.
 ///
-/// The reconciler refuses to spread a stateful app across nodes that answer `false`,
-/// because the replicas would each get their own store under the same bucket name
-/// and diverge in silence.
-pub fn is_shared(kind: &str) -> bool {
-    matches!(kind, "nats" | "redis")
-}
+/// A lattice node needs a store every replica can see (ADR-0027), and this is the
+/// only implementation of one that ships today. It is a DEFAULT, not a
+/// requirement: `KvBackend::shared` is the interface, `--kv` selects an
+/// implementation, and nothing above this line knows the word "nats". A second
+/// shared backend needs a `shared() -> true` and a line in `build`.
+pub const DEFAULT_SHARED: &str = "nats";
 
 pub async fn build(
     kind: &str,
@@ -683,14 +717,12 @@ mod tests {
     /// ADR-0027 is about), and `false` for a shared one refuses a deployment that
     /// would have been fine.
     #[test]
-    fn only_the_shared_backends_claim_to_be_shared() {
-        assert!(is_shared("nats"));
-        assert!(is_shared("redis"));
-        assert!(!is_shared("sqlite"), "one file per node is not one store");
-        assert!(!is_shared("memory"));
-        // An unknown backend must read as node-local, not as shared.
-        assert!(!is_shared("postgres"));
-        assert!(!is_shared(""));
+    fn a_backend_declares_whether_it_is_shared() {
+        // Asked of the implementation, not of a name. A new backend answers here
+        // and the reconciler learns it without anything central being edited.
+        let s = Scratch::new("shared");
+        assert!(!MemoryKv::default().shared(), "one process's heap is not shared");
+        assert!(!SqliteKv::open(&s.0).unwrap().shared(), "one file per node is not one store");
     }
 
     #[test]

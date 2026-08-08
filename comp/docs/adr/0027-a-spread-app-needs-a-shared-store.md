@@ -77,13 +77,28 @@ somewhere the argument never looked.
    inventory only partly parsed, must read as node-local; guessing "shared" would place an
    app somewhere it silently diverges, which is the failure this ADR exists about.
 
-4. **A lattice node defaults to `--kv nats`.** The old default was `memory`, which on a
+4. **Sharedness is a property a backend declares, not a name anything matches on.**
+   `KvBackend::shared()` has no default implementation, so a new backend cannot forget to
+   answer — and both possible guesses are wrong in expensive ways, `true` placing an app
+   where it silently diverges and `false` refusing one that would have been fine. Nothing
+   above `kv.rs` knows the word "nats": the host asks the backend it built, and the
+   reconciler only ever sees a boolean in a node's inventory.
+
+5. **A lattice node defaults to a shared backend.** The old default was `memory`, which on a
    lattice node is the worst of both: node-local *and* wiped on restart. The refusal in (3)
    only catches the spread case, so a single-replica app on `memory` lost everything on a
-   restart with nothing said. NATS is already mandatory on a lattice, so defaulting to it
-   costs nothing that was optional. A single-app run still defaults to `memory`, which is
-   the right dev default for a lane that has no NATS at all. Choosing a node-local backend
-   on a lattice node explicitly is still allowed, and warns.
+   restart with nothing said. A single-app run still defaults to `memory`, which is right
+   for a lane that has no cluster at all. Choosing a node-local backend on a lattice node
+   explicitly is still allowed, and warns.
+
+   **The requirement is "shared", not "NATS".** An earlier draft of this ADR justified the
+   default with *"NATS is already mandatory on a lattice, so defaulting to it costs
+   nothing"* — which is the reasoning that turns a coincidence into coupling. The lattice
+   uses NATS as a **transport**; the store needs to be **shared**. Those are two different
+   requirements that one technology happens to satisfy, and writing them down as one is how
+   a system ends up unable to change either. `kv::DEFAULT_SHARED` names the current pick in
+   one place, and it is a default of availability — the only shared implementation that
+   ships today — not an architectural requirement.
 
 This is ADR-0013's "deny by omission" applied to storage: a capability nobody can partition
 correctly is not granted at all.
@@ -113,6 +128,15 @@ The adversarial sweep was re-run on the NATS backend: **0 foreign store opens, 0
 0 lateral connections**, same 16-name dictionary, same egress targets, same result. The
 isolation claim is a property of the host's linker, not of the backend, which is what
 ADR-0023 argued and this confirms by changing the backend underneath it.
+
+## The transport is still hard-wired, and that is a separate problem
+
+`host/src/agent.rs` and the reconciler talk to `async-nats` directly for inventory,
+commands and artifact distribution. That is a genuine hard dependency and this ADR does not
+address it — it is deliberately *not* the same question as the store, which is the whole
+point of the paragraph above. Abstracting a transport behind a trait with one
+implementation is usually a way to pay for flexibility twice, so the seam is named here
+rather than built, and stays that way until something concrete wants a second one.
 
 ## What is still wrong
 

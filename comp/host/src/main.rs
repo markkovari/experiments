@@ -602,26 +602,27 @@ async fn main() -> Result<()> {
     // shared, process-lifetime state.
     let sqlite_path = args.sqlite_path.clone().unwrap_or_else(kv::SqliteKv::default_path);
     let lattice_mode = args.lattice_nats.is_some();
-    let kv_kind = args
-        .kv
-        .clone()
-        .unwrap_or_else(|| if lattice_mode { "nats".into() } else { "memory".into() });
+    let kv_kind = args.kv.clone().unwrap_or_else(|| {
+        if lattice_mode { kv::DEFAULT_SHARED.into() } else { "memory".into() }
+    });
     let nats_url = args
         .nats_url
         .clone()
         .or_else(|| args.lattice_nats.clone())
         .unwrap_or_else(|| "127.0.0.1:4222".into());
-    if lattice_mode && !kv::is_shared(&kv_kind) {
+    let kv_backend: Kv = kv::build(&kv_kind, &args.redis_url, &nats_url, &sqlite_path).await?;
+    let kv_shared = kv_backend.shared();
+    if lattice_mode && !kv_shared {
         // Not fatal: a single-replica app on a node-local store is a legitimate
         // arrangement, and the reconciler refuses the spread case on its own. But it
         // is never what someone means by accident, so it says so.
         eprintln!(
             "comp-host: WARNING --kv {kv_kind} is node-local. A spread stateful app will be \
              refused placement here, and anything running here loses its store if this node \
-             does. Pass --kv nats for a store every replica shares."
+             does. Use a backend whose store every replica shares (--kv {}).",
+            kv::DEFAULT_SHARED
         );
     }
-    let kv_backend: Kv = kv::build(&kv_kind, &args.redis_url, &nats_url, &sqlite_path).await?;
     let cache_backing: CacheBacking = Arc::new(Mutex::new(HashMap::new()));
     let static_dir: Arc<Option<std::path::PathBuf>> =
         Arc::new(args.static_dir.clone().map(std::path::PathBuf::from));
@@ -722,12 +723,12 @@ async fn main() -> Result<()> {
                     || std::path::PathBuf::from(state_dir_default()),
                 ),
                 heartbeat_secs: args.heartbeat_secs,
-                kv_shared: kv::is_shared(&kv_kind),
+                kv_shared,
             });
             println!(
                 "comp-host: lattice node, listening on http://{addr} | kv = {} ({})",
                 kv_kind,
-                if kv::is_shared(&kv_kind) {
+                if kv_shared {
                     "shared — a spread app keeps one store"
                 } else {
                     "NODE-LOCAL — this node will not accept a spread stateful app"
