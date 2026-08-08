@@ -416,13 +416,34 @@ async fn start(
         let n = crate::rpc::link_remote_imports(&agent.engine, &mut linker, &component, &remotes)?;
         eprintln!("comp-host: {id} bound {n} interface(s) over wrpc");
     }
-    let pre = wasmtime_wasi_http::p2::bindings::ProxyPre::new(linker.instantiate_pre(&component)?)
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "{id} does not export wasi:http/incoming-handler ({e}). Runtime-linking a \
-                 plug component in-process is not built yet — deploy it fused for now"
+    let ipre = linker.instantiate_pre(&component)?;
+    // A component that exports `wasi:http/incoming-handler` gets a door; one that
+    // does not is a plug, reachable over the bus only. Both are legal instances —
+    // before the serve side existed, the second could not start at all.
+    let pre = wasmtime_wasi_http::p2::bindings::ProxyPre::new(ipre.clone()).ok();
+
+    // Serve this instance's exports so a remote import has something to call. On the
+    // instance's own subject, in a queue group named for it, so N replicas share the
+    // work and a departing one needs no deregistration.
+    if let Some(nats) = &agent.nats {
+        let exports = crate::rpc::exported_functions(&agent.engine, &component);
+        if !exports.is_empty() {
+            let serve_client =
+                crate::rpc::client(nats.clone(), &agent.lattice, &id, Some(&id)).await?;
+            let (kv, cache, sc, rem) =
+                (agent.kv.clone(), agent.cache_backing.clone(), scope.clone(), remotes.clone());
+            let engine = agent.engine.clone();
+            let n = crate::rpc::serve_exports_over(
+                &agent.engine,
+                &component,
+                ipre,
+                &serve_client,
+                move || crate::store_for(&engine, sc.clone(), kv.clone(), cache.clone(), rem.clone()),
             )
-        })?;
+            .await?;
+            eprintln!("comp-host: {id} serves {n} function(s) to the lattice");
+        }
+    }
 
     agent
         .instances
