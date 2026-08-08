@@ -31,22 +31,23 @@ pub fn prefix(lattice: &str, instance_id: &str) -> String {
     format!("comp.{lattice}.rpc.{instance_id}")
 }
 
-/// Build the per-interface client map for one instance's REMOTE imports.
+/// A client per linked interface — for EVERY link, local target or not.
 ///
-/// Only entries whose target is not running locally: a local link keeps the direct
-/// in-process path, which is ADR-0019's 1.2 ms and the entire reason for
-/// co-locating a graph by default.
+/// There is deliberately no local short-circuit. Two separately started components
+/// have no in-process path between them: the host satisfies an import from a host
+/// capability or from wRPC, full stop. Skipping a co-located target leaves its
+/// import unbound and the instance refuses to start. Components that do link
+/// in-process were fused by `wac` at build time, which is ADR-0005's other strategy
+/// and a different mechanism.
+///
+/// The loopback case costs about 0.3% — measured, not assumed.
 pub async fn remote_clients(
     nats: Arc<async_nats::Client>,
     lattice: &str,
     links: &std::collections::BTreeMap<String, String>,
-    is_local: impl Fn(&str) -> bool,
 ) -> Result<std::collections::BTreeMap<String, NatsInvoke>> {
     let mut out = std::collections::BTreeMap::new();
     for (iface, target) in links {
-        if is_local(target) {
-            continue;
-        }
         out.insert(iface.clone(), client(nats.clone(), lattice, target, None).await?);
     }
     Ok(out)

@@ -74,6 +74,8 @@ convincingly and mean something else:
 
 * two nodes both returning `4.0` looked like isolation working, and also meant state was
   per-node (ADR-0027);
+* a co-located graph binding its links over the bus looked like a start-ordering bug, and
+  was the absence of a feature two ADRs had described as existing;
 * a token bucket refilling looked like data loss after a node died (it had not);
 * three nodes balancing perfectly looked like a passing five-node test, with two nodes
   silently absent on a stale binary;
@@ -90,8 +92,8 @@ cross-machine one, not after it.
   prefix, in a **queue group named for the instance** — so N replicas of a component share
   invocations and a departing one needs no deregistration. Exports are read from the
   component's own type, never a manifest that could drift from it.
-- **Call side**: at start, a link table splits into local and remote; only the remote half
-  becomes wRPC clients, keyed by interface so one store reaches many targets.
+- **Call side**: every link becomes a wRPC client, keyed by interface so one store reaches
+  many targets. Including links whose target runs in the same process — see below.
 - **A plug is now a first-class instance.** `Instance.pre` became `Option<ProxyPre>`:
   a component with no `wasi:http/incoming-handler` used to be unable to start at all, and
   now starts, serves its exports, and simply never appears in the route table.
@@ -102,20 +104,33 @@ cross-machine one, not after it.
 - **Placement**: a component with its own constraints is placed independently; one without
   rides along with the root.
 
-## Known wrong: local/remote is decided once, at start
+## There is no local short-circuit, and there was never going to be one
 
-The co-located measurement above still shows **one component bound over wRPC**. The reason
-is start order: `gate` started before `shaper`, so when `gate`'s links were resolved the
-local instance table did not yet contain `shaper`, and it was treated as remote. It then
-talks to a component in its own process over the loopback bus.
+An earlier draft described co-located links taking a "direct in-process path", and treated
+the fact that they did not as a start-ordering bug to fix. Both were wrong, and trying to
+fix the non-bug is what exposed it.
 
-Correct but slow — the co-located number above is therefore *pessimistic*, and true
-all-local is faster still. Two fixes, neither done:
+**Two separately started components have no in-process path between them.** This host
+satisfies an import from a host capability or from wRPC, and from nothing else. Skipping a
+co-located target leaves its import unbound and the instance refuses to start:
 
-1. Re-resolve an instance's links when the local table changes. Precise, and it means
-   rebuilding a linker for a running instance.
-2. Have the reconciler order a graph's starts plugs-first. Cheaper, and only narrows the
-   window rather than closing it — a plug on another node still arrives whenever it does.
+```
+could not relink alice/split/gate to local alice/split/record-store:
+  component imports instance `records:store/store@0.1.0`, but a matching
+  implementation was not found in the linker
+```
+
+Components that *do* link in-process were fused by `wac` at build time — ADR-0005's other
+strategy, and a different mechanism entirely. `linked` has always meant "the host wires
+them", and the host's only wire is the bus.
+
+So every link is a wRPC client, including a loopback one. **It costs about 0.3%:** 2,798 rps
+co-located over the bus, against 2,788 measured before, i.e. inside noise. An in-process
+short-circuit would be worth a third of a percent and would first require building
+instance-to-instance linking that does not exist.
+
+The relink machinery written to "fix" the ordering has been deleted. It could not have
+worked, and the delete is the honest outcome.
 
 ## Still not carried: resources
 
