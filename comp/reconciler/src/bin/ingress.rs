@@ -18,9 +18,9 @@
 //! credential, no manifest access, and keeps working while the control plane is
 //! down — the same property the node ledger buys on the other side.
 //!
-//! Failure handling is inventory expiry plus one retry: a node that stops
-//! heartbeating disappears from the table within a TTL, and a node that dies
-//! between refreshes costs one request a retry against a different replica.
+//! Failure handling is inventory expiry plus retry-past-the-dead: a node that stops
+//! heartbeating disappears from the table within a TTL, and nodes that die between
+//! refreshes cost a request the walk past them rather than a 502.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -301,10 +301,20 @@ async fn forward(
     let bytes = body.collect().await.context("reading the request body")?.to_bytes();
 
     let mut last = String::new();
-    // One retry against a DIFFERENT replica. A node that died between inventory
-    // refreshes should cost one request a retry, not a failure — but retrying
-    // forever would turn one sick backend into a stampede.
-    for backend in ranked.into_iter().take(2) {
+    // Walk the ranking past dead replicas, but spend at most `SLOW_BUDGET` on slow
+    // ones. The two failures are not alike and treating them alike cost a measured
+    // outage: least-outstanding ranks a DEAD node FIRST, because a node answering
+    // nothing has nothing in flight. With `.take(2)` — one retry — two corpses at
+    // the top of the ranking exhausted the budget and the request 502'd, which is
+    // exactly what killing a two-node machine out of three did (0.04% of requests,
+    // for 13s). A refused connection is an instant RST and costs nothing to skip; a
+    // timeout is the one that turns a retry into a stampede, so only it is budgeted.
+    const SLOW_BUDGET: usize = 2;
+    let mut slow = 0;
+    for backend in ranked.into_iter() {
+        if slow >= SLOW_BUDGET {
+            break;
+        }
         let _busy = Busy::on(counter(&inflight, &backend.node));
         let uri: hyper::Uri = format!(
             "http://{}{}",
@@ -331,7 +341,10 @@ async fn forward(
                 return Ok(hyper::Response::from_parts(rp, rb.boxed()));
             }
             Ok(Err(e)) => last = format!("{} refused: {e}", backend.node),
-            Err(_) => last = format!("{} timed out", backend.node),
+            Err(_) => {
+                slow += 1;
+                last = format!("{} timed out", backend.node);
+            }
         }
     }
     Ok(status(502, &format!("every replica of {host:?} failed; last: {last}\n")))
