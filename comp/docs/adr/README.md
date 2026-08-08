@@ -51,6 +51,7 @@ single-component app should be a container, not a wasm workload.
 | [0031](0031-an-org-owns-a-deployment.md) | An organisation owns a deployment, and a person can be in several | accepted |
 | [0032](0032-cross-node-invocation-and-what-the-hop-costs.md) | Cross-node invocation works, and the hop is nearly free (~4%) | accepted |
 | [0033](0033-two-orgs-under-load.md) | Two organisations under load: what the platform costs and whether it holds | accepted |
+| [0034](0034-two-machines-one-fleet.md) | Two machines, one fleet: placement does not map tenants to computers | accepted |
 
 ## The shape these add up to
 
