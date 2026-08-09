@@ -68,6 +68,7 @@ single-component app should be a container, not a wasm workload.
 | [0048](0048-does-this-plug-fit.md) | Does this plug fit? — the real subtype check, and typed request bodies | accepted |
 | [0049](0049-the-org-can-see-it.md) | The org can see it — ADR-0007's middle row, and a market endpoint | accepted |
 | [0050](0050-secrets-by-reference.md) | Secrets, by reference — stored, validated, not yet readable at runtime | accepted |
+| [0051](0051-the-secret-reader.md) | The secret reader — a key, a handle, and one explicit reveal | **proposed** |
 
 ## The shape these add up to
 
