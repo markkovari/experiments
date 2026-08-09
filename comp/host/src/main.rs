@@ -769,6 +769,7 @@ async fn main() -> Result<()> {
             );
             let ag = Arc::new(agent::Agent {
                 platform_url: args.platform_url.clone(),
+                compiled: Default::default(),
                 nats: Some(raw_nats),
                 node,
                 labels: args.labels.iter().cloned().collect(),

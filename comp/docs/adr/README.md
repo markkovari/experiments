@@ -73,6 +73,7 @@ single-component app should be a container, not a wasm workload.
 | [0049](0049-the-org-can-see-it.md) | The org can see it — ADR-0007's middle row, and a market endpoint | accepted |
 | [0050](0050-secrets-by-reference.md) | Secrets, by reference — stored, validated, not yet readable at runtime | accepted |
 | [0051](0051-the-secret-reader.md) | The secret reader — a key, a handle, and one explicit reveal | accepted |
+| [0052](0052-one-copy-per-digest.md) | One copy of the machine code per digest | accepted |
 
 ## The shape these add up to
 
