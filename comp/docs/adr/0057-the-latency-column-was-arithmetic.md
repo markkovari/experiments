@@ -92,10 +92,55 @@ that class of thing five times ([0032](0032-a-pi-and-a-remote-store.md),
 [0036](0036-open-loop-stress-and-a-correction.md),
 [0052](0052-one-copy-per-digest.md), [0053](0053-the-matrix.md), here).
 
+## The same on a Raspberry Pi 5
+
+Because "one machine's number" is not a platform claim, and because the
+distribution story only means anything if a small node is a useful node. Pi 5,
+4 cores, 8 GB, 12 workers instead of 48 — a softer load for a smaller box.
+
+```
+                        │   Mac (10 cores)  │   Pi 5 (4 cores)  │  ratio
+  memory, direct        │   30 545 rps      │    4 709 rps      │   6.5x
+  nats, direct          │   10 202 rps      │    1 394 rps      │   7.3x
+  memory, via ingress   │   23 556 rps      │    2 662 rps      │   8.9x
+```
+
+The Pi is a consistent 6–9× behind, which is roughly the core count times the
+per-core difference and contains no surprise. What matters is that the SHAPE is
+identical on both: the storage backend dominates (3.4× between memory and NATS
+on the Pi, 3.1× on the Mac), and sharing a digest saves the same fraction —
+33% at 8 apps and 61% at 32, against 29% and 57% on the Mac.
+
+## Density, which is the number a small node is actually for
+
+**200 apps on one Pi 5:**
+
+```
+  apps  │ idle MiB   per-app │    rps  p50 ms  p99 ms  p99.9 │ shared  compiled
+   200  │     45.3      0.17 │   4427    2.61    5.08   7.26 │    199         1
+```
+
+45 MiB for two hundred apps, and **throughput identical to running one** (4 427
+against 4 366). The marginal idle app on a shared digest costs about 0.017 MiB
+here — 199 of the 200 got the machine code that the first one compiled.
+
+Which reframes what the throughput number is for. A node this size is not
+interesting because of its rps; it is interesting because two hundred mostly-idle
+tenants fit on it for the price of the runtime, and the rps is then shared by
+whichever of them is busy. The 8 GB of RAM is nowhere near the binding
+constraint at this density — something else will be, and nobody knows what yet.
+
 ## Bounds
 
-- One component, one machine, one node. 30 545 rps is this Mac's number for this
-  0.4 MB component, not a platform constant.
+- One component, one node, two machines. 30 545 rps is this Mac's number for
+  this 0.4 MB component, not a platform constant — the Pi does 4 709 for the
+  same work.
+- The Pi's ingress cell shed 3 412 requests where the Mac's shed none: 12
+  workers is still above what four cores absorb through the extra hop, and
+  `max_inflight` did what it exists to do. The rps figure counts only the 2xx.
+- The 200-app cell is 200 apps IDLE but for the traffic to one of them. Nobody
+  has measured 200 apps all busy at once, which is a different question and the
+  one a real tenant mix would ask.
 - The memory backend is node-local, so 30 545 rps is not available to a spread
   stateful app. It is the runtime's ceiling with storage removed, which is what
   makes it the right number for judging runtime changes — and the wrong number to

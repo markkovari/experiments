@@ -139,7 +139,16 @@ pub fn bin_path(name: &str) -> std::path::PathBuf {
     repo_root().join(format!("reconciler/target/release/{name}"))
 }
 
-fn repo_root() -> std::path::PathBuf {
+/// Where the specs and artifacts live.
+///
+/// `CARGO_MANIFEST_DIR` is baked in at COMPILE time, which is right for a test
+/// running where it was built and useless for a benchmark cross-compiled to
+/// another machine — the path it names does not exist there. The override is
+/// what makes `bench/` able to drive a second box at all.
+pub fn repo_root() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("COMP_REPO_ROOT") {
+        return std::path::PathBuf::from(p);
+    }
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
 }
 

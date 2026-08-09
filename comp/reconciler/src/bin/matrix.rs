@@ -108,7 +108,7 @@ struct Cell {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+    let root = comp_reconciler::fleet::repo_root();
     let base = root.join("components/target/gate_domain.composed.wasm");
     anyhow::ensure!(base.exists(), "missing {} — just compose-gate", base.display());
     let wasm = std::fs::read(&base)?;
