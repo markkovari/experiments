@@ -409,6 +409,15 @@ impl Default for Cfg {
 #[derive(Debug, Clone, Default)]
 pub struct Hysteresis {
     seen: BTreeMap<Key, u32>,
+    /// What the fleet looked like last pass — node names, labels, interfaces and
+    /// capacity, hashed.
+    ///
+    /// The converged fast path keeps an app where it is, which is right until the
+    /// fleet itself changes: a joining node must attract a share of an app that is
+    /// already at its replica count, and counting replicas cannot see that. When
+    /// this differs, every app takes the full ranking for one pass and rebalancing
+    /// happens exactly as it did before the fast path existed.
+    fleet: Option<u64>,
 }
 
 type Key = (String, String, String, String, String); // tenant, app, component, digest, node
@@ -467,6 +476,36 @@ pub fn plan(
         running_by_node.entry(owner).or_default().insert(node.as_str(), *n);
         *running_total.entry(owner).or_default() += n;
     }
+    // Node lookups the per-app work would otherwise do by scanning `observed`.
+    let by_node: BTreeMap<&str, &NodeInventory> =
+        observed.iter().map(|n| (n.node.as_str(), n)).collect();
+
+    // Which nodes a component may go on, memoised on its eligibility signature.
+    //
+    // `fits` is a scan of labels and interfaces per node, and almost every app in
+    // a fleet shares a signature — no constraints, the same `host_needs`. Without
+    // this, ten thousand apps re-derive the same node set ten thousand times.
+    let mut eligible_for: BTreeMap<(&BTreeMap<String, String>, &Vec<String>), Vec<&NodeInventory>> =
+        BTreeMap::new();
+    let fitting = |c: &Component, node: &str| by_node.get(node).is_some_and(|n| fits(c, n));
+
+    // Fleet composition, not fleet LOAD: instance counts change constantly and
+    // must not disable the fast path, but a node joining, leaving, or relabelling
+    // must.
+    let fleet = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for n in observed {
+            n.node.hash(&mut h);
+            n.labels.hash(&mut h);
+            n.host_ifaces.hash(&mut h);
+            n.capacity.cpus.hash(&mut h);
+            n.kv_shared.hash(&mut h);
+        }
+        h.finish()
+    };
+    let fleet_stable = hyst.fleet == Some(fleet);
+    hyst.fleet = Some(fleet);
 
     // Load this pass has already committed, so apps placed later in the same pass
     // see the earlier ones rather than all racing to the same node.
@@ -509,16 +548,36 @@ pub fn plan(
                 });
             }
         }
-        let nodes = match place(root, (&m.tenant, &m.app), want_replicas, observed, &running_by_node, &node_load, &pending) {
-            Ok(n) => n,
-            Err(reason) => {
-                out.unschedulable.push(Unschedulable {
-                    tenant: m.tenant.clone(),
-                    app: m.app.clone(),
-                    reason,
-                });
-                continue;
-            }
+        let owner = (m.tenant.as_str(), m.app.as_str(), root.id.as_str(), root.digest.as_str());
+        let nodes = match settled(
+            root,
+            want_replicas,
+            running,
+            running_by_node.get(&owner),
+            &fitting,
+            fleet_stable,
+        ) {
+            Some(existing) => existing,
+            None => match place(
+                root,
+                (&m.tenant, &m.app),
+                want_replicas,
+                observed,
+                &running_by_node,
+                &node_load,
+                &mut eligible_for,
+                &pending,
+            ) {
+                Ok(n) => n,
+                Err(reason) => {
+                    out.unschedulable.push(Unschedulable {
+                        tenant: m.tenant.clone(),
+                        app: m.app.clone(),
+                        reason,
+                    });
+                    continue;
+                }
+            },
         };
 
         // Spreading a STATEFUL app over nodes with node-local stores gives every
@@ -572,7 +631,16 @@ pub fn plan(
                     || c.placement.mode == Mode::Pinned
                     || !c.placement.nodes.is_empty();
                 let targets = if spans {
-                    match place(c, (&m.tenant, &m.app), c.replicas, observed, &running_by_node, &node_load, &pending) {
+                    match place(
+                        c,
+                        (&m.tenant, &m.app),
+                        c.replicas,
+                        observed,
+                        &running_by_node,
+                        &node_load,
+                        &mut eligible_for,
+                        &pending,
+                    ) {
                         Ok(n) => n,
                         Err(reason) => {
                             out.unschedulable.push(Unschedulable {
@@ -679,6 +747,45 @@ pub fn plan(
 // ponytail: any keyvalue import counts. An app that only ever writes node-local
 // scratch is indistinguishable from one that does not, and the safe reading of an
 // ambiguity here is the one that refuses.
+/// The placement an already-converged component keeps, without ranking anything.
+///
+/// A converged app is the overwhelming majority of every pass — the whole point
+/// of a reconciler is that it usually has nothing to do — and ranking every node
+/// in the fleet to rediscover a placement that is already correct is what made a
+/// pass cost `apps × nodes` (ADR-0056).
+///
+/// This cannot simply SKIP the app: the diff reads a key present in `have` and
+/// absent from `want` as "stop it". So it returns the existing placement, which
+/// then flows through the rest of the loop unchanged — including the stateful
+/// spread check and the linked components that follow the root.
+///
+/// Deliberately conservative. It declines, and lets the full ranking run, when:
+/// anything is missing or surplus, nothing is running at all (a fresh app has no
+/// placement to keep), or any holding node no longer satisfies the component's
+/// constraints — a label that changed is exactly when a placement SHOULD move.
+fn settled(
+    c: &Component,
+    want_replicas: u32,
+    running: u32,
+    mine: Option<&BTreeMap<&str, u32>>,
+    fitting: &impl Fn(&Component, &str) -> bool,
+    // False on the pass after any node joins, leaves or changes its labels — a new
+    // node must be able to attract a share of an app already at its replica count,
+    // and only the full ranking can decide that.
+    fleet_stable: bool,
+) -> Option<Vec<(String, u32)>> {
+    if !fleet_stable || running == 0 || running != want_replicas || c.placement.mode == Mode::Daemon {
+        // Daemon is one per ELIGIBLE node, so a new node must grow it. Counting
+        // replicas cannot see that; only the ranking can.
+        return None;
+    }
+    let mine = mine?;
+    if !mine.keys().all(|n| fitting(c, n)) {
+        return None;
+    }
+    Some(mine.iter().map(|(n, count)| (n.to_string(), *count)).collect())
+}
+
 fn holds_state(m: &Manifest) -> bool {
     m.components
         .iter()
@@ -726,8 +833,8 @@ fn proportional(total: u32, weights: &[usize]) -> Vec<u32> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn place(
-    c: &Component,
+fn place<'a>(
+    c: &'a Component,
     // Whose component this is, `(tenant, app)`. The ranking asks "how many of THIS
     // are already here", and without an owner that question matches another
     // tenant's identical component — see the index at the top of `plan`.
@@ -735,13 +842,14 @@ fn place(
     // How many to place. Passed in rather than read off `c.replicas`, because with
     // autoscaling the count is a function of load and `c` is only the policy.
     replicas: u32,
-    observed: &[NodeInventory],
+    observed: &'a [NodeInventory],
     // Everything running, keyed by owner then node, so ranking a node is a lookup
     // instead of a scan of its instance list.
-    // ponytail: still O(apps × nodes) — every app ranks every eligible node. Shard
-    // the reconciler by tenant when one loop cannot finish a pass in its interval.
+    // A converged app never gets here at all — see `settled`. This runs for the
+    // apps that are actually changing, which is the churn, not the fleet.
     running_by_node: &BTreeMap<Owner<'_>, BTreeMap<&str, u32>>,
     node_load: &BTreeMap<&str, usize>,
+    eligible_for: &mut BTreeMap<(&'a BTreeMap<String, String>, &'a Vec<String>), Vec<&'a NodeInventory>>,
     // What THIS pass has already decided to put on each node.
     //
     // Without it, every app in a pass ranks against the same unchanged inventory
@@ -750,7 +858,11 @@ fn place(
     // Measured: six apps, three nodes, 6/0/0.
     pending: &BTreeMap<String, usize>,
 ) -> Result<Vec<(String, u32)>, String> {
-    let eligible: Vec<&NodeInventory> = observed.iter().filter(|n| fits(c, n)).collect();
+    // Memoised on the signature `fits` actually reads, so a fleet of apps that
+    // all want the same thing pays for one scan rather than one each.
+    let eligible: &Vec<&NodeInventory> = eligible_for
+        .entry((&c.placement.constraints, &c.host_needs))
+        .or_insert_with(|| observed.iter().filter(|n| fits(c, n)).collect());
 
     match c.placement.mode {
         Mode::Pinned => {
@@ -1727,6 +1839,33 @@ mod tests {
             Strategy::Linked,
         );
         assert!(m.conflicting_links().is_empty(), "{:?}", m.conflicting_links());
+    }
+
+    /// A converged app whose node stops qualifying still moves.
+    ///
+    /// The fast path keeps an app where it is when its replica count is already
+    /// right, which is the common case and the whole saving. This is the case it
+    /// must NOT take: nothing about the app changed, only the fleet under it.
+    #[test]
+    fn a_node_that_stops_qualifying_gives_its_replica_up() {
+        let mut c = comp("api", "sha256:a", 1);
+        c.placement.constraints.insert("region".into(), "eu".into());
+        let m = app(vec![c], vec![], Strategy::Linked);
+
+        let mut obs =
+            vec![node("box-a", &[("region", "eu")], &[]), node("box-b", &[("region", "eu")], &[])];
+        converge(&[m.clone()], &mut obs, 3);
+        let placed = counts(&obs, "api");
+        assert_eq!(placed.len(), 1, "one replica on one node: {placed:?}");
+        let held = placed[0].0.clone();
+
+        // The node it landed on is relabelled out of the region.
+        obs.iter_mut().find(|n| n.node == held).unwrap().labels.insert("region".into(), "us".into());
+        converge(&[m], &mut obs, 4);
+
+        let after = counts(&obs, "api");
+        assert_eq!(after.len(), 1, "still exactly one replica: {after:?}");
+        assert_ne!(after[0].0, held, "it must leave the node that no longer qualifies");
     }
 
     /// Two tenants, one catalogue component, the same id on both sides.

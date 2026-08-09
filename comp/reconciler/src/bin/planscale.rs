@@ -90,27 +90,30 @@ fn main() {
     let cfg = Cfg::default();
 
     println!("\n=== plan() over the whole world, converged ===\n");
-    println!("  nodes   apps  insts │  plan ms  │ inv KiB/node  read MiB/pass │ cmds");
+    println!("  nodes   apps  insts │  cold ms  steady ms │ inv KiB/node  read MiB/pass │ cmds");
     for &nodes in &node_counts {
         for &apps in &app_counts {
             let (desired, observed) = world(nodes, apps);
 
-            // Warm, then the median of five: one run picks up allocator noise.
+            // ONE hysteresis across every run, because that is what the loop has:
+            // it is created at startup and lives forever. A fresh one per run
+            // measures only the cold pass — the pass after a reconciler restart or
+            // a node joining — and never the steady state the loop actually spends
+            // its life in. Both are reported, because they are different questions.
             let mut hyst = Hysteresis::default();
-            let _ = plan(&desired, &observed, None, &mut hyst, &cfg);
+            let t = Instant::now();
+            let out = plan(&desired, &observed, None, &mut hyst, &cfg);
+            let cold = t.elapsed().as_secs_f64() * 1000.0;
+
             let mut runs: Vec<f64> = (0..5)
                 .map(|_| {
-                    let mut h = Hysteresis::default();
                     let t = Instant::now();
-                    let out = plan(&desired, &observed, None, &mut h, &cfg);
+                    let out = plan(&desired, &observed, None, &mut hyst, &cfg);
                     std::hint::black_box(&out);
                     t.elapsed().as_secs_f64() * 1000.0
                 })
                 .collect();
             runs.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-            let mut h = Hysteresis::default();
-            let out = plan(&desired, &observed, None, &mut h, &cfg);
             let insts: usize = observed.iter().map(|n| n.instances.len()).sum();
             let biggest =
                 observed.iter().map(|n| serde_json::to_vec(n).unwrap().len()).max().unwrap_or(0);
@@ -118,7 +121,7 @@ fn main() {
                 observed.iter().map(|n| serde_json::to_vec(n).unwrap().len()).sum();
 
             println!(
-                "  {nodes:5}  {apps:5}  {insts:5} │ {:8.2}  │ {:12.1}  {:13.2} │ {:4}",
+                "  {nodes:5}  {apps:5}  {insts:5} │ {cold:8.2} {:9.2}  │ {:12.1}  {:13.2} │ {:4}",
                 runs[2],
                 biggest as f64 / 1024.0,
                 total as f64 / (1024.0 * 1024.0),
