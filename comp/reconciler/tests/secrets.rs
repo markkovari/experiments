@@ -13,7 +13,11 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-const PORT: u16 = 8401;
+/// Each test gets its own control plane on its own port. nextest gives a test its
+/// own process but not its own network, and two of these sharing a port fail only
+/// when the suite is run in parallel — which is how it is normally run.
+const PORT_ISOLATION: u16 = 8401;
+const PORT_NO_READBACK: u16 = 8402;
 
 struct Kill(Child);
 
@@ -32,10 +36,11 @@ struct Platform {
     _dir: tempfile::TempDir,
     _child: Kill,
     http: reqwest::blocking::Client,
+    port: u16,
 }
 
 impl Platform {
-    fn start() -> Self {
+    fn start(port: u16) -> Self {
         let root = repo_root();
         let host = root.join("host/target/release/comp-host");
         let component = root.join("components/target/platform_domain.composed.wasm");
@@ -58,7 +63,7 @@ impl Platform {
         cmd.current_dir(&root)
             .arg("--component")
             .arg(&component)
-            .args(["--addr", &format!("127.0.0.1:{PORT}"), "--kv", "sqlite"])
+            .args(["--addr", &format!("127.0.0.1:{port}"), "--kv", "sqlite"])
             .arg("--sqlite-path")
             .arg(dir.path().join("kv.db"))
             .args(["--tenant", "platform", "--app", "control-plane"])
@@ -71,7 +76,7 @@ impl Platform {
             .timeout(Duration::from_secs(10))
             .build()
             .unwrap();
-        let me = Self { _dir: dir, _child: child, http };
+        let me = Self { _dir: dir, _child: child, http, port };
         for _ in 0..60 {
             if me.http.get(me.url("/")).send().is_ok() {
                 return me;
@@ -82,7 +87,7 @@ impl Platform {
     }
 
     fn url(&self, path: &str) -> String {
-        format!("http://127.0.0.1:{PORT}{path}")
+        format!("http://127.0.0.1:{}{path}", self.port)
     }
 
     /// Register, then log in for a bearer token.
@@ -145,7 +150,7 @@ fn base64(raw: &[u8]) -> String {
 
 #[test]
 fn an_org_keeps_its_secrets_from_another_org() {
-    let p = Platform::start();
+    let p = Platform::start(PORT_ISOLATION);
     let (ada, zed) = (p.user("ada"), p.user("zed"));
     assert_eq!(p.post(&ada, "/api/orgs", json!({ "name": "acme" })).0, 201);
     assert_eq!(p.post(&zed, "/api/orgs", json!({ "name": "globex" })).0, 201);
@@ -217,7 +222,7 @@ fn there_is_no_route_that_returns_a_secret_value_to_a_user() {
     // The property that makes "by reference" true rather than aspirational: a user
     // with every permission still cannot read a value back through the API. Only a
     // host holding an instance-scoped token can, and only for its own references.
-    let p = Platform::start();
+    let p = Platform::start(PORT_NO_READBACK);
     let ada = p.user("ada");
     p.post(&ada, "/api/orgs", json!({ "name": "acme" }));
     p.post(&ada, "/api/secrets?org=acme", json!({ "name": "stripe", "value": "sk_secret_value" }));
