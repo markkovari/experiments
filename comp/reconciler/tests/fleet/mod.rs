@@ -158,6 +158,59 @@ impl Fleet {
         }
     }
 
+    /// A SECOND ingress against the same lattice.
+    ///
+    /// It holds no state beyond a cache of inventory, so several should be able to
+    /// run — "should" being the word the test using this exists to remove.
+    pub fn second_ingress(&mut self) -> u16 {
+        let port = self.ingress_port + 1;
+        let mut ing = Command::new(env!("CARGO_BIN_EXE_comp-ingress"));
+        ing.current_dir(repo_root())
+            .args(["--addr", &format!("127.0.0.1:{port}")])
+            .args(["--nats-url", &self.nats_url, "--lattice", &self.lattice, "--refresh-secs", "2"]);
+        self._children.push(spawn_logged("comp-ingress-b", &mut ing, &self.dir.path().join("ingress-b.log")));
+        port
+    }
+
+    /// Stop whichever process was started last — used to kill an ingress and watch
+    /// the other one carry on.
+    pub fn kill_last(&mut self) {
+        self._children.pop();
+    }
+
+    /// Which node answered, over `n` requests to `port`. The `x-comp-node` header is
+    /// the only way to see the balance from outside.
+    pub fn who_answers(&self, port: u16, n: usize) -> (std::collections::BTreeMap<String, usize>, usize) {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap();
+        let mut seen = std::collections::BTreeMap::new();
+        let mut failed = 0;
+        for i in 0..n {
+            let r = client
+                .post(format!("http://127.0.0.1:{port}/api/ratelimit"))
+                .header("host", "shop.eve.test")
+                .json(&serde_json::json!({
+                    "key": format!("ha-{i}"), "capacity": 100_000_000u64, "refill": 100_000_000u64
+                }))
+                .send();
+            match r {
+                Ok(r) if r.status().is_success() => {
+                    let node = r
+                        .headers()
+                        .get("x-comp-node")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("?")
+                        .to_string();
+                    *seen.entry(node).or_insert(0) += 1;
+                }
+                _ => failed += 1,
+            }
+        }
+        (seen, failed)
+    }
+
     pub fn state_dir(&self) -> std::path::PathBuf {
         self.dir.path().to_path_buf()
     }
