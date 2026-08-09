@@ -5,15 +5,14 @@ set -uo pipefail
 cd /Users/markkovari/DEV/markkovari/experiments/comp
 SP=${SP:-$(mktemp -d)}
 HERE=bench/adversarial
-MANIFEST=${MANIFEST:-$HERE/two-tenants.json}
+SPECS=${SPECS:-"--spec fixtures/two-tenants-eve.yaml --spec fixtures/two-tenants-alice.yaml"}
 rm -rf $SP/adv $SP/natsA && mkdir -p $SP/adv $SP/natsA
 PIDS=()
 trap 'for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; sleep 1' EXIT
 
 nats-server -js -sd $SP/natsA -a 127.0.0.1 -p 4232 >$SP/natsA.log 2>&1 & PIDS+=($!)
-python3 $HERE/stub-control-plane.py "$MANIFEST" \
-  '{"gate":"components/target/gate_domain.composed.wasm","adversary":"components/target/wasm32-wasip2/release/adversary.wasm"}' \
-  8099 >$SP/plat2.log 2>&1 & PIDS+=($!)
+./reconciler/target/release/comp-stub $SPECS \
+  --artifact gate=components/target/gate_domain.composed.wasm --artifact adversary=components/target/wasm32-wasip2/release/adversary.wasm --port 8099 >$SP/plat2.log 2>&1 & PIDS+=($!)
 sleep 2
 
 # ONE host process. Both tenants live in it. That is the whole point.

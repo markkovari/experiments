@@ -32,6 +32,8 @@ futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 serde_norway = "0.9"
+# comp-stub serves HTTP; the OCI test also stands up a fake registry with it.
+axum = "0.8"
 serde_json = "1"
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
@@ -50,5 +52,14 @@ bytes = "1"
 
 [dev-dependencies]
 tempfile = "3"
-# Only to stand up a fake registry in the OCI push test. Nothing here serves HTTP.
-axum = "0.8"
+# Blocking only in tests: a load generator that counts answers is clearer
+# synchronous, and the production path stays async.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+
+[[bin]]
+name = "comp-stub"
+path = "src/bin/stub.rs"
+
+[[bin]]
+name = "comp-bench"
+path = "src/bin/bench.rs"

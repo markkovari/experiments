@@ -65,13 +65,13 @@ remote_oha() {
         -H content-type:application/json -H Host:shop.eve.test $* \
         http://$MAC:8090/api/ratelimit'" >"$SP/oha-$label.json" 2>"$SP/oha-$label.err"
   fi
-  python3 bench/stress/summarise.py "$SP/oha-$label.json" "$label"
+  ./reconciler/target/release/comp-bench summarise "$SP/oha-$label.json" "$label"
 }
 
 mkdir -p "$SP/nats"
 nats-server -js -sd "$SP/nats" -a 0.0.0.0 -p 4232 >"$SP/nats.log" 2>&1 & PIDS+=($!)
-python3 $HERE/stub-control-plane.py $HERE/five-replicas.json \
-  '{"gate":"components/target/gate_domain.composed.wasm"}' 8099 >"$SP/plat.log" 2>&1 & PIDS+=($!)
+./reconciler/target/release/comp-stub --spec fixtures/five-replicas.yaml \
+  --artifact gate=components/target/gate_domain.composed.wasm --port 8099 >"$SP/plat.log" 2>&1 & PIDS+=($!)
 sleep 2
 for n in 1 2; do
   mkdir -p "$SP/mac$n"
