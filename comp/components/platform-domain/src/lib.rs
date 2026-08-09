@@ -87,6 +87,9 @@ impl Guest for Component {
             (Method::Post, ["api", "components", "satisfies"]) => components_satisfies(&request),
             (Method::Get, ["api", "market"]) => market_search(&request, &query),
 
+            (Method::Post, ["api", "internal", "fetch-token"]) => fetch_token_mint(&request),
+            (Method::Get, ["api", "internal", "secret"]) => secret_fetch(&request, &query),
+
             (Method::Post, ["api", "secrets"]) => secret_put(&request, &query),
             (Method::Get, ["api", "secrets"]) => secrets_list(&request, &query),
             (Method::Delete, ["api", "secrets", name]) => secret_delete(&request, name, &query),
@@ -659,6 +662,100 @@ fn parse_ref(r: &str) -> Option<(String, String)> {
 /// Store a secret for an org. The value is written straight through to the vault,
 /// which seals it before it touches storage — nothing here keeps it, logs it, or puts
 /// it in a response.
+/// Where fetch tokens live. One row per instance that was granted a secret.
+const FETCH_TOKENS: &str = "fetch_tokens";
+
+/// Mint a capability for one instance: exactly these references, for a bounded time.
+///
+/// Issued BY the platform rather than signed by the reconciler, which is the simpler
+/// and stronger arrangement — no shared signing key, and revocation is deleting a
+/// row rather than waiting out a signature. The reconciler authenticates with the
+/// platform secret it already holds (ADR-0003).
+///
+/// The token is a capability, not a secret value: it is worth exactly what this
+/// manifest was worth, which is why the host may keep it in a ledger on disk
+/// (ADR-0022).
+fn fetch_token_mint(request: &IncomingRequest) -> Outcome {
+    if !internal_ok(request) {
+        return Outcome::Err(401, "bad platform secret".into());
+    }
+    let b = match body(request) {
+        Ok(v) => v,
+        Err(o) => return o,
+    };
+    let instance = str_of(&b, "instance");
+    let refs: Vec<String> = b["refs"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    if instance.is_empty() || refs.is_empty() {
+        return Outcome::Err(422, "instance and refs are required".into());
+    }
+    // Long enough to outlive an instance's useful life, short enough that a leaked
+    // token is not a standing grant. A restart mints a new one, and a start costs
+    // 0.43ms (ADR-0040), so a short life is cheap here in a way it usually is not.
+    let ttl = b["ttl"].as_u64().unwrap_or(3600);
+    // The record id is the token: unguessable, unique, and already stored — the same
+    // trick the invite codes use (ADR-0031).
+    let doc = json!({
+        "instance": instance, "refs": refs, "expires": now() + ttl, "issued": now(),
+    });
+    match records::create(FETCH_TOKENS, &doc.to_string(), &["instance".to_string()]) {
+        Ok(rec) => Outcome::Json(201, json!({ "token": rec.id, "expires": now() + ttl }).to_string()),
+        Err(_) => Outcome::Err(500, "could not mint a fetch token".into()),
+    }
+}
+
+/// Resolve one reference for a host holding a valid token.
+///
+/// The plaintext leaves the platform here and nowhere else. Three checks, in this
+/// order, because each is cheaper than the next: does the token exist, has it
+/// expired, and does it authorise THIS reference.
+fn secret_fetch(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome {
+    let token = request
+        .headers()
+        .get(&"x-fetch-token".to_string())
+        .into_iter()
+        .next()
+        .and_then(|v| String::from_utf8(v).ok())
+        .unwrap_or_default();
+    if token.is_empty() {
+        return Outcome::Err(401, "no fetch token".into());
+    }
+    let reference = query.get("ref").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let Ok(entry) = records::get(FETCH_TOKENS, &token) else {
+        return Outcome::Err(401, "unknown fetch token".into());
+    };
+    let Ok(doc) = serde_json::from_str::<Value>(&entry.data) else {
+        return Outcome::Err(401, "unreadable fetch token".into());
+    };
+    if doc["expires"].as_u64().unwrap_or(0) < now() {
+        // 401 so the host can tell "restart me" from "your manifest is wrong".
+        let _ = records::delete(FETCH_TOKENS, &token);
+        return Outcome::Err(401, "fetch token expired".into());
+    }
+    let granted = doc["refs"]
+        .as_array()
+        .map(|a| a.iter().any(|r| r.as_str() == Some(reference.as_str())))
+        .unwrap_or(false);
+    if !granted {
+        // 403, not 404: this token is real and this reference is not on it. Saying
+        // so does not leak whether the secret exists, only that this instance was
+        // not granted it — which the instance's own manifest already told it.
+        return Outcome::Err(403, "this instance was not granted that reference".into());
+    }
+    let Some((org, name)) = parse_ref(&reference) else {
+        return Outcome::Err(422, "not a secret reference".into());
+    };
+    match vault::get(&vault_name(&org, &name)) {
+        // Bytes, not JSON: a plaintext should not pass through a serialiser that
+        // might log or escape it.
+        Ok(v) => Outcome::Bytes(200, "application/octet-stream".into(), v),
+        Err(vault::VaultError::NotFound) => Outcome::Err(404, "no such secret".into()),
+        Err(e) => Outcome::Err(500, vault_detail(&e)),
+    }
+}
+
 fn secret_put(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome {
     let Some(p) = caller(request) else {
         return Outcome::Err(401, "no session".into());
@@ -1923,11 +2020,53 @@ fn split_query(path: &str) -> (String, Map<String, Value>) {
     if let Some(raw) = parts.next() {
         for pair in raw.split('&') {
             if let Some((k, v)) = pair.split_once('=') {
-                q.insert(k.to_string(), json!(v));
+                q.insert(percent_decode(k), json!(percent_decode(v)));
             }
         }
     }
     (route, q)
+}
+
+/// Undo percent-encoding, and `+` for spaces.
+///
+/// Values used to be stored raw, so anything a caller escaped stayed escaped: a
+/// secret reference arrived as `vault%3A%2F%2Facme%2Fstripe` and compared unequal to
+/// the reference it named, which read as "this instance was not granted that
+/// reference" for a reference it plainly was. Any query value containing a space,
+/// a slash or a colon had the same problem — the market search just never happened
+/// to be given one.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'%' if i + 2 < b.len() => {
+                let hex = std::str::from_utf8(&b[i + 1..i + 3]).ok();
+                match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                    Some(byte) => {
+                        out.push(byte);
+                        i += 3;
+                    }
+                    // Not a valid escape: keep it verbatim rather than dropping it,
+                    // so a stray `%` in a search term is a search term.
+                    None => {
+                        out.push(b'%');
+                        i += 1;
+                    }
+                }
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn body(request: &IncomingRequest) -> Result<Value, Outcome> {
@@ -2051,5 +2190,34 @@ mod config_tests {
             &given(&[("token", "abc"), ("retries", "3")]),
         )
         .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod query_tests {
+    use super::*;
+
+    #[test]
+    fn a_reference_survives_being_a_query_value() {
+        // The bug: an escaped ref compared unequal to the ref it named, so a token
+        // was told it had not been granted a reference it plainly had.
+        let (route, q) = split_query("/api/internal/secret?ref=vault%3A%2F%2Facme%2Fstripe");
+        assert_eq!(route, "/api/internal/secret");
+        assert_eq!(q["ref"], json!("vault://acme/stripe"));
+    }
+
+    #[test]
+    fn a_search_term_with_a_space_arrives_as_a_space() {
+        let (_, q) = split_query("/api/market?q=key%20value&org=acme");
+        assert_eq!(q["q"], json!("key value"));
+        assert_eq!(q["org"], json!("acme"));
+        let (_, plus) = split_query("/api/market?q=key+value");
+        assert_eq!(plus["q"], json!("key value"), "+ is a space in a query string");
+    }
+
+    #[test]
+    fn a_stray_percent_is_kept_rather_than_swallowed() {
+        let (_, q) = split_query("/api/market?q=100%");
+        assert_eq!(q["q"], json!("100%"));
     }
 }

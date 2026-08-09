@@ -1,9 +1,8 @@
 
 # 0051 — The secret reader
 
-Status: **proposed**. Design only; nothing below is built. Completes ADR-0050, which
-stored and validated references and said plainly that a running component still
-cannot read one.
+Status: accepted, and built. Completes ADR-0050, which stored and validated
+references and said plainly that a running component still could not read one.
 
 ## What wasmCloud does, since it is the obvious thing to copy
 
@@ -138,6 +137,33 @@ What it does buy, precisely:
   not in the config map, so nothing that dumps those dumps it.
 - **Every access has a record**, so "which component read this, and when" is
   answerable after a leak — which is when it is always asked.
+
+## Measured
+
+```
+a secret, stored                        vault://dev/stripe, version 1
+the platform mints a scoped token       01KZKVTPKV07…
+the token fetches its granted ref       the value came back
+the same token, a ref it lacks          403
+no token at all                         401
+an invented token                       401
+plaintext on disk anywhere the
+platform wrote                          none — not a log, a manifest, or the ledger
+```
+
+Two bugs surfaced on the way, both worth recording:
+
+**The planner carries secrets as a list and the host reads them as a map.** Converting
+only the non-empty case left every ordinary start sending a sequence into a field
+expecting a map, and the host refused all of them — *"invalid type: sequence, expected
+a map"*. Nothing served. The e2e suite caught it on the first run after the change,
+which is exactly the job it was written for.
+
+**Query values were never percent-decoded.** A reference arrived as
+`vault%3A%2F%2Fdev%2Fstripe` and compared unequal to the reference it named, so a
+token was told it had not been granted something it plainly had. That was a latent bug
+in *every* query parameter — the market search simply had never been given a value
+with a space in it.
 
 ## What is deliberately missing
 
