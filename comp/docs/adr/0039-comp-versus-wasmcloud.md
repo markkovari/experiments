@@ -1,4 +1,4 @@
-# 0039 — comp vs wasmCloud 2.x, same component, same machine
+# 0039 — comp vs wasmCloud 2.x, same component, both machines
 
 Status: accepted. Supersedes every informal "how much faster are we" claim, all of
 which compared different components on different machines through different paths.
@@ -61,6 +61,31 @@ Without the control, the honest-looking sentence "comp is 3.6× faster with a 15
 better tail" would have been half wrong — and it is exactly the half that would have
 been quoted.
 
+## The second run, on malna, which has no cluster in the way
+
+The Mac comparison has one uncomfortable asymmetry: wasmCloud is reached over
+OrbStack's cluster network, comp over loopback. malna removes it entirely — no k8s,
+no VM. wasmCloud runs the **same 2.5.2 image** under podman (so the host matches the
+control plane exactly), comp runs its aarch64 binary, both listen on 0.0.0.0, and
+both are loaded from this Mac over the same LAN.
+
+| Pi, 20s × 30 connections | rps | p50 | p99 | RSS |
+|---|---|---|---|---|
+| wasmcloud (wash 2.5.2, podman) | 240 | 71.4 ms | 608 ms | 82 MiB (+21 MiB second process) |
+| comp (comp-host) | **549** | **41.2 ms** | **369 ms** | **51 MiB** |
+
+**2.3× the throughput, and here the latency numbers are comparable** — identical
+network path on both sides, which is exactly what the Mac run could not claim. So
+the honest summary is 3.6× on the Mac, 2.3× on the Pi, and a real but smaller
+latency advantage that only this run establishes.
+
+## What wasmCloud does better, measured in passing
+
+Scaled to four replicas across the two hosts, its scheduler placed **3 on the Mac
+and 1 on the Pi** — very close to the 10:4 core ratio. comp's placement spreads by
+instance count only (ADR-0034) and would have split them 2/2, putting the same load
+on a machine with 40% of the cores. Capacity-weighted placement is a thing to steal.
+
 ## What this does not say
 
 - **One component, one machine, one shape of request.** `gate` is a small
@@ -73,10 +98,29 @@ been quoted.
   comp's host implements `wasi:keyvalue` directly, wasmCloud's satisfies it through
   the host's own interface plumbing. Some of the gap may be storage, not runtime, and
   this run cannot separate them.
-- **Mac only.** wasmCloud is not running on malna: its `wash` 2.5.2 binary needs
-  glibc 2.38+, malna is Debian 12 with 2.36, no container runtime is installed, no
-  older chart is published, and no 2.5.2 source tag exists to cross-compile from.
-  comp's cross-machine results (ADR-0034/0035) have no wasmCloud counterpart yet.
+- **Two machines, but no cross-machine load.** Both runs drive one host at a time.
+  Nothing here measures wasmCloud's lattice under load the way ADR-0036 drove comp's,
+  and no machine was killed mid-flight the way ADR-0035 did.
+- **The Pi numbers are small.** 240 vs 549 rps on four cores; conclusions drawn from
+  a slow box do not automatically hold on a fast one, which is why both are reported
+  rather than averaged.
+
+## Getting wasmCloud onto malna at all
+
+Recorded because none of it is in any documentation and all of it was a dead end
+until it wasn't:
+
+- `wash` 2.5.2 is glibc 2.38+; malna is Debian 12 on 2.36. No older chart is
+  published on ghcr, and `wasmCloud/wash` has no 2.5.2 source tag (releases stop at
+  2.0.0-rc.7), so there is nothing tagged to cross-compile.
+- The way through is the **container image**, which is also the only way to guarantee
+  the host matches the control plane. `brew services start podman` fails with a bad
+  unit file — and is not needed: podman is daemonless, that unit only provides the
+  Docker-compat socket.
+- Brew's podman then fails with `could not find a working conmon binary`. Everything
+  it needs (`conmon`, `crun`, `pasta`) is installed, just in brew's prefix, which
+  podman never searches. A `containers.conf` naming `conmon_path` and the `crun`
+  runtime fixes it, plus a `policy.json` (`insecureAcceptAnything`) it also wants.
 
 ## Worth recording about the setup itself
 
