@@ -3,7 +3,7 @@
 What runs today, what is measured, and what is honestly missing. The reasoning lives
 in [51 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0055.
+Last revised after ADR-0059.
 
 ## Shape
 
@@ -63,10 +63,13 @@ Every number below is from a run recorded in an ADR, not an estimate.
 | start, cold / warm / shared | 35.2 ms / 0.43 ms / **0.08 ms** ([0040](adr/0040-compiled-artifacts-are-cached.md), [0052](adr/0052-one-copy-per-digest.md)) |
 | idle app, marginal — shared digest / own digest | **~0.03 MiB** / ~2.0 MiB ([0053](adr/0053-the-matrix.md)) |
 | 32 idle apps, one digest vs 32 | 48.4 MiB vs 112.4 MiB — 57% less ([0053](adr/0053-the-matrix.md)) |
-| pooling allocator, now the default | +21–46% rps, tail 113 ms → 38 ms, same idle RSS ([0054](adr/0054-pooling-on-and-the-leak-that-was-not.md)) |
+| pooling allocator, now the default | **3.1×** with storage out of the way ([0057](adr/0057-the-latency-column-was-arithmetic.md)) |
 | memory under 10 min of constant load | plateaus at 99 MiB, returns 23 MiB — no leak ([0054](adr/0054-pooling-on-and-the-leak-that-was-not.md)) |
-| a reconciler pass, 10 nodes / 10 000 apps | 34 ms, linear in both axes ([0055](adr/0055-how-the-control-loop-scales.md)) |
-| inventory snapshot ceiling | ~5 500 instances per node before NATS' 1 MiB ([0055](adr/0055-how-the-control-loop-scales.md)) |
+| a reconciler pass, 1000 nodes / 10 000 apps | 1 227 ms cold, **46 ms** steady ([0056](adr/0056-a-converged-app-keeps-its-placement.md)) |
+| one node, storage out of the way | **30 545 rps**, p50 1.55 ms, p99.9 3.56 ms ([0057](adr/0057-the-latency-column-was-arithmetic.md)) |
+| the same, on the NATS store | 9 755 rps — every earlier rps was this ([0057](adr/0057-the-latency-column-was-arithmetic.md)) |
+| the ingress hop | 21% ([0057](adr/0057-the-latency-column-was-arithmetic.md)) |
+| inventory snapshot ceiling | ~50 000 instances per node, zstd'd ([0058](adr/0058-snapshots-compress-and-parses-are-reused.md)) |
 | scale to zero and back | parked at 0, served in 49 ms, parked again in 5 s ([0042](adr/0042-scale-to-zero-and-back.md)) |
 | vs wasmCloud 2.5.2, same component | 3.6× on the Mac, 2.3× on a Pi ([0039](adr/0039-comp-versus-wasmcloud.md)) |
 
@@ -140,9 +143,14 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   a captured request can be replayed until the token expires.
 - **No UI.** `POST /api/components/satisfies` answers "would this plug fit" with wac's
   real subtype check, and nothing calls it: a facility, not yet a feature.
-- **The loop does not shard.** One reconciler, no leader election; a pass at
-  1000 nodes × 10 000 apps is 1.29 s and the product is what to watch (ADR-0055).
-- **Inventory is a full snapshot**, so a node holding more than ~5 500 instances
-  exceeds NATS' 1 MiB message limit and stops publishing (ADR-0055).
+- **The loop does not shard.** One reconciler, no leader election. A steady pass
+  at 1000 nodes × 10 000 apps is 46 ms, but the pass after any fleet change is
+  1.23 s and that one is `apps × nodes` (ADR-0056).
+- **Nothing caches keyvalue reads.** Each is a JetStream round trip and it is the
+  largest cost on the request path; the obvious mirror was built, measured at
+  2.3× slower on a write-heavy workload, and reverted (ADR-0059).
+- **No real application has ever been profiled**, only a benchmark component
+  chosen because it hammers storage — which is the least representative shape for
+  every caching decision above.
 - **Cross-machine benchmarks are unproven since the refactor.** The scripts were
   rewired to `comp-bench` and have not been run against malna or bobocat since.

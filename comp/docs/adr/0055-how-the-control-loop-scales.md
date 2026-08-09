@@ -4,6 +4,11 @@
 Status: accepted. `plan()` is now linear in apps and in nodes; a cross-tenant
 miscount is fixed on the way.
 
+> **Extended ([ADR-0056](0056-a-converged-app-keeps-its-placement.md)):** the
+> `after` column below is the pass that RANKS. A converged app now keeps its
+> placement instead, so the steady-state pass at 1000 nodes × 10 000 apps is
+> 46 ms rather than 1 292 ms.
+
 ## The question
 
 "How does this hold up with a lot of nodes and a lot of orgs?" Every number in

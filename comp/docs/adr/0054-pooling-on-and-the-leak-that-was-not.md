@@ -3,6 +3,14 @@
 
 Status: accepted. Closes the two things [ADR-0053](0053-the-matrix.md) left open.
 
+> **Correction ([ADR-0057](0057-the-latency-column-was-arithmetic.md)):** the
+> latency columns below are `connections / rps` — Little's law restating the
+> throughput column, because the harness was closed-loop. And the rps figures
+> are measurements of the STORAGE BACKEND, not the runtime: the same host does
+> 30 545 rps with storage out of the way. The comparisons between cells stand;
+> the absolute numbers were not measuring what they say.
+
+
 0053 ended with two admissions: pooling was off in every cell, and 80 seconds
 could not tell an allocator settling from a leak. Both were run.
 
@@ -47,8 +55,9 @@ Six cells, 90 s each, same digest, pooling crossed:
      32    on │     50.4     84.2 │     8723      5.51     30.2
 ```
 
-**+46% / +30% / +21% throughput, mean latency down a quarter, tail max 113 ms →
-38 ms — at identical idle memory.** Loaded memory is the same or lower. Pooling
+**+46% / +30% / +21% throughput, at identical idle memory** — and ADR-0057 later
+found this understated: with the storage backend out of the way, which was
+masking most of it, pooling is worth **3.1×**. Loaded memory is the same or lower. Pooling
 also flattens the drift: at 8 apps the pooled cell *returns* 15.6 MiB where the
 on-demand cell grows 9.6 MiB, which is the same page-return behaviour arriving
 sooner because slots are reused rather than reallocated.

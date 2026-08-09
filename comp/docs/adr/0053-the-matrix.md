@@ -3,6 +3,14 @@
 
 Status: accepted. Supersedes ADR-0052's per-app figure.
 
+> **Correction ([ADR-0057](0057-the-latency-column-was-arithmetic.md)):** the
+> latency columns below are `connections / rps` — Little's law restating the
+> throughput column, because the harness was closed-loop. And the rps figures
+> are measurements of the STORAGE BACKEND, not the runtime: the same host does
+> 30 545 rps with storage out of the way. The comparisons between cells stand;
+> the absolute numbers were not measuring what they say.
+
+
 > **Correction ([ADR-0054](0054-pooling-on-and-the-leak-that-was-not.md)):** the
 > drift below is not a leak. A ten-minute cell shows RSS plateau at ~99 MiB and
 > then return 23 MiB; the 80-second window ended before the release and saw only
