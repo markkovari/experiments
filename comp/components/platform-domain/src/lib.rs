@@ -34,6 +34,7 @@ use bindings::quota::meter::meter as quota;
 use bindings::records::store::store as records;
 use bindings::wasi::clocks::wall_clock;
 use bindings::wasi::config::store as config;
+use bindings::secrets::vault::vault;
 use bindings::wit::reflect::composer;
 use bindings::wit::reflect::inspector;
 
@@ -85,6 +86,10 @@ impl Guest for Component {
             (Method::Post, ["api", "components", "publish"]) => component_publish(&request),
             (Method::Post, ["api", "components", "satisfies"]) => components_satisfies(&request),
             (Method::Get, ["api", "market"]) => market_search(&request, &query),
+
+            (Method::Post, ["api", "secrets"]) => secret_put(&request, &query),
+            (Method::Get, ["api", "secrets"]) => secrets_list(&request, &query),
+            (Method::Delete, ["api", "secrets", name]) => secret_delete(&request, name, &query),
 
             (Method::Post, ["api", "deployments"]) => deployment_create(&request, &query),
             (Method::Get, ["api", "deployments"]) => deployments_list(&request),
@@ -632,6 +637,149 @@ fn components_list(request: &IncomingRequest) -> Outcome {
 /// search engine, no index: a catalogue of this size does not need one, and adding
 /// one would be inventing an answer to a question nobody has asked yet.
 /// ponytail: linear scan; add an index when the catalogue outgrows a page.
+/// Secrets are named per ORGANISATION, never globally.
+///
+/// One vault backs the whole platform, so the org has to be part of the name or two
+/// tenants would share a namespace — the same mistake ADR-0012 measured with storage
+/// buckets, in a place where the consequence is worse.
+fn vault_name(org: &str, name: &str) -> String {
+    format!("{org}/{name}")
+}
+
+/// `vault://<org>/<name>` — the only form a manifest may contain (ADR-0010).
+fn parse_ref(r: &str) -> Option<(String, String)> {
+    let rest = r.strip_prefix("vault://")?;
+    let (org, name) = rest.split_once('/')?;
+    if org.is_empty() || name.is_empty() {
+        return None;
+    }
+    Some((org.to_string(), name.to_string()))
+}
+
+/// Store a secret for an org. The value is written straight through to the vault,
+/// which seals it before it touches storage — nothing here keeps it, logs it, or puts
+/// it in a response.
+fn secret_put(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome {
+    let Some(p) = caller(request) else {
+        return Outcome::Err(401, "no session".into());
+    };
+    // Writing a secret is not a viewer's job.
+    let org = match orgs::acting(&p.subject, &personal_org(&p), query, orgs::Role::Member) {
+        Ok((org, _)) => org,
+        Err((code, msg)) => return Outcome::Err(code, msg),
+    };
+    let b: req::PutSecret = match read_body(request)
+        .map_err(|_| Outcome::Err(400, "could not read body".into()))
+        .and_then(|raw| req::parse(&raw))
+    {
+        Ok(v) => v,
+        Err(o) => return o,
+    };
+    let name = b.name.trim();
+    if name.is_empty() || b.value.is_empty() {
+        return Outcome::Err(422, "name and value are both required".into());
+    }
+    match vault::put(&vault_name(&org, name), b.value.as_bytes()) {
+        // The reply is metadata, deliberately: a caller that just wrote a secret has
+        // the value already, and echoing it back puts it in one more place.
+        Ok(meta) => Outcome::Json(
+            201,
+            json!({
+                "ref": format!("vault://{org}/{name}"),
+                "name": name, "org": org,
+                "version": meta.version, "updated": meta.updated,
+            })
+            .to_string(),
+        ),
+        Err(e) => Outcome::Err(500, format!("vault refused the write: {}", vault_detail(&e))),
+    }
+}
+
+/// Names only. There is no endpoint that returns a value: the platform stores
+/// secrets so that workloads can use them, not so that a browser can display them.
+fn secrets_list(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome {
+    let Some(p) = caller(request) else {
+        return Outcome::Err(401, "no session".into());
+    };
+    let org = match orgs::acting(&p.subject, &personal_org(&p), query, orgs::Role::Viewer) {
+        Ok((org, _)) => org,
+        Err((code, msg)) => return Outcome::Err(code, msg),
+    };
+    let prefix = format!("{org}/");
+    match vault::list_names(500) {
+        Ok(names) => {
+            let mine: Vec<Value> = names
+                .iter()
+                .filter_map(|n| n.strip_prefix(&prefix))
+                .map(|n| json!({ "name": n, "ref": format!("vault://{org}/{n}") }))
+                .collect();
+            Outcome::Json(200, json!({ "secrets": mine, "count": mine.len() }).to_string())
+        }
+        Err(e) => Outcome::Err(500, format!("vault unreadable: {}", vault_detail(&e))),
+    }
+}
+
+fn secret_delete(request: &IncomingRequest, name: &str, query: &Map<String, Value>) -> Outcome {
+    let Some(p) = caller(request) else {
+        return Outcome::Err(401, "no session".into());
+    };
+    let org = match orgs::acting(&p.subject, &personal_org(&p), query, orgs::Role::Member) {
+        Ok((org, _)) => org,
+        Err((code, msg)) => return Outcome::Err(code, msg),
+    };
+    match vault::delete(&vault_name(&org, name)) {
+        Ok(()) => Outcome::Json(200, json!({ "deleted": name, "org": org }).to_string()),
+        Err(e) => Outcome::Err(500, format!("vault refused the delete: {}", vault_detail(&e))),
+    }
+}
+
+fn vault_detail(e: &vault::VaultError) -> String {
+    match e {
+        vault::VaultError::NotFound => "no such secret".into(),
+        vault::VaultError::Crypto(m) => format!("crypto: {m}"),
+        vault::VaultError::BackendUnavailable(m) => format!("backend unavailable: {m}"),
+    }
+}
+
+/// Every secret a component asks for must resolve, and must belong to the org
+/// deploying it.
+///
+/// `describe` is the whole reason this is safe: it answers "is there a secret by this
+/// name" WITHOUT decrypting, so a save can be validated without the platform ever
+/// holding a plaintext it has no use for (ADR-0010).
+fn check_secrets(id: &str, org: &str, secrets: &[Value]) -> Result<Vec<Value>, String> {
+    let mut out = Vec::new();
+    for s in secrets {
+        let key = s["key"].as_str().unwrap_or_default().trim();
+        let reference = s["ref"].as_str().unwrap_or_default().trim();
+        if key.is_empty() || reference.is_empty() {
+            return Err(format!("`{id}`: every secret needs a key and a ref"));
+        }
+        let Some((ref_org, name)) = parse_ref(reference) else {
+            return Err(format!(
+                "`{id}`: `{reference}` is not a secret reference — it must look like `vault://{org}/<name>`"
+            ));
+        };
+        // Refusing another org's reference is the whole boundary. Without it a
+        // manifest could name any secret on the platform and the vault would happily
+        // resolve it.
+        if ref_org != org {
+            return Err(format!(
+                "`{id}`: `{reference}` belongs to `{ref_org}`, and this deployment is for `{org}`"
+            ));
+        }
+        if vault::describe(&vault_name(&ref_org, &name)).is_err() {
+            return Err(format!(
+                "`{id}`: `{reference}` does not resolve — store it first with POST /api/secrets"
+            ));
+        }
+        // BY REFERENCE ONLY. The value is never read here, so it cannot reach a
+        // manifest, a revision, or a log line.
+        out.push(json!({ "key": key, "ref": reference }));
+    }
+    Ok(out)
+}
+
 fn market_search(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome {
     let Some(p) = caller(request) else {
         return Outcome::Err(401, "no session".into());
@@ -1087,6 +1235,10 @@ fn resolve_parts(
     doc: &Value,
     strategy: Strategy,
 ) -> Result<Vec<Part>, Outcome> {
+    // The org this deployment belongs to, which is what a secret reference is checked
+    // against. Stored on the record at creation, so it cannot be changed by the body
+    // of a save.
+    let deploy_org = doc["org"].as_str().unwrap_or_else(|| doc["tenant"].as_str().unwrap_or_default()).to_string();
     seed_policy();
     let node_ids: Vec<String> = doc["nodes"]
         .as_array()
@@ -1205,18 +1357,19 @@ fn resolve_parts(
             .unwrap_or_default()
     };
 
+    // `{"id": "gate", "secrets": [{"key": "stripe", "ref": "vault://acme/stripe"}]}`
+    let given_secrets = |id: &str| -> Vec<Value> {
+        doc["nodes"]
+            .as_array()
+            .and_then(|a| {
+                a.iter().find(|n| n["id"].as_str() == Some(id)).and_then(|n| n["secrets"].as_array())
+            })
+            .cloned()
+            .unwrap_or_default()
+    };
+
     let part_of = |row: &Value| -> Result<Part, Outcome> {
         let surface = surface_from(&row["surface"]);
-        let digest = row["digest"].as_str().unwrap_or_default().to_string();
-        if !digest.starts_with("sha256:") {
-            return Err(Outcome::Err(
-                409,
-                format!(
-                    "component `{}` has not been distributed yet — it has no content address, and a deployment can only name bytes by digest (ADR-0006)",
-                    row["id"].as_str().unwrap_or_default()
-                ),
-            ));
-        }
         // Refused HERE, before anything is built or composed: a config error is the
         // author's to fix and costs nothing to find, while the same mistake reaching
         // a node becomes a component that starts and then fails in front of a user.
@@ -1225,8 +1378,34 @@ fn resolve_parts(
         if let Err(why) = check_config(&id, row, &given) {
             return Err(Outcome::Err(422, why));
         }
+        let asked = given_secrets(&id);
+        let secrets = match check_secrets(&id, &deploy_org, &asked) {
+            Ok(v) => v,
+            Err(why) => return Err(Outcome::Err(422, why)),
+        };
+
+        // Checked LAST of the three, on purpose. A missing digest is a transient
+        // pipeline state — "save again in a moment" — while a bad config key or an
+        // unresolvable secret is a permanent authoring error. Reporting the transient
+        // one first makes an author wait for distribution only to be told they had a
+        // typo all along.
+        let digest = row["digest"].as_str().unwrap_or_default().to_string();
+        if !digest.starts_with("sha256:") {
+            return Err(Outcome::Err(
+                409,
+                format!(
+                    "component `{id}` has not been distributed yet — it has no content address, and a deployment can only name bytes by digest (ADR-0006)"
+                ),
+            ));
+        }
         Ok(Part {
             name: id,
+            secrets: secrets
+                .iter()
+                .filter_map(|s| {
+                    Some((s["key"].as_str()?.to_string(), s["ref"].as_str()?.to_string()))
+                })
+                .collect(),
             config: given
                 .iter()
                 .map(|(k, v)| {
@@ -1326,8 +1505,37 @@ fn resolve_parts(
                 }
             }
 
+            // Secrets merge like config does, and for the same reason: one artifact
+            // asks with one identity. Two components wanting the same KEY from
+            // different refs is the ambiguous case.
+            let mut fused_secrets: std::collections::BTreeMap<String, (String, String)> =
+                std::collections::BTreeMap::new();
+            for row in &rows {
+                let id = row["id"].as_str().unwrap_or_default().to_string();
+                let checked = match check_secrets(&id, &deploy_org, &given_secrets(&id)) {
+                    Ok(v) => v,
+                    Err(why) => return Err(Outcome::Err(422, why)),
+                };
+                for sec in checked {
+                    let (k, r) = (
+                        sec["key"].as_str().unwrap_or_default().to_string(),
+                        sec["ref"].as_str().unwrap_or_default().to_string(),
+                    );
+                    if let Some((other, prev)) = fused_secrets.get(&k) {
+                        if *prev != r {
+                            return Err(Outcome::Err(
+                                422,
+                                format!("fused: `{other}` and `{id}` both want secret `{k}`, from different refs — a fused artifact asks with one identity, so deploy linked or make them agree"),
+                            ));
+                        }
+                    }
+                    fused_secrets.insert(k, (id.clone(), r));
+                }
+            }
+
             let mut part = Part {
                 name: fused_id.clone(),
+                secrets: fused_secrets.into_iter().map(|(k, (_, r))| (k, r)).collect(),
                 config: merged.into_iter().map(|(k, (_, v))| (k, v)).collect(),
                 digest: String::new(),
                 host_imports: Vec::new(),

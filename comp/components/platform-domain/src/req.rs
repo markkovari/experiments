@@ -79,6 +79,15 @@ pub struct Publish {
     pub deprecated: Option<bool>,
 }
 
+/// `POST /api/secrets`
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PutSecret {
+    pub name: String,
+    /// The plaintext, on its way to the vault and nowhere else.
+    pub value: String,
+}
+
 /// `POST /api/components/satisfies`
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -89,6 +98,15 @@ pub struct Satisfies {
 
 /// A node on the canvas. Kept as `Value` in the requests above because the graph is
 /// stored verbatim, but parsed here where config has to be read.
+pub fn node_secrets(nodes: &[Value], id: &str) -> Vec<Value> {
+    nodes
+        .iter()
+        .find(|n| n["id"].as_str() == Some(id))
+        .and_then(|n| n["secrets"].as_array())
+        .cloned()
+        .unwrap_or_default()
+}
+
 pub fn node_config(nodes: &[Value], id: &str) -> Map<String, Value> {
     nodes
         .iter()
