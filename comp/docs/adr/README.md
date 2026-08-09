@@ -65,6 +65,7 @@ single-component app should be a container, not a wasm workload.
 | [0045](0045-shedding-feeds-autoscaling.md) | Shedding feeds autoscaling — a refused request is unmet demand | accepted |
 | [0046](0046-what-the-signal-cannot-say.md) | What the signal cannot say — wedged vs saturated, at-ceiling, and absent vs idle | accepted |
 | [0047](0047-config-is-declared-and-checked.md) | Config is declared by the uploader and checked at save | accepted |
+| [0048](0048-does-this-plug-fit.md) | Does this plug fit? — the real subtype check, and typed request bodies | accepted |
 
 ## The shape these add up to
 

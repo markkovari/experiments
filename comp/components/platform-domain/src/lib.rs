@@ -20,6 +20,7 @@
 #[allow(warnings)]
 mod bindings;
 mod manifest;
+mod req;
 mod orgs;
 
 use serde_json::{json, Map, Value};
@@ -82,6 +83,7 @@ impl Guest for Component {
             (Method::Post, ["api", "components"]) => component_add(&request, &query),
             (Method::Get, ["api", "components"]) => components_list(&request),
             (Method::Post, ["api", "components", "publish"]) => component_publish(&request),
+            (Method::Post, ["api", "components", "satisfies"]) => components_satisfies(&request),
 
             (Method::Post, ["api", "deployments"]) => deployment_create(&request, &query),
             (Method::Get, ["api", "deployments"]) => deployments_list(&request),
@@ -131,7 +133,7 @@ fn usage() -> Outcome {
             "service": "platform",
             "about": "multi-tenant wasm deployment platform — sign in, build a component graph, pick a strategy, save, and it deploys (docs/adr/)",
             "auth": "POST /api/register {email,password,tenant?}, POST /api/login, GET /api/me",
-            "catalog": "POST /api/components?id=NAME (raw .wasm), GET /api/components, POST /api/components/publish {id,visibility}",
+            "catalog": "POST /api/components?id=NAME&config=key!,key2 (raw .wasm), GET /api/components, POST /api/components/publish {id,visibility}, POST /api/components/satisfies {socket,plug}",
             "deployments": "POST /api/deployments {name,nodes,edges,strategy}, POST /api/deployments/{id}/save, GET /api/deployments/{id}/manifests",
             "strategies": ["fused", "linked"],
             "adr": "docs/adr/"
@@ -372,6 +374,105 @@ fn check_config(id: &str, row: &Value, given: &Map<String, Value>) -> Result<(),
         }
     }
     Ok(())
+}
+
+/// Would plugging `plug` into `socket` actually work?
+///
+/// This is `wac`'s own subtype check on the real bytes, not a name comparison. Two
+/// components can both talk about `records:store/store@0.1.0` and still not fit: the
+/// version, the record fields, a resource's methods all have to line up. Name
+/// matching is what `plan` does at save time, and it is the weaker test — this is the
+/// one that decides whether `wac plug` will succeed.
+///
+/// It belongs at edge-draw time, which is why it is a separate endpoint: the answer
+/// is wanted while someone is dragging a line between two boxes, not after they hit
+/// deploy. A UI that can only find out at save is a UI that lets you build something
+/// invalid and then explains why.
+///
+/// The reply also carries every interface the plug would satisfy, not just the one
+/// asked about — `wac plug` matches EVERY common interface between a plug's exports
+/// and the socket's imports and cannot be told to satisfy just one. A UI that draws
+/// one edge while three were wired is a UI that lies.
+fn components_satisfies(request: &IncomingRequest) -> Outcome {
+    let Some(p) = caller(request) else {
+        return Outcome::Err(401, "no session".into());
+    };
+    seed_policy();
+    let b: req::Satisfies = match read_body(request)
+        .map_err(|_| Outcome::Err(400, "could not read body".into()))
+        .and_then(|raw| req::parse(&raw))
+    {
+        Ok(v) => v,
+        Err(o) => return o,
+    };
+    let (socket_id, plug_id) = (b.socket.trim().to_string(), b.plug.trim().to_string());
+    if socket_id.is_empty() || plug_id.is_empty() {
+        return Outcome::Err(422, "socket and plug are both required".into());
+    }
+    if socket_id == plug_id {
+        return Outcome::Err(422, "a component cannot plug into itself".into());
+    }
+
+    // Same visibility rule as a deploy: own row first, then anything this principal
+    // may use. Asking whether two components fit must not become a way to learn that
+    // a private component exists.
+    let find = |id: &str| -> Option<Value> {
+        find_one(CATALOG, "key", &format!("{}/{}", p.tenant, id))
+            .map(|(_, _, v)| v)
+            .or_else(|| {
+                records::list_records(CATALOG, 500, "")
+                    .map(|page| page.entries)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok())
+                    .find(|r| r["id"] == json!(id) && may_use(&p, r))
+            })
+    };
+    let bytes_of = |id: &str| -> Result<Vec<u8>, Outcome> {
+        let Some(row) = find(id) else {
+            return Err(Outcome::Err(422, format!("component `{id}` is unknown or not visible to you")));
+        };
+        let key = format!("{}/{}", row["tenant"].as_str().unwrap_or_default(), id);
+        blob::get(BIN, &key)
+            .map_err(|_| Outcome::Err(409, format!("component `{id}` has no staged bytes — re-upload it")))
+    };
+
+    let socket = match bytes_of(&socket_id) {
+        Ok(b) => b,
+        Err(o) => return o,
+    };
+    let plug = match bytes_of(&plug_id) {
+        Ok(b) => b,
+        Err(o) => return o,
+    };
+
+    match composer::satisfies(&socket, &plug) {
+        Ok(ifaces) => Outcome::Json(
+            200,
+            json!({
+                "socket": socket_id,
+                "plug": plug_id,
+                "fits": !ifaces.is_empty(),
+                "satisfies": ifaces,
+                // Said out loud because an empty list is the surprising answer, and
+                // "the names matched" is exactly what the person drawing the line
+                // just checked by eye.
+                "detail": if ifaces.is_empty() {
+                    format!("`{plug_id}` exports nothing that `{socket_id}` imports — matching interface NAMES is not enough, the types have to fit too")
+                } else {
+                    format!("`{plug_id}` would satisfy {} import(s) of `{socket_id}`", ifaces.len())
+                },
+            })
+            .to_string(),
+        ),
+        Err(e) => Outcome::Err(
+            422,
+            match e {
+                inspector::ReflectError::NotAComponent(m) => format!("not a component: {m}"),
+                inspector::ReflectError::BadWasm(m) => format!("bad wasm: {m}"),
+            },
+        ),
+    }
 }
 
 fn component_add(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome {
@@ -705,12 +806,17 @@ fn deployment_create(request: &IncomingRequest, query: &Map<String, Value>) -> O
         Ok((org, _)) => org,
         Err((code, msg)) => return Outcome::Err(code, msg),
     };
-    let b = match body(request) {
+    // Typed, so a misspelled field is refused with the legal ones rather than
+    // quietly creating a deployment that is not what was asked for.
+    let b: req::CreateDeployment = match read_body(request)
+        .map_err(|_| Outcome::Err(400, "could not read body".into()))
+        .and_then(|raw| req::parse(&raw))
+    {
         Ok(v) => v,
         Err(o) => return o,
     };
-    let name = str_of(&b, "name");
-    let strategy = match Strategy::parse(b["strategy"].as_str().unwrap_or("fused")) {
+    let name = b.name.trim().to_string();
+    let strategy = match Strategy::parse(b.strategy.as_deref().unwrap_or("fused")) {
         Some(s) => s,
         None => return Outcome::Err(422, "strategy must be fused|linked".into()),
     };
@@ -733,7 +839,7 @@ fn deployment_create(request: &IncomingRequest, query: &Map<String, Value>) -> O
     let doc = json!({
         "org": org, "tenant": p.tenant, "name": name, "owner": p.subject,
         "strategy": strategy.as_str(),
-        "nodes": b["nodes"].clone(), "edges": b["edges"].clone(),
+        "nodes": b.nodes, "edges": b.edges,
         "created": now(), "revision": 0, "status": "draft",
     });
     match records::create(DEPLOYMENTS, &doc.to_string(), &["org".to_string(), "tenant".to_string()]) {
@@ -1205,13 +1311,24 @@ fn deployment_save(request: &IncomingRequest, id: &str) -> Outcome {
     let Some((rec, rev, mut doc)) = owned_deployment(&p, id, orgs::Role::Member) else {
         return Outcome::Err(404, "not_found".into());
     };
-    // A save may also update the graph in the same request.
-    if let Ok(b) = body(request) {
-        for key in ["nodes", "edges", "strategy"] {
-            if !b[key].is_null() {
-                doc[key] = b[key].clone();
-            }
-        }
+    // A save may also update the graph in the same request. An unknown field here
+    // used to be ignored, so `{"noodes": [...]}` saved the OLD graph and reported
+    // success — the most expensive shape of this bug, because it looks like it worked.
+    let update: req::SaveDeployment = match read_body(request)
+        .map_err(|_| Outcome::Err(400, "could not read body".into()))
+        .and_then(|raw| req::parse(&raw))
+    {
+        Ok(v) => v,
+        Err(o) => return o,
+    };
+    if let Some(nodes) = update.nodes {
+        doc["nodes"] = json!(nodes);
+    }
+    if let Some(edges) = update.edges {
+        doc["edges"] = json!(edges);
+    }
+    if let Some(strategy) = update.strategy {
+        doc["strategy"] = json!(strategy);
     }
     let strategy = match Strategy::parse(doc["strategy"].as_str().unwrap_or("fused")) {
         Some(s) => s,
