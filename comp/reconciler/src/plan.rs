@@ -239,6 +239,39 @@ impl Manifest {
             .map(|l| (l.iface.clone(), format!("{}/{}/{}", self.tenant, self.app, l.plug)))
             .collect()
     }
+
+    /// Two links giving one component the same interface from different providers.
+    ///
+    /// This has to be caught rather than resolved. An import is keyed by INTERFACE —
+    /// in the link table above, in `Scope.links`, and in wasmtime's linker — so two
+    /// providers of `records:store/store` for one component are not two things the
+    /// component can tell apart. Left alone, `collect()` keeps whichever came last
+    /// and the app deploys wired to a provider nobody chose, silently, with the
+    /// losing link still sitting in the manifest looking honoured.
+    ///
+    /// Telling them apart needs NAMED imports — the same interface imported twice
+    /// under different instance names — which is not something this platform can
+    /// bind today. So: refuse, and say which links collide.
+    /// ponytail: revisit if named-import linking becomes available; the manifest
+    /// shape would need a name per link, not just an interface.
+    fn conflicting_links(&self) -> Vec<String> {
+        let mut seen: BTreeMap<(&str, &str), Vec<&str>> = BTreeMap::new();
+        for l in &self.links {
+            seen.entry((l.socket.as_str(), l.iface.as_str()))
+                .or_default()
+                .push(l.plug.as_str());
+        }
+        seen.into_iter()
+            .filter(|(_, plugs)| plugs.len() > 1)
+            .map(|((socket, iface), plugs)| {
+                format!(
+                    "`{socket}` is given `{iface}` by {} — an import is keyed by \
+                     interface, so these cannot be told apart; keep one",
+                    plugs.iter().map(|p| format!("`{p}`")).collect::<Vec<_>>().join(" and ")
+                )
+            })
+            .collect()
+    }
 }
 
 // ---- observed state --------------------------------------------------------
@@ -403,6 +436,18 @@ pub fn plan(
             });
             continue;
         };
+        // Ambiguous wiring is refused before anything is placed: deploying half a
+        // link table is worse than deploying nothing, because it looks like it worked.
+        let conflicts = m.conflicting_links();
+        if !conflicts.is_empty() {
+            out.unschedulable.push(Unschedulable {
+                tenant: m.tenant.clone(),
+                app: m.app.clone(),
+                reason: conflicts.join("; "),
+            });
+            continue;
+        }
+
         let running: u32 = observed.iter().map(|n| running_on(root, n)).sum();
         let (want_replicas, wanted) = desired_and_wanted(root, m, load, running);
         if let Some(scale) = &root.scale {
@@ -1527,6 +1572,91 @@ mod tests {
         let obs = vec![node("n1", &[], &[])];
         let out = plan(&[m], &obs, Some(&load), &mut Hysteresis::default(), &Cfg::default());
         assert!(out.at_ceiling.is_empty(), "{:?}", out.at_ceiling);
+    }
+
+
+    #[test]
+    fn two_providers_of_one_interface_are_refused_rather_than_one_winning() {
+        // The silent version of this bug: `link_table` collects into a map keyed by
+        // interface, so the second link overwrites the first and the app deploys
+        // wired to a provider nobody chose — with the losing link still in the
+        // manifest, looking honoured.
+        let root = comp("gate", "sha256:aa", 1);
+        let a = comp("store-a", "sha256:bb", 1);
+        let b = comp("store-b", "sha256:cc", 1);
+        let m = app(
+            vec![root, a, b],
+            vec![
+                Link {
+                    plug: "store-a".into(),
+                    socket: "gate".into(),
+                    iface: "records:store/store@0.1.0".into(),
+                },
+                Link {
+                    plug: "store-b".into(),
+                    socket: "gate".into(),
+                    iface: "records:store/store@0.1.0".into(),
+                },
+            ],
+            Strategy::Linked,
+        );
+        let obs = vec![node("n1", &[], &[])];
+        let out = plan(&[m], &obs, None, &mut Hysteresis::default(), &Cfg::default());
+        assert!(out.commands.is_empty(), "nothing may be placed: {:?}", out.commands);
+        assert_eq!(out.unschedulable.len(), 1);
+        let why = &out.unschedulable[0].reason;
+        for expected in ["gate", "records:store/store@0.1.0", "store-a", "store-b"] {
+            assert!(why.contains(expected), "{expected:?} missing from {why:?}");
+        }
+    }
+
+    #[test]
+    fn the_same_interface_for_different_components_is_fine() {
+        // Two components each importing `records:store/store` from their own
+        // provider is normal wiring, not a conflict — the key is (component, iface).
+        let m = app(
+            vec![
+                comp("gate", "sha256:aa", 1),
+                comp("api", "sha256:dd", 1),
+                comp("store-a", "sha256:bb", 1),
+                comp("store-b", "sha256:cc", 1),
+            ],
+            vec![
+                Link {
+                    plug: "store-a".into(),
+                    socket: "gate".into(),
+                    iface: "records:store/store@0.1.0".into(),
+                },
+                Link {
+                    plug: "store-b".into(),
+                    socket: "api".into(),
+                    iface: "records:store/store@0.1.0".into(),
+                },
+            ],
+            Strategy::Linked,
+        );
+        assert!(m.conflicting_links().is_empty(), "{:?}", m.conflicting_links());
+    }
+
+    #[test]
+    fn one_component_may_import_several_different_interfaces() {
+        let m = app(
+            vec![comp("gate", "sha256:aa", 1), comp("store", "sha256:bb", 1)],
+            vec![
+                Link {
+                    plug: "store".into(),
+                    socket: "gate".into(),
+                    iface: "records:store/store@0.1.0".into(),
+                },
+                Link {
+                    plug: "store".into(),
+                    socket: "gate".into(),
+                    iface: "records:store/query@0.1.0".into(),
+                },
+            ],
+            Strategy::Linked,
+        );
+        assert!(m.conflicting_links().is_empty(), "{:?}", m.conflicting_links());
     }
 
 }
