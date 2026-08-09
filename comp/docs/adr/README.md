@@ -74,6 +74,7 @@ single-component app should be a container, not a wasm workload.
 | [0050](0050-secrets-by-reference.md) | Secrets, by reference — stored, validated, not yet readable at runtime | accepted |
 | [0051](0051-the-secret-reader.md) | The secret reader — a key, a handle, and one explicit reveal | accepted |
 | [0052](0052-one-copy-per-digest.md) | One copy of the machine code per digest | accepted |
+| [0053](0053-the-matrix.md) | The matrix, and the number it corrected | accepted |
 
 ## The shape these add up to
 

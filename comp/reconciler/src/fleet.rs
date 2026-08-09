@@ -20,6 +20,8 @@ impl Drop for Kill {
 
 pub struct Fleet {
     dir: tempfile::TempDir,
+    /// One per node, in order, so a benchmark can read a host's memory.
+    host_pids: Vec<u32>,
     _children: Vec<Kill>,
     pub nats_url: String,
     pub lattice: String,
@@ -44,6 +46,28 @@ impl Load {
         }
         (self.ok.load(Ordering::Relaxed), self.shed.load(Ordering::Relaxed))
     }
+}
+
+/// Find one of our binaries.
+///
+/// `CARGO_BIN_EXE_*` only exists inside an integration test, and this harness is used
+/// from a benchmark binary too — so the lookup walks from wherever the current
+/// executable is (a test lives in `target/release/deps/`, the bench in
+/// `target/release/`) and falls back to the workspace path. An override exists for
+/// the case where neither is true.
+pub fn bin_path(name: &str) -> std::path::PathBuf {
+    if let Ok(p) = std::env::var(format!("COMP_{}_BIN", name.replace('-', "_").to_uppercase())) {
+        return std::path::PathBuf::from(p);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        for dir in exe.parent().into_iter().chain(exe.parent().and_then(|p| p.parent())) {
+            let c = dir.join(name);
+            if c.exists() {
+                return c;
+            }
+        }
+    }
+    repo_root().join(format!("reconciler/target/release/{name}"))
 }
 
 fn repo_root() -> std::path::PathBuf {
@@ -100,6 +124,19 @@ impl Fleet {
         max_inflight: Option<u32>,
         kv: Option<&str>,
     ) -> Self {
+        Self::start_full(lattice, specs, &[], nodes, max_inflight, kv, false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_full(
+        lattice: &str,
+        specs: &[&str],
+        artifacts: &[String],
+        nodes: u16,
+        max_inflight: Option<u32>,
+        kv: Option<&str>,
+        pool: bool,
+    ) -> Self {
         let root = repo_root();
         let host_bin = std::env::var("COMP_HOST_BIN")
             .map(std::path::PathBuf::from)
@@ -118,18 +155,22 @@ impl Fleet {
         children.push(spawn_logged("nats-server", &mut nats, &sp.join("nats.log")));
         std::thread::sleep(Duration::from_secs(2));
 
-        let mut stub = Command::new(env!("CARGO_BIN_EXE_comp-stub"));
+        let mut stub = Command::new(bin_path("comp-stub"));
         stub.current_dir(&root).args(["--port", &platform_port.to_string()]);
         for s in specs {
             stub.args(["--spec", s]);
         }
-        stub.args([
-            "--artifact",
-            "gate=components/target/gate_domain.composed.wasm",
-        ]);
+        if artifacts.is_empty() {
+            stub.args(["--artifact", "gate=components/target/gate_domain.composed.wasm"]);
+        } else {
+            for a in artifacts {
+                stub.args(["--artifact", a]);
+            }
+        }
         children.push(spawn_logged("comp-stub", &mut stub, &sp.join("stub.log")));
 
         let nats_url = format!("nats://127.0.0.1:{nats_port}");
+        let mut host_pids = Vec::new();
         for n in 1..=nodes {
             let host_port = free_port();
             let mut c = Command::new(&host_bin);
@@ -142,18 +183,23 @@ impl Fleet {
             if let Some(kv) = kv {
                 c.args(["--kv", kv]).arg("--sqlite-path").arg(sp.join(format!("n{n}/kv.db")));
             }
-            children.push(spawn_logged("comp-host", &mut c, &sp.join(format!("n{n}.log"))));
+            if pool {
+                c.arg("--pool");
+            }
+            let child = spawn_logged("comp-host", &mut c, &sp.join(format!("n{n}.log")));
+            host_pids.push(child.0.id());
+            children.push(child);
         }
         std::thread::sleep(Duration::from_secs(2));
 
-        let mut rec = Command::new(env!("CARGO_BIN_EXE_comp-reconciler"));
+        let mut rec = Command::new(bin_path("comp-reconciler"));
         rec.current_dir(&root)
             .args(["--platform-url", &format!("http://127.0.0.1:{platform_port}")])
             .args(["--secret", "test-secret", "--nats-url", &nats_url, "--lattice", lattice])
             .args(["--interval", "3"]);
         children.push(spawn_logged("comp-reconciler", &mut rec, &sp.join("rec.log")));
 
-        let mut ing = Command::new(env!("CARGO_BIN_EXE_comp-ingress"));
+        let mut ing = Command::new(bin_path("comp-ingress"));
         ing.current_dir(&root)
             .args(["--addr", &format!("127.0.0.1:{ingress_port}")])
             .args(["--nats-url", &nats_url, "--lattice", lattice, "--refresh-secs", "2"]);
@@ -164,6 +210,7 @@ impl Fleet {
 
         Self {
             dir,
+            host_pids,
             _children: children,
             nats_url,
             lattice: lattice.to_string(),
@@ -177,7 +224,7 @@ impl Fleet {
     /// run — "should" being the word the test using this exists to remove.
     pub fn second_ingress(&mut self) -> u16 {
         let port = free_port();
-        let mut ing = Command::new(env!("CARGO_BIN_EXE_comp-ingress"));
+        let mut ing = Command::new(bin_path("comp-ingress"));
         ing.current_dir(repo_root())
             .args(["--addr", &format!("127.0.0.1:{port}")])
             .args(["--nats-url", &self.nats_url, "--lattice", &self.lattice, "--refresh-secs", "2"]);
@@ -224,6 +271,45 @@ impl Fleet {
         (seen, failed)
     }
 
+    /// A fleet from a directory of specs and an explicit artifact list.
+    ///
+    /// The test entry points name one spec and one artifact because that is what a
+    /// scenario needs; the matrix varies both, and sharing this constructor is what
+    /// keeps a benchmark measuring the same fleet the tests assert on.
+    pub fn start_bench(
+        lattice: &str,
+        spec_dir: &str,
+        artifacts: &[String],
+        nodes: u16,
+        pool: bool,
+    ) -> Self {
+        Self::start_full(lattice, &[spec_dir], artifacts, nodes, None, None, pool)
+    }
+
+    /// The host process for node `n`, so a caller can read its RSS.
+    pub fn host_pid(&self, n: u16) -> Option<u32> {
+        self.host_pids.get((n as usize).saturating_sub(1)).copied()
+    }
+
+    /// How many instances this node reports having started.
+    pub fn started_count(&self) -> usize {
+        self.node_log("n1").matches("comp-host: started ").count()
+    }
+
+    /// How each module arrived on node `n`: (shared, from disk, compiled).
+    ///
+    /// The distinction is the whole point of the digest cache, and reading it from
+    /// the host's own log means the benchmark cannot disagree with the host about
+    /// what happened.
+    pub fn module_arrivals(&self, n: u16) -> (usize, usize, usize) {
+        let log = self.node_log(&format!("n{n}"));
+        (
+            log.matches(" shared ").count(),
+            log.matches(" cache-load ").count(),
+            log.matches(" compile ").count(),
+        )
+    }
+
     pub fn state_dir(&self) -> std::path::PathBuf {
         self.dir.path().to_path_buf()
     }
@@ -239,7 +325,7 @@ impl Fleet {
 
     /// Replicas the fleet is running, straight from inventory.
     pub fn replicas(&self) -> u32 {
-        let out = Command::new(env!("CARGO_BIN_EXE_comp-bench"))
+        let out = Command::new(bin_path("comp-bench"))
             .args(["inventory", "--nats-url", &self.nats_url, "--lattice", &self.lattice])
             .output();
         let Ok(out) = out else { return 0 };

@@ -3,6 +3,13 @@
 
 Status: accepted. Reduces what an idle app costs a node.
 
+> **Correction ([ADR-0053](0053-the-matrix.md)):** the "2.33 MiB per idle app" below is
+> an artefact of one configuration divided by its app count. Idle RSS on a shared
+> digest is FLAT — 47.5 MiB at one app, 48.4 at thirty-two — so an idle app sharing a
+> digest costs ~0.03 MiB and one with its own digest costs ~2.0 MiB. The saving from
+> sharing is correspondingly larger than the 27% below: 57% at 32 apps. The mechanism
+> described here is right; the per-app arithmetic was not.
+
 ## The question, and the measurement that answered it
 
 "How do we make an idle app cheaper?" — and the honest first answer was that nobody
