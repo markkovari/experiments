@@ -392,13 +392,21 @@ pub struct Cfg {
     pub settle_passes: u32,
     /// Commands emitted per pass, so a mass event drains instead of stampeding.
     pub max_commands: usize,
+    /// Let a converged app keep its placement instead of re-ranking the fleet.
+    ///
+    /// On by default and the reason a pass is milliseconds rather than seconds.
+    /// It exists as a switch for two reasons: the differential test flips it to
+    /// prove the two paths agree on every world it generates, and an operator who
+    /// suspects a placement bug can turn the optimisation off in the field rather
+    /// than having to prove it innocent from a bug report.
+    pub fast_path: bool,
 }
 
 impl Default for Cfg {
     fn default() -> Self {
         // Guesses until there is real churn to calibrate against, which is why the
         // binary exposes them as flags rather than baking them in.
-        Self { settle_passes: 2, max_commands: 20 }
+        Self { settle_passes: 2, max_commands: 20, fast_path: true }
     }
 }
 
@@ -780,6 +788,21 @@ fn settled(
         return None;
     }
     let mine = mine?;
+    // One replica per node — maximally spread, and the ONLY state where the
+    // lookup is provably what the ranking would have returned.
+    //
+    // The ranking gives the top `replicas` nodes one each whenever there are at
+    // least that many eligible, and its first key is "replicas of this component
+    // already here, descending", so the current holders are exactly that top
+    // slice. Nothing can improve on it.
+    //
+    // A CONCENTRATED app — two replicas on one node while others sit free — is a
+    // placement the ranking would split, so it takes the full path. That is the
+    // distribution guarantee: the fast path is only taken where it cannot differ
+    // from the ranking, rather than wherever it would be cheap.
+    if mine.len() as u32 != want_replicas {
+        return None;
+    }
     if !mine.keys().all(|n| fitting(c, n)) {
         return None;
     }
@@ -1839,6 +1862,75 @@ mod tests {
             Strategy::Linked,
         );
         assert!(m.conflicting_links().is_empty(), "{:?}", m.conflicting_links());
+    }
+
+    /// The fast path and the full ranking place identically. Every time.
+    ///
+    /// This is the guarantee that makes the optimisation safe to keep: not "it
+    /// looked fine on the cases I thought of", but a sweep of worlds where the
+    /// two are run side by side and any disagreement fails. Distribution is the
+    /// thing being protected — a lookup that returns a different node from the
+    /// one the ranking would choose is a slow drift into imbalance that no single
+    /// scenario test would catch.
+    ///
+    /// The worlds vary what actually decides a placement: node count, replica
+    /// count (below, equal to and above the node count, so both the one-each and
+    /// the proportional branch are covered), uneven capacity, and an app that
+    /// starts concentrated rather than spread.
+    #[test]
+    fn the_fast_path_never_places_differently_from_the_full_ranking() {
+        let mut checked = 0;
+        for nodes in 1..=5usize {
+            for replicas in 1..=7u32 {
+                for lopsided in [false, true] {
+                    for concentrated in [false, true] {
+                        let m = app(vec![comp("api", "sha256:a", replicas)], vec![], Strategy::Linked);
+                        let mut obs: Vec<NodeInventory> = (0..nodes)
+                            .map(|i| {
+                                let cpus = if lopsided && i == 0 { 16 } else { 4 };
+                                sized(&format!("n{i}"), cpus)
+                            })
+                            .collect();
+                        if concentrated {
+                            // Everything on one node, as if the rest joined later.
+                            obs[0].instances.push(RunningInstance {
+                                tenant: m.tenant.clone(),
+                                app: m.app.clone(),
+                                component: "api".into(),
+                                digest: "sha256:a".into(),
+                                count: replicas,
+                                ingress_host: None,
+                            });
+                        }
+
+                        let run = |fast: bool| {
+                            let cfg = Cfg { fast_path: fast, ..Cfg::default() };
+                            let mut o = obs.clone();
+                            let mut h = Hysteresis::default();
+                            // Several passes: the fast path can only engage once a
+                            // pass has converged and the fleet has stopped moving,
+                            // so a single pass would never exercise it at all.
+                            for _ in 0..6 {
+                                let out = plan(&[m.clone()], &o, None, &mut h, &cfg);
+                                for cmd in &out.commands {
+                                    apply(&mut o, cmd);
+                                }
+                            }
+                            counts(&o, "api")
+                        };
+
+                        assert_eq!(
+                            run(true),
+                            run(false),
+                            "nodes={nodes} replicas={replicas} lopsided={lopsided} \
+                             concentrated={concentrated}"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 140, "the sweep shrank — it is the whole guarantee");
     }
 
     /// A converged app whose node stops qualifying still moves.

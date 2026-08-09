@@ -55,6 +55,15 @@ struct Args {
     #[arg(long, env = "COMP_SETTLE_PASSES")]
     settle_passes: Option<u32>,
 
+    /// Re-rank the whole fleet for every app, every pass.
+    ///
+    /// The escape hatch for the converged fast path (ADR-0056). A differential
+    /// test asserts the two agree, so this is for the day something disagrees in
+    /// the field and you need the slow, obviously-correct behaviour NOW rather
+    /// than after a diagnosis.
+    #[arg(long, env = "COMP_NO_FAST_PATH")]
+    no_fast_path: bool,
+
     /// Commands per pass, so a mass event drains instead of stampeding.
     #[arg(long, env = "COMP_MAX_COMMANDS")]
     max_commands: Option<usize>,
@@ -142,7 +151,7 @@ async fn main() -> Result<()> {
     );
 
     let http = reqwest::Client::new();
-    let cfg = Cfg { settle_passes, max_commands };
+    let cfg = Cfg { settle_passes, max_commands, fast_path: !args.no_fast_path };
 
     // What the last pass knew, shared with the activation server below. Activation
     // must not re-poll the control plane: it sits in front of a user waiting on a
@@ -706,7 +715,7 @@ async fn activate(
         &observed,
         Some(&load),
         &mut Hysteresis::default(),
-        &Cfg { settle_passes: cfg.settle_passes, max_commands: cfg.max_commands.max(1) },
+        &Cfg { max_commands: cfg.max_commands.max(1), ..cfg.clone() },
     );
     if let Some(u) = outcome.unschedulable.first() {
         anyhow::bail!("{}", u.reason);

@@ -22,6 +22,8 @@ pub struct Fleet {
     dir: tempfile::TempDir,
     /// One per node, in order, so a benchmark can read a host's memory.
     host_pids: Vec<u32>,
+    /// The port each host serves HTTP on, so load can bypass the ingress.
+    host_ports: Vec<u16>,
     _children: Vec<Kill>,
     pub nats_url: String,
     pub lattice: String,
@@ -45,6 +47,73 @@ impl Load {
             let _ = t.join();
         }
         (self.ok.load(Ordering::Relaxed), self.shed.load(Ordering::Relaxed))
+    }
+}
+
+/// What an open-loop run measured.
+///
+/// Separate from `Load` because it answers a different question. `Load` counts
+/// completions under a fixed number of connections, which pins concurrency and
+/// makes mean latency an algebraic restatement of throughput — Little's law,
+/// `concurrency / rps`, exactly, to two decimals, for every cell ADR-0053 and
+/// 0054 published. That number cannot be wrong and cannot be informative.
+pub struct Report {
+    /// Requests the schedule called for.
+    pub due: u64,
+    pub ok: u64,
+    pub shed: u64,
+    pub failed: u64,
+    /// What the first transport failure said. A count alone reads as "the system
+    /// refused"; the text is what distinguishes that from the LOAD GENERATOR
+    /// running out of sockets, which is a fact about the harness.
+    pub first_error: Option<String>,
+    /// Microseconds, from the moment each request was DUE — not from when it was
+    /// sent. A generator that falls behind and times from the send hides its own
+    /// backlog, which is coordinated omission and the reason a saturated system
+    /// can report healthy latency.
+    pub latencies: Vec<u64>,
+}
+
+impl Report {
+    pub fn pct(&self, p: f64) -> f64 {
+        if self.latencies.is_empty() {
+            return 0.0;
+        }
+        let i = ((self.latencies.len() - 1) as f64 * p / 100.0).round() as usize;
+        self.latencies[i] as f64 / 1000.0
+    }
+
+    /// Achieved rate over `secs`, which is the honest denominator: if it is below
+    /// the requested rate the system did not keep up and the percentiles describe
+    /// a system in backlog.
+    pub fn rps(&self, secs: f64) -> f64 {
+        self.ok as f64 / secs
+    }
+}
+
+/// An open-loop run in flight.
+pub struct OpenLoad {
+    stop: Arc<AtomicBool>,
+    threads: Vec<std::thread::JoinHandle<Report>>,
+}
+
+impl OpenLoad {
+    pub fn stop(self) -> Report {
+        self.stop.store(true, Ordering::Relaxed);
+        let mut all =
+            Report { due: 0, ok: 0, shed: 0, failed: 0, first_error: None, latencies: Vec::new() };
+        for t in self.threads {
+            if let Ok(r) = t.join() {
+                all.due += r.due;
+                all.ok += r.ok;
+                all.shed += r.shed;
+                all.failed += r.failed;
+                all.first_error = all.first_error.or(r.first_error);
+                all.latencies.extend(r.latencies);
+            }
+        }
+        all.latencies.sort_unstable();
+        all
     }
 }
 
@@ -172,8 +241,10 @@ impl Fleet {
 
         let nats_url = format!("nats://127.0.0.1:{nats_port}");
         let mut host_pids = Vec::new();
+        let mut host_ports = Vec::new();
         for n in 1..=nodes {
             let host_port = free_port();
+            host_ports.push(host_port);
             let mut c = Command::new(&host_bin);
             c.current_dir(&root)
                 .args(["--lattice-nats", &nats_url, "--node", &format!("n{n}"), "--lattice", lattice])
@@ -212,6 +283,7 @@ impl Fleet {
         Self {
             dir,
             host_pids,
+            host_ports,
             _children: children,
             nats_url,
             lattice: lattice.to_string(),
@@ -283,8 +355,12 @@ impl Fleet {
         artifacts: &[String],
         nodes: u16,
         pool: bool,
+        // Which storage backend the guests get. The benchmark component reads and
+        // writes on every request, so this is not a detail: with `nats` each
+        // request pays two JetStream round trips and the number measures the bus.
+        kv: Option<&str>,
     ) -> Self {
-        Self::start_full(lattice, &[spec_dir], artifacts, nodes, None, None, pool)
+        Self::start_full(lattice, &[spec_dir], artifacts, nodes, None, kv, pool)
     }
 
     /// The host process for node `n`, so a caller can read its RSS.
@@ -369,6 +445,91 @@ impl Fleet {
             }));
         }
         Load { stop, ok, shed, threads: handles }
+    }
+
+    /// Load at a fixed ARRIVAL RATE, whatever the system does with it.
+    ///
+    /// Each worker owns a slice of the schedule and sleeps until its next request
+    /// is due; if the previous response has not come back by then it fires late
+    /// and the lateness lands in the measurement, because that is what a real
+    /// client experiences. Requests are timed from due, not from send.
+    ///
+    /// `port` picks the door: the ingress, or a host directly — the only way to
+    /// find out what the extra hop costs.
+    ///
+    /// `hosts` are cycled across workers so every app gets traffic; one hot app
+    /// and thirty-one idle ones is a different measurement from thirty-two in use.
+    /// `rate: None` is a CLOSED loop — every worker sends again as soon as its
+    /// own response lands. Then there is no schedule to be late against, so
+    /// latency is timed from the send and the percentiles describe a system whose
+    /// concurrency the harness pinned. Said out loud at the call site, because
+    /// that is the mode whose mean is `workers / rps` and nothing more.
+    pub fn open_load(
+        &self,
+        hosts: &[String],
+        port: u16,
+        rate: Option<u32>,
+        workers: usize,
+    ) -> OpenLoad {
+        let stop = Arc::new(AtomicBool::new(false));
+        let url = format!("http://127.0.0.1:{port}/api/ratelimit");
+        let gap = rate.map(|r| {
+            Duration::from_secs_f64(1.0 / (r as f64 / workers as f64).max(1.0))
+        });
+        let mut threads = Vec::new();
+        for w in 0..workers {
+            let (stop, url) = (stop.clone(), url.clone());
+            let host = hosts[w % hosts.len()].clone();
+            threads.push(std::thread::spawn(move || {
+                let client = reqwest::blocking::Client::builder()
+                    .timeout(Duration::from_secs(10))
+                    .build()
+                    .unwrap();
+                let mut r =
+                    Report { due: 0, ok: 0, shed: 0, failed: 0, first_error: None, latencies: Vec::new() };
+                let start = Instant::now();
+                let mut n: u32 = 0;
+                while !stop.load(Ordering::Relaxed) {
+                    let due = match gap {
+                        Some(gap) => {
+                            let due = start + gap.mul_f64(n as f64);
+                            if let Some(wait) = due.checked_duration_since(Instant::now()) {
+                                std::thread::sleep(wait);
+                            }
+                            due
+                        }
+                        None => Instant::now(),
+                    };
+                    n += 1;
+                    r.due += 1;
+                    let res = client
+                        .post(&url)
+                        .header("host", &host)
+                        .json(&serde_json::json!({
+                            "key": "m", "capacity": 100_000_000u64, "refill": 100_000_000u64
+                        }))
+                        .send();
+                    match res {
+                        Ok(resp) if resp.status().is_success() => {
+                            r.ok += 1;
+                            r.latencies.push(due.elapsed().as_micros() as u64);
+                        }
+                        Ok(_) => r.shed += 1,
+                        Err(e) => {
+                            r.failed += 1;
+                            r.first_error.get_or_insert_with(|| e.to_string());
+                        }
+                    }
+                }
+                r
+            }));
+        }
+        OpenLoad { stop, threads }
+    }
+
+    /// The HTTP port node `n` serves on, for load that skips the ingress.
+    pub fn host_port(&self, n: u16) -> Option<u16> {
+        self.host_ports.get((n as usize).saturating_sub(1)).copied()
     }
 
     /// Poll until a request to `host` is answered, or give up.

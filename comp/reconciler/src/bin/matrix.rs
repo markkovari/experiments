@@ -14,8 +14,6 @@
 //! comp-matrix --apps 32 --seconds 600 --only distinct   # one long cell
 //! ```
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -41,7 +39,11 @@ struct Args {
     #[arg(long)]
     only: Option<String>,
 
-    /// Also run each cell with wasmtime's pooling allocator.
+    /// Cross each cell with the on-demand allocator as well.
+    ///
+    /// Pooling is the production default since ADR-0054, so it is what a cell
+    /// measures unless you ask for both. A benchmark whose default differs from
+    /// the deployment's default measures a configuration nobody runs.
     #[arg(long)]
     with_pool: bool,
 
@@ -52,6 +54,32 @@ struct Args {
     /// Print the memory curve per cell, not just the endpoints.
     #[arg(long)]
     trace: bool,
+
+    /// Requests per second to OFFER, regardless of what comes back.
+    ///
+    /// Without this the run is closed-loop: `--conns` requests in flight, each
+    /// worker waiting for its own response, so concurrency is pinned and mean
+    /// latency is forced to `conns / rps` by Little's law. Every latency figure in
+    /// ADR-0053 and 0054 is that identity to two decimals. An arrival rate is what
+    /// makes latency a measurement instead of arithmetic (ADR-0057).
+    #[arg(long)]
+    rate: Option<u32>,
+
+    /// Storage backend for the guests: `memory`, `sqlite`, `nats`.
+    ///
+    /// The benchmark component does a keyvalue read and a write per request, so
+    /// on `nats` every request pays two JetStream round trips and the rps column
+    /// is a measurement of the bus rather than of the runtime. Running both is
+    /// how you find out which one you were looking at (ADR-0057).
+    #[arg(long)]
+    kv: Option<String>,
+
+    /// Send load straight at a host, skipping the ingress.
+    ///
+    /// The comparison is the point: every request in every previous benchmark was
+    /// proxied, and nobody had measured what that hop costs.
+    #[arg(long)]
+    direct: bool,
 }
 
 #[derive(Debug)]
@@ -64,8 +92,15 @@ struct Cell {
     drift_mib: f64,
     per_app_mib: f64,
     rps: f64,
+    /// Offered rate, when the run was open-loop. `None` means closed-loop, and
+    /// then the latency columns are Little's law and nothing else.
+    offered: Option<u32>,
     p50_ms: f64,
     p99_ms: f64,
+    p999_ms: f64,
+    shed: u64,
+    failed: u64,
+    first_error: Option<String>,
     shared: usize,
     loaded_from_disk: usize,
     compiled: usize,
@@ -84,7 +119,7 @@ fn main() -> Result<()> {
         None => vec!["same", "distinct"],
         Some(other) => anyhow::bail!("--only takes `same` or `distinct`, not {other:?}"),
     };
-    let pools: Vec<bool> = if args.with_pool { vec![false, true] } else { vec![false] };
+    let pools: Vec<bool> = if args.with_pool { vec![false, true] } else { vec![true] };
 
     let total = args.apps.len() * modes.len() * pools.len();
     eprintln!(
@@ -182,7 +217,7 @@ fn rss_mib(pid: u32) -> f64 {
 }
 
 fn run_cell(
-    root: &std::path::Path,
+    _root: &std::path::Path,
     wasm: &[u8],
     apps: usize,
     digests: &'static str,
@@ -203,6 +238,7 @@ fn run_cell(
         &arts,
         args.nodes,
         pool,
+        args.kv.as_deref(),
     );
 
     // Placed, then settled: an RSS read while instances are still arriving measures
@@ -216,40 +252,16 @@ fn run_cell(
     let idle_mib = rss_mib(pid);
 
     // --- sustained load, memory sampled throughout ---
-    let stop = Arc::new(AtomicBool::new(false));
-    let (ok, lat_sum, lat_max) =
-        (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
-    let mut workers = Vec::new();
-    for w in 0..args.conns {
-        let (stop, ok, lat_sum, lat_max) =
-            (stop.clone(), ok.clone(), lat_sum.clone(), lat_max.clone());
-        let url = format!("http://127.0.0.1:{}/api/ratelimit", fleet.ingress_port);
-        // Spread the load across every app, not just the first: one hot app and 31
-        // idle ones is a different measurement from 32 apps in use.
-        let host = format!("app{}.matrix.test", w % apps);
-        workers.push(std::thread::spawn(move || {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .unwrap();
-            while !stop.load(Ordering::Relaxed) {
-                let t = Instant::now();
-                let sent = client
-                    .post(&url)
-                    .header("host", &host)
-                    .json(&serde_json::json!({
-                        "key": "m", "capacity": 100_000_000u64, "refill": 100_000_000u64
-                    }))
-                    .send();
-                if sent.map(|r| r.status().is_success()).unwrap_or(false) {
-                    let us = t.elapsed().as_micros() as u64;
-                    ok.fetch_add(1, Ordering::Relaxed);
-                    lat_sum.fetch_add(us, Ordering::Relaxed);
-                    lat_max.fetch_max(us, Ordering::Relaxed);
-                }
-            }
-        }));
-    }
+    //
+    // Spread across every app, not just the first: one hot app and thirty-one idle
+    // ones is a different measurement from thirty-two in use.
+    let hosts: Vec<String> = (0..apps).map(|a| format!("app{a}.matrix.test")).collect();
+    let door = if args.direct {
+        fleet.host_port(1).context("no host port to send load at")?
+    } else {
+        fleet.ingress_port
+    };
+    let load = fleet.open_load(&hosts, door, args.rate, args.conns);
 
     // Let it reach steady state before the drift window opens, or the ramp counts as
     // a leak.
@@ -290,12 +302,7 @@ fn run_cell(
         );
     }
     let loaded_mib = rss_mib(pid);
-    stop.store(true, Ordering::Relaxed);
-    for w in workers {
-        let _ = w.join();
-    }
-
-    let served = ok.load(Ordering::Relaxed);
+    let report = load.stop();
     let elapsed = args.seconds as f64;
     let (shared, loaded_from_disk, compiled) = fleet.module_arrivals(1);
     Ok(Cell {
@@ -308,29 +315,49 @@ fn run_cell(
         // flat; anything else is the thing a 20-second spike cannot see.
         drift_mib: loaded_mib - settled,
         per_app_mib: (idle_mib - 12.0) / apps as f64,
-        rps: served as f64 / elapsed,
-        p50_ms: if served > 0 {
-            lat_sum.load(Ordering::Relaxed) as f64 / served as f64 / 1000.0
-        } else {
-            0.0
-        },
-        p99_ms: lat_max.load(Ordering::Relaxed) as f64 / 1000.0,
+        rps: report.rps(elapsed),
+        offered: args.rate,
+        p50_ms: report.pct(50.0),
+        p99_ms: report.pct(99.0),
+        p999_ms: report.pct(99.9),
+        shed: report.shed,
+        failed: report.failed,
+        first_error: report.first_error.clone(),
         shared,
         loaded_from_disk,
         compiled,
     })
 }
 
+/// Which door the load went through, for the header.
+fn door(args: &Args) -> &'static str {
+    if args.direct {
+        "a host directly"
+    } else {
+        "the ingress"
+    }
+}
+
 fn report(cells: &[Cell], args: &Args) {
-    println!("\n=== matrix: {}s of load per cell, {} conns ===\n", args.seconds, args.conns);
     println!(
-        "  {:>5} {:>9} {:>5} │ {:>8} {:>9} {:>8} │ {:>9} {:>8} {:>8} │ {:>6} {:>5} {:>4}",
-        "apps", "digests", "pool", "idle MiB", "loaded", "per-app", "rps", "mean ms", "max ms",
-        "shared", "disk", "cc"
+        "\n=== matrix: {}s of load per cell, {} workers, {} ===\n",
+        args.seconds,
+        args.conns,
+        match args.rate {
+            Some(r) => format!("OPEN loop at {r} rps offered, through {}", door(args)),
+            // Said out loud, because the latency columns below are then
+            // `conns / rps` by construction and mean nothing on their own.
+            None => format!("CLOSED loop (latency == conns/rps by Little's law), through {}", door(args)),
+        }
+    );
+    println!(
+        "  {:>5} {:>9} {:>5} │ {:>8} {:>9} {:>8} │ {:>9} {:>7} {:>7} {:>7} {:>7} {:>5} │ {:>6} {:>5} {:>4}",
+        "apps", "digests", "pool", "idle MiB", "loaded", "per-app", "rps", "p50 ms", "p99 ms",
+        "p99.9", "4xx/5xx", "err", "shared", "disk", "cc"
     );
     for c in cells {
         println!(
-            "  {:>5} {:>9} {:>5} │ {:>8.1} {:>9.1} {:>8.2} │ {:>9.0} {:>8.2} {:>8.1} │ {:>6} {:>5} {:>4}",
+            "  {:>5} {:>9} {:>5} │ {:>8.1} {:>9.1} {:>8.2} │ {:>9.0} {:>7.2} {:>7.2} {:>7.2} {:>7} {:>5} │ {:>6} {:>5} {:>4}",
             c.apps,
             c.digests,
             if c.pool { "on" } else { "off" },
@@ -340,6 +367,9 @@ fn report(cells: &[Cell], args: &Args) {
             c.rps,
             c.p50_ms,
             c.p99_ms,
+            c.p999_ms,
+            c.shed,
+            c.failed,
             c.shared,
             c.loaded_from_disk,
             c.compiled
@@ -363,6 +393,12 @@ fn report(cells: &[Cell], args: &Args) {
             c.drift_mib,
             args.seconds - 10
         );
+    }
+
+    for c in cells.iter().filter(|c| c.failed > 0) {
+        if let Some(e) = &c.first_error {
+            println!("\n  {} transport failures at apps={}: {e}", c.failed, c.apps);
+        }
     }
 
     // The comparison the matrix exists for: same-digest against distinct at equal
