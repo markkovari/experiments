@@ -412,6 +412,10 @@ pub struct Hysteresis {
 }
 
 type Key = (String, String, String, String, String); // tenant, app, component, digest, node
+/// Who a set of replicas belongs to: tenant, app, component, digest. Borrowed,
+/// because it is looked up once per app per pass and allocating there is the
+/// difference between a 46 ms pass and a 300 ms one.
+type Owner<'a> = (&'a str, &'a str, &'a str, &'a str);
 
 // ---- the diff --------------------------------------------------------------
 
@@ -424,6 +428,46 @@ pub fn plan(
 ) -> Outcome {
     let mut out = Outcome::default();
     let mut want: BTreeMap<Key, (u32, &Manifest, &Component)> = BTreeMap::new();
+
+    // Everything running, indexed ONCE. Both of these used to be recomputed by
+    // scanning every node's instance list per manifest, which made a pass cost
+    // apps × instances: measured at 1.76 s for 10 000 apps on ten nodes, and
+    // that is a pass the loop runs forever (ADR-0055).
+    //
+    // The key includes tenant and app, which is also a correctness fix — the old
+    // scan matched on component id and digest alone, so two tenants deploying the
+    // same catalogue component under the same id counted each other's replicas as
+    // their own. Exactly the marketplace case this platform is for.
+    let mut have: BTreeMap<Key, u32> = BTreeMap::new();
+    // Total instances per node, for the balance-across-apps ranking key.
+    let mut node_load: BTreeMap<&str, usize> = BTreeMap::new();
+    for inv in observed {
+        node_load.insert(&inv.node, 0);
+        for i in &inv.instances {
+            *have
+                .entry((
+                    i.tenant.clone(),
+                    i.app.clone(),
+                    i.component.clone(),
+                    i.digest.clone(),
+                    inv.node.clone(),
+                ))
+                .or_default() += i.count;
+            *node_load.get_mut(inv.node.as_str()).unwrap() += i.count as usize;
+        }
+    }
+    // The same index again, nested: owner -> node -> count. Borrowed keys, so
+    // ranking a node is a `&str` lookup and not five `String` allocations — which
+    // is what the first version of this did, and it cost more than the scan it
+    // replaced once the node count got large.
+    let mut running_by_node: BTreeMap<Owner<'_>, BTreeMap<&str, u32>> = BTreeMap::new();
+    let mut running_total: BTreeMap<Owner<'_>, u32> = BTreeMap::new();
+    for ((t, a, c, d, node), n) in &have {
+        let owner = (t.as_str(), a.as_str(), c.as_str(), d.as_str());
+        running_by_node.entry(owner).or_default().insert(node.as_str(), *n);
+        *running_total.entry(owner).or_default() += n;
+    }
+
     // Load this pass has already committed, so apps placed later in the same pass
     // see the earlier ones rather than all racing to the same node.
     let mut pending: BTreeMap<String, usize> = BTreeMap::new();
@@ -449,7 +493,10 @@ pub fn plan(
             continue;
         }
 
-        let running: u32 = observed.iter().map(|n| running_on(root, n)).sum();
+        let running: u32 = running_total
+            .get(&(m.tenant.as_str(), m.app.as_str(), root.id.as_str(), root.digest.as_str()))
+            .copied()
+            .unwrap_or(0);
         let (want_replicas, wanted) = desired_and_wanted(root, m, load, running);
         if let Some(scale) = &root.scale {
             if wanted > scale.max.max(scale.min) {
@@ -462,7 +509,7 @@ pub fn plan(
                 });
             }
         }
-        let nodes = match place(root, want_replicas, observed, &pending) {
+        let nodes = match place(root, (&m.tenant, &m.app), want_replicas, observed, &running_by_node, &node_load, &pending) {
             Ok(n) => n,
             Err(reason) => {
                 out.unschedulable.push(Unschedulable {
@@ -525,7 +572,7 @@ pub fn plan(
                     || c.placement.mode == Mode::Pinned
                     || !c.placement.nodes.is_empty();
                 let targets = if spans {
-                    match place(c, c.replicas, observed, &pending) {
+                    match place(c, (&m.tenant, &m.app), c.replicas, observed, &running_by_node, &node_load, &pending) {
                         Ok(n) => n,
                         Err(reason) => {
                             out.unschedulable.push(Unschedulable {
@@ -544,21 +591,6 @@ pub fn plan(
                     *pending.entry(node.clone()).or_default() += 1;
                 }
             }
-        }
-    }
-
-    let mut have: BTreeMap<Key, u32> = BTreeMap::new();
-    for inv in observed {
-        for i in &inv.instances {
-            *have
-                .entry((
-                    i.tenant.clone(),
-                    i.app.clone(),
-                    i.component.clone(),
-                    i.digest.clone(),
-                    inv.node.clone(),
-                ))
-                .or_default() += i.count;
         }
     }
 
@@ -693,12 +725,23 @@ fn proportional(total: u32, weights: &[usize]) -> Vec<u32> {
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn place(
     c: &Component,
+    // Whose component this is, `(tenant, app)`. The ranking asks "how many of THIS
+    // are already here", and without an owner that question matches another
+    // tenant's identical component — see the index at the top of `plan`.
+    owner: (&str, &str),
     // How many to place. Passed in rather than read off `c.replicas`, because with
     // autoscaling the count is a function of load and `c` is only the policy.
     replicas: u32,
     observed: &[NodeInventory],
+    // Everything running, keyed by owner then node, so ranking a node is a lookup
+    // instead of a scan of its instance list.
+    // ponytail: still O(apps × nodes) — every app ranks every eligible node. Shard
+    // the reconciler by tenant when one loop cannot finish a pass in its interval.
+    running_by_node: &BTreeMap<Owner<'_>, BTreeMap<&str, u32>>,
+    node_load: &BTreeMap<&str, usize>,
     // What THIS pass has already decided to put on each node.
     //
     // Without it, every app in a pass ranks against the same unchanged inventory
@@ -746,23 +789,39 @@ fn place(
             //     machine holding all six. That is worse than pinning tenants to
             //     machines, which is the thing this platform exists not to do.
             //  3. the name — determinism, so the plan is a pure function.
+            // One lookup for the whole component, then a borrowed lookup per node.
+            let mine = running_by_node.get(&(owner.0, owner.1, c.id.as_str(), c.digest.as_str()));
             let mut ranked: Vec<(&NodeInventory, u32, usize)> = eligible
                 .iter()
                 .map(|n| {
-                    let observed_load: usize = n.instances.iter().map(|i| i.count as usize).sum();
-                    (*n, running_on(c, n), observed_load + pending.get(&n.node).copied().unwrap_or(0))
+                    let here =
+                        mine.and_then(|m| m.get(n.node.as_str())).copied().unwrap_or(0);
+                    let observed_load = node_load.get(n.node.as_str()).copied().unwrap_or(0);
+                    (*n, here, observed_load + pending.get(&n.node).copied().unwrap_or(0))
                 })
                 .collect();
             // Key 2 is load PER CPU, not raw load: a 4-core Pi and a 10-core laptop
             // are not interchangeable, and treating them as equals hands the small
             // machine the same work as the big one. Cross-multiplied rather than
             // divided so it stays integer arithmetic and never divides by zero.
-            ranked.sort_by(|a, b| {
+            let rank = |a: &(&NodeInventory, u32, usize), b: &(&NodeInventory, u32, usize)| {
                 let (aw, bw) = (a.0.capacity.weight(), b.0.capacity.weight());
                 b.1.cmp(&a.1)
                     .then((a.2 * bw).cmp(&(b.2 * aw)))
                     .then(a.0.node.cmp(&b.0.node))
-            });
+            };
+            // Fewer replicas than nodes means only the first `replicas` entries are
+            // ever read, so partition around that point and sort the prefix instead
+            // of ordering the whole fleet for every app. Identical result — the
+            // prefix is the same set, then fully sorted — at O(nodes) rather than
+            // O(nodes log nodes) per app, which is what a thousand-node fleet feels.
+            let k = replicas as usize;
+            if k < ranked.len() {
+                ranked.select_nth_unstable_by(k, rank);
+                ranked[..k].sort_by(rank);
+            } else {
+                ranked.sort_by(rank);
+            }
 
             // And the split is proportional for the same reason. wasmCloud puts 3 of
             // 4 replicas on a 10-core box and 1 on a 4-core one (ADR-0039); an even
@@ -794,13 +853,10 @@ fn fits(c: &Component, n: &NodeInventory) -> bool {
         && c.host_needs.iter().all(|need| n.host_ifaces.contains(need))
 }
 
-fn running_on(c: &Component, n: &NodeInventory) -> u32 {
-    n.instances
-        .iter()
-        .filter(|i| i.component == c.id && i.digest == c.digest)
-        .map(|i| i.count)
-        .sum()
-}
+// `running_on(component, node)` lived here and matched on component id + digest
+// alone. It is gone rather than fixed: the owner-keyed `have` index answers the
+// same question, and a helper that CAN be called without a tenant is a helper
+// that will be.
 
 #[cfg(test)]
 mod tests {
@@ -893,8 +949,16 @@ mod tests {
         match cmd {
             Command::Start { node, tenant, app, component, digest, count, .. } => {
                 let inv = observed.iter_mut().find(|n| n.node == *node).expect("node");
-                match inv.instances.iter_mut().find(|i| i.component == *component && i.digest == *digest)
-                {
+                // Matched on the whole owner, exactly like `plan`'s key and the
+                // real host's `<tenant>/<app>/<component>` instance id. Matching on
+                // component and digest alone made this fake host merge two tenants'
+                // instances into one, which is the thing the platform must not do.
+                match inv.instances.iter_mut().find(|i| {
+                    i.tenant == *tenant
+                        && i.app == *app
+                        && i.component == *component
+                        && i.digest == *digest
+                }) {
                     // Absolute, not additive — see the note in `plan`.
                     Some(i) => i.count = *count,
                     None => inv.instances.push(RunningInstance {
@@ -907,9 +971,14 @@ mod tests {
                     }),
                 }
             }
-            Command::Stop { node, component, digest, .. } => {
+            Command::Stop { node, tenant, app, component, digest, .. } => {
                 let inv = observed.iter_mut().find(|n| n.node == *node).expect("node");
-                inv.instances.retain(|i| !(i.component == *component && i.digest == *digest));
+                inv.instances.retain(|i| {
+                    !(i.tenant == *tenant
+                        && i.app == *app
+                        && i.component == *component
+                        && i.digest == *digest)
+                });
             }
         }
     }
@@ -1660,4 +1729,34 @@ mod tests {
         assert!(m.conflicting_links().is_empty(), "{:?}", m.conflicting_links());
     }
 
+    /// Two tenants, one catalogue component, the same id on both sides.
+    ///
+    /// This is the marketplace: a popular component deployed by many orgs, all of
+    /// whom called it `gate` because that is what the example calls it. Counting
+    /// how many are running by component id and digest — which is what this did —
+    /// makes bob's replica satisfy alice's manifest, and neither app ever gets the
+    /// replicas it asked for.
+    #[test]
+    fn one_tenants_replicas_do_not_count_as_anothers() {
+        let shared = "sha256:popular";
+        let alice = Manifest { tenant: "alice".into(), app: "shop".into(), ..app(vec![comp("gate", shared, 1)], vec![], Strategy::Fused) };
+        let bob = Manifest {
+            tenant: "bob".into(),
+            app: "shop".into(),
+            ingress: Some(Ingress { host: "shop.bob.example.com".into(), component: "gate".into() }),
+            ..app(vec![comp("gate", shared, 1)], vec![], Strategy::Fused)
+        };
+
+        let mut observed = vec![node("n1", &[], &[])];
+        converge(&[alice, bob], &mut observed, 4);
+
+        let owners: BTreeSet<&str> =
+            observed[0].instances.iter().map(|i| i.tenant.as_str()).collect();
+        assert_eq!(
+            owners,
+            BTreeSet::from(["alice", "bob"]),
+            "both tenants must get their own replica of the shared component, got {:?}",
+            observed[0].instances
+        );
+    }
 }

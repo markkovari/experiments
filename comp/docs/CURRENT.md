@@ -3,7 +3,7 @@
 What runs today, what is measured, and what is honestly missing. The reasoning lives
 in [51 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0054.
+Last revised after ADR-0055.
 
 ## Shape
 
@@ -31,6 +31,7 @@ browser ────┘   (orgs, catalogue, market, secrets, deployments, revisi
 | `comp-ingress` | the door. Host-header routing, least-outstanding, shedding, activation |
 | `comp-stub` | a stand-in control plane for tests and benchmarks |
 | `comp-bench` | reads benchmark output; the only thing that interprets a number |
+| `comp-planscale` | times `plan()` over synthetic fleets — control-loop scaling |
 | `comp` | the CLI |
 
 ## The one rule everything else is an application of
@@ -64,6 +65,8 @@ Every number below is from a run recorded in an ADR, not an estimate.
 | 32 idle apps, one digest vs 32 | 48.4 MiB vs 112.4 MiB — 57% less ([0053](adr/0053-the-matrix.md)) |
 | pooling allocator, now the default | +21–46% rps, tail 113 ms → 38 ms, same idle RSS ([0054](adr/0054-pooling-on-and-the-leak-that-was-not.md)) |
 | memory under 10 min of constant load | plateaus at 99 MiB, returns 23 MiB — no leak ([0054](adr/0054-pooling-on-and-the-leak-that-was-not.md)) |
+| a reconciler pass, 10 nodes / 10 000 apps | 34 ms, linear in both axes ([0055](adr/0055-how-the-control-loop-scales.md)) |
+| inventory snapshot ceiling | ~5 500 instances per node before NATS' 1 MiB ([0055](adr/0055-how-the-control-loop-scales.md)) |
 | scale to zero and back | parked at 0, served in 49 ms, parked again in 5 s ([0042](adr/0042-scale-to-zero-and-back.md)) |
 | vs wasmCloud 2.5.2, same component | 3.6× on the Mac, 2.3× on a Pi ([0039](adr/0039-comp-versus-wasmcloud.md)) |
 
@@ -137,5 +140,9 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   a captured request can be replayed until the token expires.
 - **No UI.** `POST /api/components/satisfies` answers "would this plug fit" with wac's
   real subtype check, and nothing calls it: a facility, not yet a feature.
+- **The loop does not shard.** One reconciler, no leader election; a pass at
+  1000 nodes × 10 000 apps is 1.29 s and the product is what to watch (ADR-0055).
+- **Inventory is a full snapshot**, so a node holding more than ~5 500 instances
+  exceeds NATS' 1 MiB message limit and stops publishing (ADR-0055).
 - **Cross-machine benchmarks are unproven since the refactor.** The scripts were
   rewired to `comp-bench` and have not been run against malna or bobocat since.

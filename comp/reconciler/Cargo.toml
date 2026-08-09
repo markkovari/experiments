@@ -64,3 +64,7 @@ path = "src/bin/bench.rs"
 [[bin]]
 name = "comp-matrix"
 path = "src/bin/matrix.rs"
+
+[[bin]]
+name = "comp-planscale"
+path = "src/bin/planscale.rs"
