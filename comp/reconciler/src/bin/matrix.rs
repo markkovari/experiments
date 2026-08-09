@@ -48,6 +48,10 @@ struct Args {
     /// Nodes per fleet.
     #[arg(long, default_value = "1")]
     nodes: u16,
+
+    /// Print the memory curve per cell, not just the endpoints.
+    #[arg(long)]
+    trace: bool,
 }
 
 #[derive(Debug)]
@@ -253,9 +257,37 @@ fn run_cell(
     let settled = rss_mib(pid);
     let started = Instant::now();
     let mut peak = settled;
+    // The SHAPE, not just the delta. Growth that flattens is an allocator settling;
+    // growth that keeps climbing is a leak, and a single before/after reading cannot
+    // tell them apart — which is the whole reason this run exists.
+    let mut trace: Vec<(u64, f64)> = vec![(0, settled)];
     while started.elapsed() < Duration::from_secs(args.seconds.saturating_sub(10)) {
         std::thread::sleep(Duration::from_secs(5));
-        peak = peak.max(rss_mib(pid));
+        let now = rss_mib(pid);
+        peak = peak.max(now);
+        trace.push((started.elapsed().as_secs(), now));
+    }
+    if args.trace {
+        println!("\n  RSS while loaded, apps={apps} digests={digests} pool={pool}:");
+        for (t, mib) in trace.iter().step_by(if trace.len() > 24 { 4 } else { 1 }) {
+            let bar = "#".repeat(((mib - settled).max(0.0) * 2.0) as usize);
+            println!("    {t:>4}s  {mib:>7.1} MiB  {bar}");
+        }
+        // Second half against first: if the growth is front-loaded the curve is
+        // settling, if it is even the process is still accumulating.
+        let mid = trace.len() / 2;
+        let first = trace[mid].1 - trace[0].1;
+        let second = trace[trace.len() - 1].1 - trace[mid].1;
+        println!(
+            "    first half +{first:.2} MiB, second half +{second:.2} MiB -> {}",
+            if second <= first * 0.4 {
+                "flattening (allocator settling)"
+            } else if second >= first * 0.8 {
+                "still climbing (a leak, not a warm-up)"
+            } else {
+                "slowing, but not flat"
+            }
+        );
     }
     let loaded_mib = rss_mib(pid);
     stop.store(true, Ordering::Relaxed);

@@ -3,7 +3,7 @@
 What runs today, what is measured, and what is honestly missing. The reasoning lives
 in [51 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0053.
+Last revised after ADR-0054.
 
 ## Shape
 
@@ -62,6 +62,8 @@ Every number below is from a run recorded in an ADR, not an estimate.
 | start, cold / warm / shared | 35.2 ms / 0.43 ms / **0.08 ms** ([0040](adr/0040-compiled-artifacts-are-cached.md), [0052](adr/0052-one-copy-per-digest.md)) |
 | idle app, marginal — shared digest / own digest | **~0.03 MiB** / ~2.0 MiB ([0053](adr/0053-the-matrix.md)) |
 | 32 idle apps, one digest vs 32 | 48.4 MiB vs 112.4 MiB — 57% less ([0053](adr/0053-the-matrix.md)) |
+| pooling allocator, now the default | +21–46% rps, tail 113 ms → 38 ms, same idle RSS ([0054](adr/0054-pooling-on-and-the-leak-that-was-not.md)) |
+| memory under 10 min of constant load | plateaus at 99 MiB, returns 23 MiB — no leak ([0054](adr/0054-pooling-on-and-the-leak-that-was-not.md)) |
 | scale to zero and back | parked at 0, served in 49 ms, parked again in 5 s ([0042](adr/0042-scale-to-zero-and-back.md)) |
 | vs wasmCloud 2.5.2, same component | 3.6× on the Mac, 2.3× on a Pi ([0039](adr/0039-comp-versus-wasmcloud.md)) |
 

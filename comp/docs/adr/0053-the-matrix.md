@@ -3,6 +3,12 @@
 
 Status: accepted. Supersedes ADR-0052's per-app figure.
 
+> **Correction ([ADR-0054](0054-pooling-on-and-the-leak-that-was-not.md)):** the
+> drift below is not a leak. A ten-minute cell shows RSS plateau at ~99 MiB and
+> then return 23 MiB; the 80-second window ended before the release and saw only
+> the climb. Pooling was also run: +21–46% rps at identical idle memory, and it
+> is now the default.
+
 ## Why a matrix
 
 Every benchmark here moved one axis for fifteen or twenty seconds. That is enough to

@@ -124,7 +124,8 @@ impl Fleet {
         max_inflight: Option<u32>,
         kv: Option<&str>,
     ) -> Self {
-        Self::start_full(lattice, specs, &[], nodes, max_inflight, kv, false)
+        // Tests run what production runs: pooling on (ADR-0054).
+        Self::start_full(lattice, specs, &[], nodes, max_inflight, kv, true)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -183,8 +184,8 @@ impl Fleet {
             if let Some(kv) = kv {
                 c.args(["--kv", kv]).arg("--sqlite-path").arg(sp.join(format!("n{n}/kv.db")));
             }
-            if pool {
-                c.arg("--pool");
+            if !pool {
+                c.arg("--no-pool");
             }
             let child = spawn_logged("comp-host", &mut c, &sp.join(format!("n{n}.log")));
             host_pids.push(child.0.id());
