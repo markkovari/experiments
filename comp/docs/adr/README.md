@@ -3,8 +3,12 @@
 Numbered, dated, one decision each, superseded rather than edited. Format and rules
 in [ADR-0001](0001-use-adrs.md).
 
-`PLATFORM.md` remains the narrative plan and the phase order; these own the forks
-inside it. Where they disagree, the ADR wins.
+For the platform **as it stands** — what runs, what is measured, what is missing —
+read [`../CURRENT.md`](../CURRENT.md). These are how it got there.
+
+`PLATFORM.md` is the original narrative plan, kept for its reasoning: its central bet
+was falsified on wasmCloud and then won by owning the host (ADR-0023), so its
+conclusions no longer describe what runs. Where anything disagrees, the ADR wins.
 
 **[`../WHY.md`](../WHY.md) is the value proposition, with the measurements behind it.**
 **Read [ADR-0019](0019-the-density-number.md) for the numbers themselves.** The
