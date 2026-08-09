@@ -72,6 +72,11 @@ pub struct Publish {
     pub id: String,
     #[serde(default)]
     pub visibility: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// ADR-0007: deprecation, never deletion.
+    #[serde(default)]
+    pub deprecated: Option<bool>,
 }
 
 /// `POST /api/components/satisfies`

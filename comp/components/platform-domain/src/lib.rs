@@ -84,6 +84,7 @@ impl Guest for Component {
             (Method::Get, ["api", "components"]) => components_list(&request),
             (Method::Post, ["api", "components", "publish"]) => component_publish(&request),
             (Method::Post, ["api", "components", "satisfies"]) => components_satisfies(&request),
+            (Method::Get, ["api", "market"]) => market_search(&request, &query),
 
             (Method::Post, ["api", "deployments"]) => deployment_create(&request, &query),
             (Method::Get, ["api", "deployments"]) => deployments_list(&request),
@@ -283,13 +284,37 @@ fn may_use(p: &auth_types::Principal, row: &Value) -> bool {
             .map(|(k, v)| policy::Attr { key: (*k).to_string(), value: (*v).to_string() })
             .collect()
     };
-    let principal = attrs(&[("tenant", &p.tenant), ("subject", &p.subject)]);
+    // A row uploaded before orgs existed has none; it belongs to its uploader's
+    // personal org, which is named after the tenant. Guessing anything else would
+    // silently widen who can see old rows.
+    let row_org = row["org"].as_str().unwrap_or_else(|| row["tenant"].as_str().unwrap_or_default());
     let resource = attrs(&[
         ("tenant", row["tenant"].as_str().unwrap_or_default()),
+        ("org", row_org),
         ("visibility", visibility_of(row)),
     ]);
-    // Default is deny; the rule set is seeded at first use.
-    policy::enforce("catalog", "use", &principal, &resource)
+    let decide = |org: &str| {
+        let principal = attrs(&[("tenant", &p.tenant), ("subject", &p.subject), ("org", org)]);
+        // Default is deny; the rule set is seeded at first use.
+        policy::enforce("catalog", "use", &principal, &resource)
+    };
+
+    // Own and public need no org, so they are decided once and cheaply.
+    if decide("") {
+        return true;
+    }
+    if visibility_of(row) != "org" {
+        return false;
+    }
+    // A person can belong to several organisations (ADR-0031), and `policy:guard`
+    // compares single values — so the decision is asked once per membership rather
+    // than reshaping the rule engine around a list. Nobody is in enough orgs for
+    // this to matter, and the alternative is a hand-rolled conditional next to a
+    // policy engine that exists to avoid exactly that.
+    orgs::memberships(&p.subject)
+        .iter()
+        .filter_map(|m| m["id"].as_str().map(String::from))
+        .any(|org| org == row_org && decide(&org))
 }
 
 /// The rules that implement ADR-0007's visibility table. Registered idempotently.
@@ -307,6 +332,24 @@ fn seed_policy() {
             effect: policy::Effect::Allow,
             priority: 10,
             conditions: vec![cond("principal.tenant", policy::Op::Eq, "resource.tenant")],
+        },
+        // anyone in the same ORGANISATION may use an org-visible row.
+        //
+        // ADR-0007's middle row, specified and never built — so `visibility: "org"`
+        // was accepted by publish and then did nothing, which is worse than
+        // rejecting it: the uploader believes they shared something.
+        //
+        // Between own (10) and public (5): more specific than "anyone", less than
+        // "mine", which is the order the table describes.
+        policy::Rule {
+            id: "catalog-org".into(),
+            action: "use".into(),
+            effect: policy::Effect::Allow,
+            priority: 7,
+            conditions: vec![
+                cond("resource.visibility", policy::Op::Eq, "org"),
+                cond("principal.org", policy::Op::Eq, "resource.org"),
+            ],
         },
         // anyone may use a public row
         policy::Rule {
@@ -517,8 +560,15 @@ fn component_add(request: &IncomingRequest, query: &Map<String, Value>) -> Outco
     // what it calls `wasi:config` for. Nobody else can know, and a platform that
     // guesses would either reject valid config or accept typos.
     let config_keys = declared_config(query);
+    // Which organisation owns this component. `?org=` or the uploader's personal
+    // one, and membership is checked here rather than after the row exists.
+    let org = match orgs::acting(&p.subject, &personal_org(&p), query, orgs::Role::Member) {
+        Ok((org, _)) => org,
+        Err((code, msg)) => return Outcome::Err(code, msg),
+    };
     let doc = json!({
         "key": key, "id": id, "tenant": p.tenant, "uploader": p.subject,
+        "org": org,
         "visibility": "private", "uploaded": now(),
         "config_keys": config_keys,
         // The OCI reference. Empty until the push step records a digest — and a
@@ -555,7 +605,8 @@ fn components_list(request: &IncomingRequest) -> Outcome {
         .filter(|row| may_use(&p, row))
         .map(|row| {
             json!({
-                "id": row["id"], "tenant": row["tenant"], "visibility": row["visibility"],
+                "id": row["id"], "tenant": row["tenant"], "org": row["org"],
+                "visibility": row["visibility"],
                 "uploaded": row["uploaded"], "digest": row["digest"],
                 "deployable": row["digest"].as_str().unwrap_or("").starts_with("sha256:"),
                 "surface": row["surface"],
@@ -568,6 +619,74 @@ fn components_list(request: &IncomingRequest) -> Outcome {
         })
         .collect();
     Outcome::Json(200, json!({ "components": rows }).to_string())
+}
+
+/// Everything this caller may use, filtered.
+///
+/// `?q=` matches the id or description; `?iface=` matches an EXPORT, because that is
+/// the question someone actually has — "who can fill this gap in my graph" — and it
+/// is the same match the 422 uses to suggest candidates. `?org=` narrows to one
+/// organisation.
+///
+/// Substring and set matching over rows the catalogue listing already loads. No
+/// search engine, no index: a catalogue of this size does not need one, and adding
+/// one would be inventing an answer to a question nobody has asked yet.
+/// ponytail: linear scan; add an index when the catalogue outgrows a page.
+fn market_search(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome {
+    let Some(p) = caller(request) else {
+        return Outcome::Err(401, "no session".into());
+    };
+    seed_policy();
+    let want = |k: &str| {
+        query.get(k).and_then(|v| v.as_str()).unwrap_or_default().trim().to_lowercase()
+    };
+    let (q, iface, org) = (want("q"), want("iface"), want("org"));
+
+    let rows: Vec<Value> = records::list_records(CATALOG, 500, "")
+        .map(|page| page.entries)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok())
+        // Visibility first, always. A search that filtered afterwards would let a
+        // caller learn a private component exists by how many results came back.
+        .filter(|r| may_use(&p, r))
+        .filter(|r| {
+            if q.is_empty() {
+                return true;
+            }
+            let id = r["id"].as_str().unwrap_or_default().to_lowercase();
+            let desc = r["description"].as_str().unwrap_or_default().to_lowercase();
+            id.contains(&q) || desc.contains(&q)
+        })
+        .filter(|r| {
+            if iface.is_empty() {
+                return true;
+            }
+            r["surface"]["exports"]
+                .as_array()
+                .map(|a| {
+                    a.iter().any(|x| {
+                        x["raw"].as_str().unwrap_or_default().to_lowercase().contains(&iface)
+                    })
+                })
+                .unwrap_or(false)
+        })
+        .filter(|r| org.is_empty() || r["org"].as_str().unwrap_or_default().to_lowercase() == org)
+        .map(|r| {
+            json!({
+                "id": r["id"], "tenant": r["tenant"], "org": r["org"],
+                "visibility": r["visibility"], "description": r["description"],
+                "deprecated": r["deprecated"].as_bool().unwrap_or(false),
+                "uploaded": r["uploaded"], "digest": r["digest"],
+                "deployable": r["digest"].as_str().unwrap_or("").starts_with("sha256:"),
+                "config_keys": r["config_keys"],
+                // The surface is the point of a marketplace listing: what it exports
+                // is what someone is shopping for.
+                "surface": r["surface"],
+            })
+        })
+        .collect();
+    Outcome::Json(200, json!({ "components": rows, "count": rows.len() }).to_string())
 }
 
 fn component_publish(request: &IncomingRequest) -> Outcome {
@@ -594,6 +713,17 @@ fn component_publish(request: &IncomingRequest) -> Outcome {
     match find_one(CATALOG, "key", &key) {
         Some((rec, rev, mut row)) if row["tenant"] == json!(p.tenant) => {
             row["visibility"] = json!(visibility);
+            // Optional, and only overwritten when given: a publish that changes
+            // visibility should not silently erase a description.
+            if let Some(d) = b["description"].as_str() {
+                row["description"] = json!(d);
+            }
+            // ADR-0007: deprecation, never deletion. A component someone deployed
+            // must keep resolving, so the strongest thing an author can do is say
+            // "do not start anything new with this".
+            if let Some(d) = b["deprecated"].as_bool() {
+                row["deprecated"] = json!(d);
+            }
             match records::update(CATALOG, &rec, &row.to_string(), rev) {
                 Ok(_) => Outcome::Json(200, row.to_string()),
                 Err(_) => Outcome::Err(409, "revision conflict — retry".into()),
