@@ -318,6 +318,62 @@ fn seed_policy() {
     let _ = policy::set_rules("catalog", &rules);
 }
 
+/// `grace-period-secs!,retries` -> `[{key, required}]`.
+fn declared_config(query: &Map<String, Value>) -> Vec<Value> {
+    query
+        .get("config")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| match s.strip_suffix('!') {
+            Some(k) => json!({ "key": k, "required": true }),
+            None => json!({ "key": s, "required": false }),
+        })
+        .collect()
+}
+
+/// Check one component's config against the keys its uploader declared.
+///
+/// Two errors, and both name what to do about it. An unknown key is almost always a
+/// typo, so the message lists the legal ones — the difference between "rejected" and
+/// "you wrote `grace-period-sec`, it is `grace-period-secs`". A missing required key
+/// is named outright, because the alternative is a component that starts and then
+/// fails on its first request in front of a user.
+///
+/// A component that declared nothing accepts nothing: silence means "reads no
+/// config", not "reads anything". Deny by omission, as everywhere else here.
+fn check_config(id: &str, row: &Value, given: &Map<String, Value>) -> Result<(), String> {
+    let declared: Vec<(&str, bool)> = row["config_keys"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|d| {
+                    Some((d["key"].as_str()?, d["required"].as_bool().unwrap_or(false)))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let legal: Vec<&str> = declared.iter().map(|(k, _)| *k).collect();
+    for key in given.keys() {
+        if !legal.contains(&key.as_str()) {
+            return Err(if legal.is_empty() {
+                format!("`{id}` declares no config keys, so it cannot take `{key}`")
+            } else {
+                format!("`{id}` has no config key `{key}` — it takes {legal:?}")
+            });
+        }
+    }
+    for (key, required) in &declared {
+        if *required && !given.contains_key(*key) {
+            return Err(format!("`{id}` requires config `{key}`, which is not set"));
+        }
+    }
+    Ok(())
+}
+
 fn component_add(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome {
     let Some(p) = caller(request) else {
         return Outcome::Err(401, "no session".into());
@@ -353,9 +409,17 @@ fn component_add(request: &IncomingRequest, query: &Map<String, Value>) -> Outco
     if blob::put(BIN, &key, &bytes, "application/wasm").is_err() {
         return Outcome::Err(500, "could not stage the component bytes".into());
     }
+    // What config this component reads, declared by whoever uploaded it:
+    // `?config=grace-period-secs!,retries` — a trailing `!` marks it required.
+    //
+    // The uploader is the right person to ask: they own the component and can see
+    // what it calls `wasi:config` for. Nobody else can know, and a platform that
+    // guesses would either reject valid config or accept typos.
+    let config_keys = declared_config(query);
     let doc = json!({
         "key": key, "id": id, "tenant": p.tenant, "uploader": p.subject,
         "visibility": "private", "uploaded": now(),
+        "config_keys": config_keys,
         // The OCI reference. Empty until the push step records a digest — and a
         // deployment cannot render without one (ADR-0006).
         "oci_ref": "",
@@ -394,6 +458,11 @@ fn components_list(request: &IncomingRequest) -> Outcome {
                 "uploaded": row["uploaded"], "digest": row["digest"],
                 "deployable": row["digest"].as_str().unwrap_or("").starts_with("sha256:"),
                 "surface": row["surface"],
+                // What config this component reads, so a caller can render a form
+                // and fill it in before deploying instead of discovering the keys
+                // from a 422. Null on rows uploaded before declarations existed,
+                // which reads correctly as "declared nothing".
+                "config_keys": row["config_keys"],
             })
         })
         .collect();
@@ -888,6 +957,18 @@ fn resolve_parts(
         ));
     }
 
+    // `{"id": "gate", "config": {"grace-period-secs": "5"}}` on the graph node.
+    // Read once here so both strategies get the same treatment.
+    let given_config = |id: &str| -> Map<String, Value> {
+        doc["nodes"]
+            .as_array()
+            .and_then(|a| {
+                a.iter().find(|n| n["id"].as_str() == Some(id)).and_then(|n| n["config"].as_object())
+            })
+            .cloned()
+            .unwrap_or_default()
+    };
+
     let part_of = |row: &Value| -> Result<Part, Outcome> {
         let surface = surface_from(&row["surface"]);
         let digest = row["digest"].as_str().unwrap_or_default().to_string();
@@ -900,8 +981,25 @@ fn resolve_parts(
                 ),
             ));
         }
+        // Refused HERE, before anything is built or composed: a config error is the
+        // author's to fix and costs nothing to find, while the same mistake reaching
+        // a node becomes a component that starts and then fails in front of a user.
+        let id = row["id"].as_str().unwrap_or_default().to_string();
+        let given = given_config(&id);
+        if let Err(why) = check_config(&id, row, &given) {
+            return Err(Outcome::Err(422, why));
+        }
         Ok(Part {
-            name: row["id"].as_str().unwrap_or_default().to_string(),
+            name: id,
+            config: given
+                .iter()
+                .map(|(k, v)| {
+                    // Values are strings on the wire: `wasi:config/store` hands the
+                    // guest a string, so a number here would be a lie about what the
+                    // component will actually read.
+                    (k.clone(), v.as_str().map(String::from).unwrap_or_else(|| v.to_string()))
+                })
+                .collect(),
             digest,
             host_imports: surface
                 .host_imports
@@ -963,8 +1061,38 @@ fn resolve_parts(
                 return Err(Outcome::Err(500, "could not stage the composed artifact".into()));
             }
 
+            // A fused artifact is ONE component with one `wasi:config/store`, so the
+            // graph's configs merge into a single namespace. That makes a key used by
+            // two components with different values genuinely ambiguous — there is no
+            // "whose" about it once wac has composed them — so it is refused rather
+            // than resolved by whichever iterated last.
+            let mut merged: std::collections::BTreeMap<String, (String, String)> =
+                std::collections::BTreeMap::new();
+            for row in &rows {
+                let id = row["id"].as_str().unwrap_or_default().to_string();
+                let given = given_config(&id);
+                if let Err(why) = check_config(&id, row, &given) {
+                    return Err(Outcome::Err(422, why));
+                }
+                for (k, v) in &given {
+                    let val = v.as_str().map(String::from).unwrap_or_else(|| v.to_string());
+                    if let Some((other, prev)) = merged.get(k) {
+                        if *prev != val {
+                            return Err(Outcome::Err(
+                                422,
+                                format!(
+                                    "fused: `{other}` and `{id}` both set config `{k}`, to different values — a fused artifact has ONE config namespace, so deploy linked or make them agree"
+                                ),
+                            ));
+                        }
+                    }
+                    merged.insert(k.clone(), (id.clone(), val));
+                }
+            }
+
             let mut part = Part {
                 name: fused_id.clone(),
+                config: merged.into_iter().map(|(k, (_, v))| (k, v)).collect(),
                 digest: String::new(),
                 host_imports: Vec::new(),
                 nested_instances: 0,
@@ -1398,3 +1526,75 @@ fn emit(response_out: ResponseOutparam, result: Outcome) {
 }
 
 bindings::export!(Component with_types_in bindings);
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    fn row(keys: &[(&str, bool)]) -> Value {
+        json!({
+            "id": "gate",
+            "config_keys": keys
+                .iter()
+                .map(|(k, r)| json!({ "key": k, "required": r }))
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    fn given(pairs: &[(&str, &str)]) -> Map<String, Value> {
+        pairs.iter().map(|(k, v)| (k.to_string(), json!(v))).collect()
+    }
+
+    #[test]
+    fn a_declaration_marks_required_keys_with_a_bang() {
+        let q: Map<String, Value> =
+            [("config".to_string(), json!("grace-period-secs!, retries"))].into_iter().collect();
+        let got = declared_config(&q);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0], json!({ "key": "grace-period-secs", "required": true }));
+        assert_eq!(got[1], json!({ "key": "retries", "required": false }), "no bang, not required");
+        // An absent `?config=` is not an error; it declares nothing.
+        assert!(declared_config(&Map::new()).is_empty());
+    }
+
+    #[test]
+    fn a_typo_is_refused_and_the_message_lists_the_legal_keys() {
+        // THE error ADR-0010 promised. "Rejected" is useless; "you wrote
+        // grace-period-sec, it takes grace-period-secs" is the whole value.
+        let err = check_config("gate", &row(&[("grace-period-secs", false)]),
+                               &given(&[("grace-period-sec", "5")]))
+            .unwrap_err();
+        assert!(err.contains("grace-period-sec"), "{err}");
+        assert!(err.contains("grace-period-secs"), "the legal key must be offered: {err}");
+    }
+
+    #[test]
+    fn a_missing_required_key_is_named() {
+        let err = check_config("gate", &row(&[("token", true)]), &given(&[])).unwrap_err();
+        assert!(err.contains("token"), "{err}");
+        // Optional keys may be omitted, or the declaration would be pointless.
+        check_config("gate", &row(&[("token", false)]), &given(&[])).unwrap();
+    }
+
+    #[test]
+    fn a_component_that_declares_nothing_accepts_nothing() {
+        // Silence means "reads no config", not "reads anything" — deny by omission,
+        // as everywhere else here. The message has to say so, because an empty list
+        // of legal keys reads as a bug otherwise.
+        let err = check_config("gate", &json!({ "id": "gate" }), &given(&[("anything", "1")]))
+            .unwrap_err();
+        assert!(err.contains("declares no config keys"), "{err}");
+        // ...and giving it nothing is still fine.
+        check_config("gate", &json!({ "id": "gate" }), &given(&[])).unwrap();
+    }
+
+    #[test]
+    fn a_full_and_correct_config_passes() {
+        check_config(
+            "gate",
+            &row(&[("token", true), ("retries", false)]),
+            &given(&[("token", "abc"), ("retries", "3")]),
+        )
+        .unwrap();
+    }
+}
