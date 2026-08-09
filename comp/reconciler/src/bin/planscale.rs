@@ -90,7 +90,7 @@ fn main() {
     let cfg = Cfg::default();
 
     println!("\n=== plan() over the whole world, converged ===\n");
-    println!("  nodes   apps  insts │  cold ms  steady ms │ inv KiB/node  read MiB/pass │ cmds");
+    println!("  nodes   apps  insts │  cold ms  steady ms  parse ms recheck │ inv KiB/node  read MiB/pass │ cmds");
     for &nodes in &node_counts {
         for &apps in &app_counts {
             let (desired, observed) = world(nodes, apps);
@@ -114,6 +114,31 @@ fn main() {
                 })
                 .collect();
             runs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            // What the loop pays BEFORE plan() even runs: pull every snapshot and
+            // parse it. Polling re-does this every pass; a watched mirror would do
+            // it once per change. Measured, because "read the whole world each
+            // pass" only matters if reading is expensive next to planning.
+            let wire: Vec<Vec<u8>> =
+                observed.iter().map(|n| serde_json::to_vec(n).unwrap()).collect();
+            let t = Instant::now();
+            for raw in &wire {
+                std::hint::black_box(serde_json::from_slice::<NodeInventory>(raw).unwrap());
+            }
+            let parse = t.elapsed().as_secs_f64() * 1000.0;
+            // And what it costs to notice nothing changed. A snapshot is
+            // identical between passes unless the node did something, so hashing
+            // the bytes and reusing the previous parse is the same answer for a
+            // fraction of the work — without a watch protocol, and without giving
+            // up the TTL expiry that read_all's absence-is-death depends on.
+            let t = Instant::now();
+            for raw in &wire {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                raw.hash(&mut h);
+                std::hint::black_box(h.finish());
+            }
+            let recheck = t.elapsed().as_secs_f64() * 1000.0;
+
             let insts: usize = observed.iter().map(|n| n.instances.len()).sum();
             let biggest =
                 observed.iter().map(|n| serde_json::to_vec(n).unwrap().len()).max().unwrap_or(0);
@@ -121,7 +146,7 @@ fn main() {
                 observed.iter().map(|n| serde_json::to_vec(n).unwrap().len()).sum();
 
             println!(
-                "  {nodes:5}  {apps:5}  {insts:5} │ {cold:8.2} {:9.2}  │ {:12.1}  {:13.2} │ {:4}",
+                "  {nodes:5}  {apps:5}  {insts:5} │ {cold:8.2} {:9.2} {parse:9.2} {recheck:7.2} │ {:12.1}  {:13.2} │ {:4}",
                 runs[2],
                 biggest as f64 / 1024.0,
                 total as f64 / (1024.0 * 1024.0),
