@@ -101,6 +101,9 @@ struct Cell {
     shed: u64,
     failed: u64,
     first_error: Option<String>,
+    statuses: std::collections::BTreeMap<u16, u64>,
+    first_refusal: Option<String>,
+    refusal_window: Option<(f64, f64)>,
     shared: usize,
     loaded_from_disk: usize,
     compiled: usize,
@@ -256,6 +259,20 @@ fn run_cell(
     // Spread across every app, not just the first: one hot app and thirty-one idle
     // ones is a different measurement from thirty-two in use.
     let hosts: Vec<String> = (0..apps).map(|a| format!("app{a}.matrix.test")).collect();
+    // Wait for the DOOR, not just the host. The host reporting an instance
+    // started says nothing about the ingress having refreshed its route table,
+    // and it refreshes on a timer — so load beginning a moment too early meets an
+    // ingress that correctly answers "no replica of that is placed". Measured:
+    // 12 851 spurious 503s in one run and none in the next, from the same binary.
+    // That is the harness racing the platform, and it read as shedding.
+    if !args.direct {
+        for h in &hosts {
+            anyhow::ensure!(
+                fleet.serves(h, Duration::from_secs(60)),
+                "the ingress never served {h}"
+            );
+        }
+    }
     let door = if args.direct {
         fleet.host_port(1).context("no host port to send load at")?
     } else {
@@ -303,6 +320,24 @@ fn run_cell(
     }
     let loaded_mib = rss_mib(pid);
     let report = load.stop();
+    // When something refused, say what the FLEET was doing at the time. A refusal
+    // count plus a status code still cannot distinguish "the platform declined
+    // load" from "the platform briefly lost track of a healthy node".
+    if !report.statuses.is_empty() {
+        let log = fleet.node_log("n1");
+        let beats = log.lines().filter(|l| l.contains("heartbeat")).count();
+        let rec = fleet.reconciler_log();
+        eprintln!(
+            "    diagnosis: host heartbeat complaints={beats}, reconciler stop commands={}",
+            rec.lines().filter(|l| l.contains("stop")).count()
+        );
+        for l in log.lines().filter(|l| l.contains("heartbeat")).take(3) {
+            eprintln!("      host: {l}");
+        }
+        for l in rec.lines().filter(|l| l.contains("stop") || l.contains("unschedulable")).take(3) {
+            eprintln!("      reconciler: {l}");
+        }
+    }
     let elapsed = args.seconds as f64;
     let (shared, loaded_from_disk, compiled) = fleet.module_arrivals(1);
     Ok(Cell {
@@ -323,6 +358,9 @@ fn run_cell(
         shed: report.shed,
         failed: report.failed,
         first_error: report.first_error.clone(),
+        statuses: report.statuses.clone(),
+        first_refusal: report.first_refusal.clone(),
+        refusal_window: report.refusal_window,
         shared,
         loaded_from_disk,
         compiled,
@@ -395,6 +433,16 @@ fn report(cells: &[Cell], args: &Args) {
         );
     }
 
+    for c in cells.iter().filter(|c| !c.statuses.is_empty()) {
+        let by: Vec<String> = c.statuses.iter().map(|(k, v)| format!("{k}x{v}")).collect();
+        println!("\n  non-2xx at apps={}: {}", c.apps, by.join(" "));
+        if let Some(r) = &c.first_refusal {
+            println!("    first said: {r}");
+        }
+        if let Some((a, b)) = c.refusal_window {
+            println!("    between {a:.1}s and {b:.1}s into the run");
+        }
+    }
     for c in cells.iter().filter(|c| c.failed > 0) {
         if let Some(e) = &c.first_error {
             println!("\n  {} transport failures at apps={}: {e}", c.failed, c.apps);

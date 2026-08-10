@@ -135,12 +135,13 @@ constraint at this density — something else will be, and nobody knows what yet
 - One component, one node, two machines. 30 545 rps is this Mac's number for
   this 0.4 MB component, not a platform constant — the Pi does 4 709 for the
   same work.
-- The Pi's ingress cell shed 3 412 requests where the Mac's shed none: 12
-  workers is still above what four cores absorb through the extra hop, and
-  `max_inflight` did what it exists to do. The rps figure counts only the 2xx.
-- The 200-app cell is 200 apps IDLE but for the traffic to one of them. Nobody
-  has measured 200 apps all busy at once, which is a different question and the
-  one a real tenant mix would ask.
+- The Pi's ingress cell shed 3 412 requests where the Mac's shed none. Attributed
+  here to four cores and a fixed `max_inflight`, and that was **wrong** — see
+  [ADR-0060](0060-the-ingress-forgot-what-it-was-told.md), which found the Mac
+  sheds too and traced it to an activation the ingress never published.
+- The 200-app cell is 200 apps IDLE but for the traffic to one of them — and that
+  was a limitation of the load generator, not a choice. ADR-0060 fixes it: 200
+  apps all busy do 31 972 rps.
 - The memory backend is node-local, so 30 545 rps is not available to a spread
   stateful app. It is the runtime's ceiling with storage removed, which is what
   makes it the right number for judging runtime changes — and the wrong number to

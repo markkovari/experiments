@@ -51,6 +51,8 @@ hyper-util = { version = "0.1", features = ["tokio", "client-legacy", "http1"] }
 http-body-util = "0.1"
 bytes = "1"
 
+async-trait = "0.1"
+
 [dev-dependencies]
 
 [[bin]]

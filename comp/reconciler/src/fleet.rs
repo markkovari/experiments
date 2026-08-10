@@ -63,6 +63,18 @@ pub struct Report {
     pub ok: u64,
     pub shed: u64,
     pub failed: u64,
+    /// How many of each non-2xx status came back. A bare "shed" count cannot
+    /// distinguish the ingress declining load from a route that is not there
+    /// yet, and those want opposite fixes.
+    pub statuses: std::collections::BTreeMap<u16, u64>,
+    /// What the first refusal SAID. There is more than one 503 in the ingress —
+    /// "nothing is placed" and "everything is saturated" are opposite problems —
+    /// and a status code alone cannot tell them apart.
+    pub first_refusal: Option<String>,
+    /// Seconds into the run when the first and last refusal happened. Start-of-run
+    /// clustering means the harness raced something; spread across the window
+    /// means the platform is genuinely refusing.
+    pub refusal_window: Option<(f64, f64)>,
     /// What the first transport failure said. A count alone reads as "the system
     /// refused"; the text is what distinguishes that from the LOAD GENERATOR
     /// running out of sockets, which is a fact about the harness.
@@ -101,7 +113,7 @@ impl OpenLoad {
     pub fn stop(self) -> Report {
         self.stop.store(true, Ordering::Relaxed);
         let mut all =
-            Report { due: 0, ok: 0, shed: 0, failed: 0, first_error: None, latencies: Vec::new() };
+            Report { due: 0, ok: 0, shed: 0, failed: 0, statuses: Default::default(), first_refusal: None, refusal_window: None, first_error: None, latencies: Vec::new() };
         for t in self.threads {
             if let Ok(r) = t.join() {
                 all.due += r.due;
@@ -109,6 +121,14 @@ impl OpenLoad {
                 all.shed += r.shed;
                 all.failed += r.failed;
                 all.first_error = all.first_error.or(r.first_error);
+                all.first_refusal = all.first_refusal.or(r.first_refusal);
+                all.refusal_window = match (all.refusal_window, r.refusal_window) {
+                    (Some(a), Some(b)) => Some((a.0.min(b.0), a.1.max(b.1))),
+                    (a, b) => a.or(b),
+                };
+                for (code, n) in r.statuses {
+                    *all.statuses.entry(code).or_default() += n;
+                }
                 all.latencies.extend(r.latencies);
             }
         }
@@ -466,8 +486,13 @@ impl Fleet {
     /// `port` picks the door: the ingress, or a host directly — the only way to
     /// find out what the extra hop costs.
     ///
-    /// `hosts` are cycled across workers so every app gets traffic; one hot app
-    /// and thirty-one idle ones is a different measurement from thirty-two in use.
+    /// Every worker walks the WHOLE host list, one app per request, rather than
+    /// pinning to one app for the run.
+    ///
+    /// Pinning meant `min(workers, apps)` apps ever saw traffic: the 200-app cell
+    /// on the Pi had twelve workers, so 188 of the apps were idle and the cell
+    /// measured one app's throughput with 199 spectators. Rotating is what makes
+    /// "200 apps busy" a thing the harness can express at all.
     /// `rate: None` is a CLOSED loop — every worker sends again as soon as its
     /// own response lands. Then there is no schedule to be late against, so
     /// latency is timed from the send and the percentiles describe a system whose
@@ -488,14 +513,18 @@ impl Fleet {
         let mut threads = Vec::new();
         for w in 0..workers {
             let (stop, url) = (stop.clone(), url.clone());
-            let host = hosts[w % hosts.len()].clone();
+            // Offset per worker so they do not march through the list in step,
+            // which would make every app hot and cold together instead of all of
+            // them warm.
+            let hosts = hosts.to_vec();
+            let mut turn = w;
             threads.push(std::thread::spawn(move || {
                 let client = reqwest::blocking::Client::builder()
                     .timeout(Duration::from_secs(10))
                     .build()
                     .unwrap();
                 let mut r =
-                    Report { due: 0, ok: 0, shed: 0, failed: 0, first_error: None, latencies: Vec::new() };
+                    Report { due: 0, ok: 0, shed: 0, failed: 0, statuses: Default::default(), first_refusal: None, refusal_window: None, first_error: None, latencies: Vec::new() };
                 let start = Instant::now();
                 let mut n: u32 = 0;
                 while !stop.load(Ordering::Relaxed) {
@@ -511,9 +540,11 @@ impl Fleet {
                     };
                     n += 1;
                     r.due += 1;
+                    let host = &hosts[turn % hosts.len()];
+                    turn += 1;
                     let res = client
                         .post(&url)
-                        .header("host", &host)
+                        .header("host", host)
                         .json(&serde_json::json!({
                             "key": "m", "capacity": 100_000_000u64, "refill": 100_000_000u64
                         }))
@@ -523,7 +554,19 @@ impl Fleet {
                             r.ok += 1;
                             r.latencies.push(due.elapsed().as_micros() as u64);
                         }
-                        Ok(_) => r.shed += 1,
+                        Ok(resp) => {
+                            r.shed += 1;
+                            *r.statuses.entry(resp.status().as_u16()).or_default() += 1;
+                            let at = start.elapsed().as_secs_f64();
+                            r.refusal_window = Some(match r.refusal_window {
+                                Some((f, _)) => (f, at),
+                                None => (at, at),
+                            });
+                            if r.first_refusal.is_none() {
+                                r.first_refusal =
+                                    Some(resp.text().unwrap_or_default().trim().to_string());
+                            }
+                        }
                         Err(e) => {
                             r.failed += 1;
                             r.first_error.get_or_insert_with(|| e.to_string());
