@@ -86,6 +86,7 @@ single-component app should be a container, not a wasm workload.
 | [0062](0062-what-a-real-application-asks-the-store-for.md) | What a real application asks the store for: 264 reads per write | accepted as a measurement; **shows [0059](0059-the-read-mirror-lost.md)'s rejection was workload-specific** |
 | [0063](0063-a-ttl-is-cheaper-than-coherence.md) | A TTL is cheaper than coherence — durable reads at in-memory speed | accepted, built, **off by default**; answers [0059](0059-the-read-mirror-lost.md) |
 | [0064](0064-the-cross-node-cost-of-the-read-cache.md) | The cross-node cost of the read cache, measured | accepted as a measurement; **discharges the gap [0063](0063-a-ttl-is-cheaper-than-coherence.md) named** |
+| [0065](0065-the-cache-defeats-the-revision-guard.md) | The cache defeats the revision guard — a measured lost update | accepted as a finding; **why [0063](0063-a-ttl-is-cheaper-than-coherence.md) stays off by default** |
 
 ## The shape these add up to
 

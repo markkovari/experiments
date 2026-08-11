@@ -1,9 +1,9 @@
 # The platform as it stands
 
 What runs today, what is measured, and what is honestly missing. The reasoning lives
-in [64 ADRs](adr/); this page is the map.
+in [65 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0064.
+Last revised after ADR-0065.
 
 ## Shape
 
@@ -117,7 +117,7 @@ fast a dead machine is noticed), `max_inflight` (where the ingress starts sheddi
 
 ## Tests
 
-165 across four crates, `cargo nextest`. No Python anywhere in `bench/` or `e2e/`.
+167 across four crates, `cargo nextest`. No Python anywhere in `bench/` or `e2e/`.
 
 ```
 cargo build --release --manifest-path host/Cargo.toml   # tests spawn this
@@ -132,7 +132,7 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 | `reconciler/tests/coldstart.rs` | 35 ms vs 0.43 ms, and a corrupt cache recovers |
 | `reconciler/tests/secrets.rs` | one org's secrets are invisible to another by every route |
 | `reconciler/tests/reveal.rs` | a guest reveals the key it was granted, and only that one |
-| `reconciler/tests/staleness.rs` | a cached node serves another node's stale write, and heals |
+| `reconciler/tests/staleness.rs` | cross-node staleness, and the lost update it causes |
 | `reconciler/tests/ha.rs` | two ingresses, then one dies |
 | `bench/` | only what drives *other machines* — malna, bobocat, a k8s wasmCloud |
 
@@ -149,14 +149,16 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 - **The loop does not shard.** One reconciler, no leader election. A steady pass
   at 1000 nodes × 10 000 apps is 46 ms, but the pass after any fleet change is
   1.23 s and that one is `apps × nodes` (ADR-0056).
-- **The read cache is off by default, and two concurrent writers are unmeasured.**
-  `--kv-cache-ms` puts durable reads at in-memory speed (ADR-0063) by having no
-  coherence protocol at all. ADR-0064 measured what that costs across nodes: a key
-  one node writes and another reads is stale for up to the TTL, and a key a node
-  writes as well as reads cannot go stale at all. What nobody has measured is two
-  nodes WRITING one key, each holding its own cached read — a lost-update shape,
-  not a stale-read one. Until that exists the flag should stay off for anything
-  written from more than one node.
+- **The read cache can lose a write, and that is why it is off by default.**
+  `--kv-cache-ms` puts durable reads at in-memory speed (ADR-0063). ADR-0064 found
+  cross-node staleness bounded by the TTL; ADR-0065 then found something no TTL
+  bounds. `record-store::update` enforces its revision guard as a read-compare-write
+  over the same `wasi:keyvalue` the cache sits under, so a cached read makes the
+  guard agree with itself about state that no longer exists — three appends
+  accepted, two survive. The guard is not weakened, it is bypassed, and nothing in
+  it can tell a cached read from a fresh one. Every component builds concurrency on
+  those revisions. The fix is a store-native compare-and-set, which is a contract
+  change; a shorter TTL is not a fix.
 - **Conduit's `feed` is an application-level N+1** — per-article author and
   favorite enrichment, 3 940 rps against `tags`'s 14 342 before caching. Removing
   a round trip beats caching one, and this one has not been removed.

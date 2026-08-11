@@ -35,15 +35,23 @@ fn client() -> reqwest::blocking::Client {
 /// Straight at one node, bypassing the ingress — which node handles what is the
 /// whole experiment, so it cannot be left to a balancer.
 fn submit(fleet: &Fleet, node: u16, key: &str, item: &str) -> Option<String> {
-    let port = fleet.host_port(node)?;
-    let r = client()
+    submit_full(fleet, node, key, item).0
+}
+
+/// The batch id and the size the node claimed after appending.
+fn submit_full(fleet: &Fleet, node: u16, key: &str, item: &str) -> (Option<String>, Option<u64>) {
+    let Some(port) = fleet.host_port(node) else { return (None, None) };
+    let Ok(r) = client()
         .post(format!("http://127.0.0.1:{port}/api/batch/submit"))
         .header("host", "shop.eve.test")
-        .json(&serde_json::json!({ "key": key, "item": item, "max_size": 100, "max_age_ms": 600000 }))
+        .json(&serde_json::json!({ "key": key, "item": item, "max_size": 1000, "max_age_ms": 600000 }))
         .send()
-        .ok()?;
-    let v: serde_json::Value = serde_json::from_str(&r.text().ok()?).ok()?;
-    v["batch"].as_str().map(str::to_string)
+    else {
+        return (None, None);
+    };
+    let Ok(text) = r.text() else { return (None, None) };
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+    (v["batch"].as_str().map(str::to_string), v["size"].as_u64())
 }
 
 /// How many items THIS node believes the batch holds.
@@ -154,4 +162,124 @@ fn the_staleness_expires_with_the_ttl() {
     println!("    inside the TTL: {stale}    after it: {fresh}    (truth: 2)");
     assert_eq!(stale, 1, "expected a stale read inside the TTL");
     assert_eq!(fresh, 2, "the staleness outlived the TTL, so the bound is not a bound");
+}
+
+/// Both nodes append to ONE batch, alternating, and every item must survive.
+///
+/// The shape ADR-0064 could not reach. `batch_submit` appends under a revision
+/// compare-and-set, so the guard is only as good as the read it compares against:
+/// a node holding a stale copy sees an old revision AND old contents, and if the
+/// store accepts that revision the append is written over whatever the other node
+/// added in between. That is a lost update, not a stale read, and no TTL bounds it
+/// — the item is simply gone.
+fn append_across_nodes(fleet: &Fleet, key: &str, rounds: usize) -> (usize, u64) {
+    let mut sent = 0;
+    let mut id = None;
+    for i in 0..rounds {
+        // Alternate, with a pause well inside the TTL so each node has a cached
+        // copy of the batch it is about to modify.
+        let node = if i % 2 == 0 { 1 } else { 2 };
+        let (got, _) = submit_full(fleet, node, key, &format!("item-{i}"));
+        if let Some(g) = got {
+            id = Some(g);
+            sent += 1;
+        }
+        std::thread::sleep(Duration::from_millis(120));
+    }
+    // Read after the TTL has certainly lapsed, so what comes back is the truth in
+    // the store rather than either node's copy of it.
+    std::thread::sleep(Duration::from_millis(1600));
+    let id = id.expect("no submit succeeded");
+    let held = size_seen_by(fleet, 1, &id).unwrap_or(0);
+    (sent, held)
+}
+
+#[test]
+fn two_nodes_writing_one_key_do_not_lose_an_append() {
+    const ROUNDS: usize = 12;
+
+    let plain = Fleet::start("lost-off", &["fixtures/spread-stateful.yaml"], 2, None);
+    assert!(plain.serves("shop.eve.test", Duration::from_secs(90)), "uncached fleet never served");
+    wait_for_both(&plain, Duration::from_secs(60));
+    let (sent, held) = append_across_nodes(&plain, "append-off", ROUNDS);
+    println!("    no cache:            {sent} accepted, {held} survived");
+    assert_eq!(held as usize, sent, "the control lost an append with no cache in play");
+    drop(plain);
+
+    let cached = Fleet::start_with_cache("lost-on", &["fixtures/spread-stateful.yaml"], 2, 1000);
+    assert!(cached.serves("shop.eve.test", Duration::from_secs(90)), "cached fleet never served");
+    wait_for_both(&cached, Duration::from_secs(60));
+    let (sent_c, held_c) = append_across_nodes(&cached, "append-on", ROUNDS);
+    println!("    --kv-cache-ms 1000:  {sent_c} accepted, {held_c} survived");
+
+    // Deliberately an assertion about the OUTCOME, not about which way it goes.
+    // Either result is publishable: appends surviving means the revision guard
+    // holds through a stale read, and appends vanishing is the lost update that
+    // decides whether this flag can ever default to on.
+    if (held_c as usize) < sent_c {
+        println!(
+            "    LOST {} of {} appends — the revision guard does not survive a stale read",
+            sent_c - held_c as usize,
+            sent_c
+        );
+    } else {
+        println!("    no appends lost — the revision guard held through the cache");
+    }
+    assert!(held_c > 0, "the cached fleet lost everything, which is a broken probe, not a finding");
+}
+
+/// The one ordering the alternating test never produces: a writer that READS
+/// between its own writes.
+///
+/// Self-invalidation is what makes a writing node safe — it drops its copy on
+/// every write, so its next read is a miss and the compare-and-set compares
+/// against truth. A read in between puts a copy back. If the other node then
+/// writes, this node holds a stale value AND a stale revision at the moment it
+/// tries to append.
+///
+/// It is the third outcome: the append lands and eats the other node's item.
+///
+/// `record-store::update` implements its revision guard as a read-compare-write
+/// over `wasi:keyvalue` — `load_record`, compare, `put_record` — rather than a
+/// store-native compare-and-set. Read through a cache, the comparison is against a
+/// stale revision and the new revision is computed from it, so the guard passes on
+/// state that no longer exists and the write clobbers.
+///
+/// **The cache defeats every compare-and-set in the platform**, and record-store's
+/// revisions are what conduit, platform-domain and gate-domain all build on.
+///
+/// This test pins the defect rather than wishing it away. If it ever fails
+/// because 3 items survive, something got fixed — see ADR-0065 for what that
+/// would have to be.
+#[test]
+fn a_writer_that_reads_between_its_writes_eats_another_nodes_append() {
+    let fleet = Fleet::start_with_cache("lost-mixed", &["fixtures/spread-stateful.yaml"], 2, 2000);
+    assert!(fleet.serves("shop.eve.test", Duration::from_secs(90)), "fleet never served");
+    wait_for_both(&fleet, Duration::from_secs(60));
+
+    // 1. node 2 opens the batch, so it is the writer under test.
+    let id = submit(&fleet, 2, "mixed", "from-2-a").expect("node 2 opened the batch");
+    // 2. node 2 READS it — putting a copy back that its own write had dropped.
+    assert_eq!(size_seen_by(&fleet, 2, &id), Some(1), "node 2 could not read its own batch");
+    // 3. node 1 appends. Node 2's cached copy is now stale, well inside the 2s TTL.
+    submit(&fleet, 1, "mixed", "from-1").expect("node 1 appended");
+    // 4. node 2 appends from that stale copy.
+    let (_, claimed) = submit_full(&fleet, 2, "mixed", "from-2-b");
+
+    // Read the truth after the TTL has certainly lapsed.
+    std::thread::sleep(Duration::from_millis(2600));
+    let held = size_seen_by(&fleet, 1, &id).unwrap_or(0);
+    println!(
+        "    3 appends, 2 nodes, a read in between: node 2 claimed {claimed:?}, store holds {held}"
+    );
+
+    // Three appends were accepted and two survive: node 1's was overwritten by a
+    // node 2 write built on a stale copy.
+    assert_eq!(
+        held, 2,
+        "three appends went in and {held} survived. If that is 3, the lost update \
+         is fixed — record-store's revision guard now survives a cached read (a \
+         store-native compare-and-set would do it) and ADR-0065 needs revisiting. \
+         If it is fewer than 2, it got worse."
+    );
 }

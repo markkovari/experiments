@@ -81,8 +81,10 @@ from the cache for that reason, but a get/set read-modify-write across two nodes
 is not — and `/api/ratelimit` only escaped it because each node also invalidates
 locally, which does not make concurrent nodes safe, only individually consistent.
 
-That is the next measurement, and until it exists this flag should stay off for
-anything that writes from more than one node.
+That measurement is [ADR-0065](0065-the-cache-defeats-the-revision-guard.md), and
+it found a lost update: the cache does not weaken `record-store`'s revision guard,
+it bypasses it, because that guard is a read-compare-write over the same cached
+`wasi:keyvalue`.
 
 ## Repro
 
