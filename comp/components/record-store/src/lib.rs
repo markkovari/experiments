@@ -999,7 +999,54 @@ impl Guest for Component {
         if readded > 0 || pruned > 0 {
             ids_write_chunked(&bucket, &idx_key(&collection), &real)?;
         }
-        Ok(RepairReport { readded, pruned, total: real.len() as u64 })
+
+        // And the secondary indexes, which ADR-0068 left out. `find-by` and
+        // `query` read these, so an id missing from one is a record that exists,
+        // is listed, and cannot be found by the field it is indexed on — the same
+        // silent invisibility one layer down.
+        //
+        // Recomputed from the records rather than diffed: they are derived data,
+        // so rebuilding is the check and the fix at once.
+        let mut wanted: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        for (id, stored) in load_records_many(&bucket, &collection, &real)? {
+            let Ok(parsed) = serde_json::from_str::<Value>(&stored.data) else { continue };
+            for field in &stored.index_fields {
+                if let Some(v) = field_value(&parsed, field) {
+                    wanted.entry(ix_key(&collection, field, &v)).or_default().push(id.clone());
+                }
+            }
+        }
+        for ids in wanted.values_mut() {
+            ids.sort();
+            ids.dedup();
+        }
+        for (key, ids) in &wanted {
+            ids_write_chunked(&bucket, key, ids)?;
+        }
+
+        // An index key nothing points at any more. Left behind by a delete that
+        // was interrupted, or by a field whose value changed — it would keep
+        // over-matching until `find-by` re-verified it away, which costs a read
+        // per stale id forever.
+        let ix_prefix = format!("ix_{}_", sanitize(&collection));
+        let mut dropped = 0u64;
+        for k in keys.keys.iter() {
+            // Chunk keys hang off their base; rewriting the base rewrites them.
+            if !k.starts_with(&ix_prefix) || k.contains("_c0") || wanted.contains_key(k) {
+                continue;
+            }
+            ids_write_chunked(&bucket, k, &[])?;
+            dropped += 1;
+        }
+
+        Ok(RepairReport {
+            readded,
+            pruned,
+            total: real.len() as u64,
+            indexes: wanted.len() as u64,
+            indexes_dropped: dropped,
+        })
     }
 }
 

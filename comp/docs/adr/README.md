@@ -92,6 +92,7 @@ single-component app should be a container, not a wasm workload.
 | [0068](0068-the-index-was-the-lossy-part.md) | The index was the lossy part — a guarded id list, `repair`, and a corrupted `list-keys` | accepted, and built |
 | [0069](0069-what-wasmcloud-does-with-keys.md) | What wasmCloud does with keys: nothing — and what was worth taking | accepted; confirms [0068](0068-the-index-was-the-lossy-part.md), adopts their CAS backoff |
 | [0070](0070-a-rate-limit-is-not-a-record.md) | A rate limit is not a record — 85 store operations per request, then 2 | accepted, and built |
+| [0071](0071-a-captured-fetch-is-spent.md) | A captured fetch is spent — replay protection, and `repair` finished | accepted, and built |
 
 ## The shape these add up to
 

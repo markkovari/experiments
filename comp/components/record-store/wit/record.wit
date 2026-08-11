@@ -107,6 +107,14 @@ interface store {
         pruned: u64,
         /// Records the index now agrees with, after the two above.
         total: u64,
+        /// Secondary-index keys rewritten from the records — the `field = value`
+        /// lookups `find-by` and `query` use. Rebuilt wholesale rather than
+        /// diffed: they are derived from the records, so recomputing is both the
+        /// check and the fix.
+        indexes: u64,
+        /// Secondary-index keys that named a field/value combination no record
+        /// has any more, and were emptied.
+        indexes-dropped: u64,
     }
 
     /// Rebuild a collection's id index from the records themselves.

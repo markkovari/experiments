@@ -34,7 +34,9 @@ use bindings::quota::meter::meter as quota;
 use bindings::records::store::store as records;
 use bindings::wasi::clocks::wall_clock;
 use bindings::wasi::config::store as config;
+use bindings::comp::store::cas;
 use bindings::secrets::vault::vault;
+use bindings::wasi::keyvalue::store as kv;
 use bindings::wit::reflect::composer;
 use bindings::wit::reflect::inspector;
 
@@ -723,6 +725,12 @@ fn secret_fetch(request: &IncomingRequest, query: &Map<String, Value>) -> Outcom
     if token.is_empty() {
         return Outcome::Err(401, "no fetch token".into());
     }
+    // Replay protection (ADR-0071). Without it a captured fetch could be replayed
+    // against the platform for the rest of the token's life — the gap ADR-0051
+    // named and did not close.
+    if let Err(o) = claim_fetch_nonce(request) {
+        return o;
+    }
     let reference = query.get("ref").and_then(|v| v.as_str()).unwrap_or_default().to_string();
     let Ok(entry) = records::get(FETCH_TOKENS, &token) else {
         return Outcome::Err(401, "unknown fetch token".into());
@@ -1103,11 +1111,75 @@ fn internal_repair(request: &IncomingRequest, query: &Map<String, Value>) -> Out
                 "readded": r.readded,
                 "pruned": r.pruned,
                 "total": r.total,
+                "indexes": r.indexes,
+                "indexes_dropped": r.indexes_dropped,
             })
             .to_string(),
         ),
         Err(e) => Outcome::Err(500, format!("repair {collection}: {e:?}")),
     }
+}
+
+/// How far apart the host's clock and ours may be, in seconds. Narrow on purpose:
+/// it is the only thing bounding how many nonces have to be remembered, and two
+/// machines on one tailnet have no excuse for more.
+const FETCH_SKEW_SECS: u64 = 60;
+
+/// Claim this request's nonce, exactly once.
+///
+/// The check is one guarded write whose FAILURE is the answer: `cas::set` with an
+/// expected revision of 0 means "must not exist yet", so the first claim commits
+/// and every replay conflicts. No lookup, no index, no read-then-check race — the
+/// store decides, which is the whole point of ADR-0066.
+///
+/// A missing header is refused rather than waved through: an old host that does
+/// not send one is a host whose requests can be replayed, and silently accepting
+/// it would make this decoration.
+fn claim_fetch_nonce(request: &IncomingRequest) -> Result<(), Outcome> {
+    let header = |name: &str| -> String {
+        request
+            .headers()
+            .get(&name.to_string())
+            .into_iter()
+            .next()
+            .and_then(|v| String::from_utf8(v).ok())
+            .unwrap_or_default()
+    };
+    let (nonce, ts) = (header("x-fetch-nonce"), header("x-fetch-ts"));
+    if nonce.is_empty() || ts.is_empty() {
+        return Err(Outcome::Err(409, "this request carries no nonce".into()));
+    }
+    let Ok(ts) = ts.parse::<u64>() else {
+        return Err(Outcome::Err(409, "unreadable timestamp".into()));
+    };
+    let now = now();
+    if now.abs_diff(ts) > FETCH_SKEW_SECS {
+        // Outside the window the nonce set no longer proves anything, so the
+        // request is refused whether or not it is a replay.
+        return Err(Outcome::Err(409, "stale request".into()));
+    }
+    let Ok(bucket) = kv::open("default") else {
+        return Err(Outcome::Err(503, "store unavailable".into()));
+    };
+    // The timestamp is part of the key so a sweeper can drop a whole window by
+    // prefix later, and so two windows cannot collide on one nonce.
+    let key = format!("fn_{}_{}", ts / FETCH_SKEW_SECS, sanitize_key(&nonce));
+    match cas::set(&bucket, &key, b"1", 0) {
+        Ok(cas::Outcome::Committed(_)) => Ok(()),
+        Ok(cas::Outcome::Conflict(_)) => {
+            Err(Outcome::Err(409, "this request has already been used".into()))
+        }
+        Err(_) => Err(Outcome::Err(503, "store unavailable".into())),
+    }
+}
+
+/// Nonces are host-generated and already tame, but a key goes into the store and
+/// nothing that reaches a store should be trusted to be well-formed.
+fn sanitize_key(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+        .take(80)
+        .collect()
 }
 
 fn internal_ok(request: &IncomingRequest) -> bool {

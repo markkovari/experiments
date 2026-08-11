@@ -1,9 +1,9 @@
 # The platform as it stands
 
 What runs today, what is measured, and what is honestly missing. The reasoning lives
-in [70 ADRs](adr/); this page is the map.
+in [71 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0070.
+Last revised after ADR-0071.
 
 ## Shape
 
@@ -146,8 +146,10 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   public catalogue is worse than none. Private and org work.
 - **No `@version` in a catalogue key**, so visibility is per component rather than per
   version, which ADR-0007 says it should be.
-- **No in-transit wrapping or replay protection** on the secret fetch — TLS only, and
-  a captured request can be replayed until the token expires.
+- **No in-transit wrapping** on the secret fetch — TLS only. Replay is closed
+  (ADR-0071: a nonce claimed exactly once, inside a 60s window), but an attacker
+  who can read the transport still reads the plaintext. Nothing sweeps spent
+  nonces yet; they are keyed by window so a sweeper can drop one by prefix.
 - **No UI.** `POST /api/components/satisfies` answers "would this plug fit" with wac's
   real subtype check, and nothing calls it: a facility, not yet a feature.
 - **The loop does not shard.** One reconciler, no leader election. A steady pass
@@ -163,8 +165,8 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 - **A record and its indexes are still separate writes.** Both are guarded
   individually now (ADR-0068), so nothing is lost to a race, but a crash between
   them leaves them disagreeing until someone runs `repair` — and nothing detects
-  that automatically. `repair` also rebuilds only the id index, not the secondary
-  ones.
+  that automatically. `repair` rebuilds both the id index and the secondary ones
+  (ADR-0071).
 - **`list-keys` returns keys as STORED on the NATS backend**, not as the guest
   wrote them. For every component here that is identical, because they sanitize
   their own key segments; a key containing bytes that needed escaping comes back
