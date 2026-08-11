@@ -338,6 +338,14 @@ use async_nats::jetstream::kv::Store as JsStore;
 pub struct NatsKv {
     handle: tokio::runtime::Handle,
     js: async_nats::jetstream::Context,
+    /// How many copies of each bucket JetStream keeps.
+    ///
+    /// One is the default and one is a single disk holding every tenant's data.
+    /// ADR-0035 measured this fleet surviving the loss of a HOST; nothing has ever
+    /// measured it surviving the loss of the STORE, and with one replica it does
+    /// not. Three is the smallest number that tolerates losing a server, because
+    /// quorum needs a majority.
+    replicas: usize,
     /// Keyed by the bucket id the caller passes, NOT by the derived JetStream
     /// bucket name — so the hot path is a borrowed lookup with no allocation.
     /// `RwLock` because after the first request per bucket this is read-only, and
@@ -347,7 +355,7 @@ pub struct NatsKv {
 }
 
 impl NatsKv {
-    pub async fn connect(url: &str) -> Result<Self> {
+    pub async fn connect(url: &str, replicas: usize) -> Result<Self> {
         let client = async_nats::connect(url)
             .await
             .with_context(|| format!("connecting to NATS at {url}"))?;
@@ -355,6 +363,7 @@ impl NatsKv {
             handle: tokio::runtime::Handle::current(),
             js: async_nats::jetstream::new(client),
             stores: std::sync::RwLock::new(HashMap::new()),
+            replicas: replicas.max(1),
         })
     }
 
@@ -398,6 +407,10 @@ impl NatsKv {
                     .create_key_value(async_nats::jetstream::kv::Config {
                         bucket: name.clone(),
                         history: 1,
+                        // Applies to buckets created FROM NOW ON. An existing
+                        // bucket keeps whatever it was made with — `nats stream
+                        // update` or a restore with `REPLICAS=` changes those.
+                        num_replicas: self.replicas,
                         ..Default::default()
                     })
                     .await
@@ -806,13 +819,14 @@ pub async fn build(
     redis_url: &str,
     nats_url: &str,
     sqlite_path: &str,
+    replicas: usize,
 ) -> Result<std::sync::Arc<dyn KvBackend>> {
     use std::sync::Arc;
     match kind {
         "memory" => Ok(Arc::new(MemoryKv::default())),
         "redis" => Ok(Arc::new(RedisKv::connect(redis_url)?)),
         "sqlite" => Ok(Arc::new(SqliteKv::open(sqlite_path)?)),
-        "nats" => Ok(Arc::new(NatsKv::connect(nats_url).await?)),
+        "nats" => Ok(Arc::new(NatsKv::connect(nats_url, replicas).await?)),
         other => anyhow::bail!("unknown --kv backend: {other} (use memory|redis|nats|sqlite)"),
     }
 }
@@ -965,9 +979,9 @@ mod tests {
     #[tokio::test]
     async fn build_names_sqlite_and_rejects_nonsense() {
         let s = Scratch::new("build");
-        assert!(build("sqlite", "", "", &s.0).await.is_ok());
+        assert!(build("sqlite", "", "", &s.0, 1).await.is_ok());
         // `dyn KvBackend` is not Debug, so match rather than unwrap_err.
-        let err = match build("postgres", "", "", &s.0).await {
+        let err = match build("postgres", "", "", &s.0, 1).await {
             Err(e) => e.to_string(),
             Ok(_) => panic!("postgres is not a backend"),
         };

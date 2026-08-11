@@ -655,6 +655,18 @@ struct Args {
     /// otherwise, and nothing about the number changes which one an app is.
     #[arg(long, default_value = "0")]
     kv_cache_ms: u64,
+    /// How many copies of each `--kv nats` bucket JetStream keeps.
+    ///
+    /// The default of 1 is one disk holding every tenant's data. ADR-0035 measured
+    /// this fleet surviving the loss of a HOST; nothing survives the loss of the
+    /// STORE at one replica. 3 is the smallest number that tolerates losing a
+    /// server, because quorum needs a majority — and it needs a NATS cluster of at
+    /// least that many, or bucket creation simply fails.
+    ///
+    /// Applies to buckets created from now on. An existing one keeps what it was
+    /// made with; `nats stream update` or `DIR=… REPLICAS=3 just restore` moves it.
+    #[arg(long, default_value = "1")]
+    kv_replicas: usize,
 
     // ---- who this instance is -------------------------------------------
     /// Tenant this component belongs to. With `--app` it decides the store the
@@ -813,7 +825,19 @@ async fn main() -> Result<()> {
         .clone()
         .or_else(|| args.lattice_nats.clone())
         .unwrap_or_else(|| "127.0.0.1:4222".into());
-    let kv_backend: Kv = kv::build(&kv_kind, &args.redis_url, &nats_url, &sqlite_path).await?;
+    let kv_backend: Kv =
+        kv::build(&kv_kind, &args.redis_url, &nats_url, &sqlite_path, args.kv_replicas).await?;
+    // Said once, loudly, because the failure it describes is total and silent
+    // until the day it happens.
+    if kv_kind == "nats" && args.kv_replicas < 3 {
+        eprintln!(
+            "comp-host: WARNING --kv nats with {} replica(s). Every bucket this node \
+             creates has that many copies, so losing the server that holds them loses \
+             the data. --kv-replicas 3 against a 3-server NATS cluster is the smallest \
+             arrangement that survives one loss; `just backup` is the floor either way.",
+            args.kv_replicas
+        );
+    }
     // The profiler ends up OUTSIDE the cache, so it keeps counting what the guest
     // asked for rather than what survived the cache. That is what makes a cached
     // run comparable to an uncached one — the demand is the same number in both —

@@ -1,9 +1,9 @@
 # The platform as it stands
 
 What runs today, what is measured, and what is honestly missing. The reasoning lives
-in [66 ADRs](adr/); this page is the map.
+in [67 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0066.
+Last revised after ADR-0067.
 
 ## Shape
 
@@ -72,6 +72,7 @@ Every number below is from a run recorded in an ADR, not an estimate.
 | inventory snapshot ceiling | ~50 000 instances per node, zstd'd ([0058](adr/0058-snapshots-compress-and-parses-are-reused.md)) |
 | scale to zero and back | parked at 0, served in 49 ms, parked again in 5 s ([0042](adr/0042-scale-to-zero-and-back.md)) |
 | vs wasmCloud 2.5.2, same component | 3.6× on the Mac, 2.3× on a Pi ([0039](adr/0039-comp-versus-wasmcloud.md)) |
+| losing the STORE server at `--kv-replicas 3` | 0 errors, state intact, leader re-elected ([0067](adr/0067-one-copy-is-not-a-backup.md)) |
 | a real app's store mix, under load | 99.6% reads, **264 reads per write** ([0062](adr/0062-what-a-real-application-asks-the-store-for.md)) |
 | reads a perfect cache would serve | 99.8%, working set 1 926 keys ([0062](adr/0062-what-a-real-application-asks-the-store-for.md)) |
 | durable reads with `--kv-cache-ms 1000` | 99.7% served; NATS reaches the in-memory numbers ([0063](adr/0063-a-ttl-is-cheaper-than-coherence.md)) |
