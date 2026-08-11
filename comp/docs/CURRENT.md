@@ -1,9 +1,9 @@
 # The platform as it stands
 
 What runs today, what is measured, and what is honestly missing. The reasoning lives
-in [68 ADRs](adr/); this page is the map.
+in [69 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0068.
+Last revised after ADR-0069.
 
 ## Shape
 
@@ -166,6 +166,8 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   wrote them. For every component here that is identical, because they sanitize
   their own key segments; a key containing bytes that needed escaping comes back
   escaped. Making it reversible renames every key already written (ADR-0068).
+  wasmCloud's provider does no encoding at all and lets NATS reject what it will
+  not take — a different trade, checked rather than assumed (ADR-0069).
 - **Conduit's `feed` is an application-level N+1** — per-article author and
   favorite enrichment, 3 940 rps against `tags`'s 14 342 before caching. Removing
   a round trip beats caching one, and this one has not been removed.

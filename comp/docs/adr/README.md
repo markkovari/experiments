@@ -90,6 +90,7 @@ single-component app should be a container, not a wasm workload.
 | [0066](0066-the-guard-moves-into-the-store.md) | The guard moves into the store — `comp:store/cas` | accepted, and built; **fixes [0065](0065-the-cache-defeats-the-revision-guard.md)** |
 | [0067](0067-one-copy-is-not-a-backup.md) | One copy is not a backup — replication and a restore that works | accepted, and built; first measurement of surviving the loss of the STORE |
 | [0068](0068-the-index-was-the-lossy-part.md) | The index was the lossy part — a guarded id list, `repair`, and a corrupted `list-keys` | accepted, and built |
+| [0069](0069-what-wasmcloud-does-with-keys.md) | What wasmCloud does with keys: nothing — and what was worth taking | accepted; confirms [0068](0068-the-index-was-the-lossy-part.md), adopts their CAS backoff |
 
 ## The shape these add up to
 

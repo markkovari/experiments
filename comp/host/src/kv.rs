@@ -315,6 +315,10 @@ impl KvBackend for RedisKv {
     }
 }
 
+/// Base interval for the compare-and-set retry backoff, in milliseconds. The same
+/// 5ms wasmCloud's NATS keyvalue provider uses, for the same reason.
+const CAS_BACKOFF_MS: u64 = 5;
+
 /// What an unconfigured `--kv-replicas` aims for. Three is the smallest number
 /// that survives losing a server, because quorum needs a majority (ADR-0067).
 pub const DEFAULT_REPLICAS: usize = 3;
@@ -541,7 +545,16 @@ impl KvBackend for NatsKv {
         let s = self.store_for(bucket.as_str())?;
         let k = Self::safe_key(key);
         self.block(async move {
-            for _ in 0..32 {
+            for attempt in 0..32u32 {
+                // Exponential backoff between attempts, which wasmCloud's own NATS
+                // KV provider does and this did not: an immediate retry loop turns
+                // contention on one key into a thundering herd, where every loser
+                // re-reads and re-collides at full speed. First attempt is
+                // immediate; the rest wait 5ms, 10ms, 20ms… (ADR-0069).
+                if attempt > 0 {
+                    let backoff = CAS_BACKOFF_MS.saturating_mul(1 << attempt.min(6));
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
+                }
                 let current = s.entry(&k).await.ok().flatten();
                 let (n, rev) = match &current {
                     Some(e) if !e.value.is_empty() => (
