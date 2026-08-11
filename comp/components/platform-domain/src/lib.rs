@@ -109,6 +109,7 @@ impl Guest for Component {
             (Method::Get, ["api", "internal", "artifact"]) => internal_artifact(&request, &query),
             // The seam the push step calls once an artifact is in the registry.
             (Method::Post, ["api", "internal", "pushed"]) => internal_pushed(&request),
+            (Method::Post, ["api", "internal", "repair"]) => internal_repair(&request, &query),
             _ => Outcome::Err(404, "not_found".into()),
         };
         emit(response_out, outcome);
@@ -1070,6 +1071,42 @@ fn internal_pushed(request: &IncomingRequest) -> Outcome {
             Outcome::Json(200, json!({ "key": key, "digest": row["digest"] }).to_string())
         }
         None => Outcome::Err(404, "not_found".into()),
+    }
+}
+
+/// Rebuild a collection's id index from the records themselves (ADR-0068).
+///
+/// The platform's own collections are the ones whose loss hurts most — the
+/// catalogue, deployments, orgs — and until this route existed an index that had
+/// dropped an id was permanent: the record was still in the store and no longer
+/// in any listing, with nothing able to put it back.
+///
+/// Internal, not a user route. It scans the whole bucket, and "rebuild the index"
+/// is an operator action even when it is safe — which it is: it converges on what
+/// the records say, so running it twice reports zero the second time.
+///
+/// A tenant's app has its own records in its own bucket and must expose its own;
+/// this one can only reach the platform's.
+fn internal_repair(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome {
+    if !internal_ok(request) {
+        return Outcome::Err(401, "internal endpoint".into());
+    }
+    let collection = query.get("collection").and_then(|v| v.as_str()).unwrap_or_default();
+    if collection.is_empty() {
+        return Outcome::Err(422, "?collection=<name> required".into());
+    }
+    match records::repair(collection) {
+        Ok(r) => Outcome::Json(
+            200,
+            json!({
+                "collection": collection,
+                "readded": r.readded,
+                "pruned": r.pruned,
+                "total": r.total,
+            })
+            .to_string(),
+        ),
+        Err(e) => Outcome::Err(500, format!("repair {collection}: {e:?}")),
     }
 }
 

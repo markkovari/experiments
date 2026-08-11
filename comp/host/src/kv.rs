@@ -499,7 +499,24 @@ impl KvBackend for NatsKv {
                 Ok(mut stream) => {
                     while let Some(k) = stream.next().await {
                         if let Ok(k) = k {
-                            out.push(unescape(&k));
+                            // Returned exactly as stored, NOT decoded. `safe_key`
+                            // leaves `_` literal and also uses it to introduce an
+                            // escape, so the encoding is not reversible: decoding
+                            // turned `rec_orgs_01KZS…` into `rec_orgs\x01KZS…`,
+                            // and every record key is that shape because a ULID
+                            // starts with digits. Nine components list keys, and
+                            // all of them were being handed corrupted names on this
+                            // backend (ADR-0068).
+                            //
+                            // A key made only of the characters `safe_key` passes
+                            // through — which is every key the components in this
+                            // repo build, since they sanitize their own segments —
+                            // is byte-identical here. One containing bytes that had
+                            // to be escaped comes back in escaped form, which is a
+                            // wart and is not corruption. Making it truly reversible
+                            // means changing `safe_key`, and that renames every key
+                            // already written.
+                            out.push(k);
                         }
                     }
                 }
@@ -615,26 +632,10 @@ impl KvBackend for NatsKv {
     }
 }
 
-/// Reverse of `NatsKv::safe_key`.
-fn unescape(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'_' && i + 2 < bytes.len() {
-            if let Ok(b) =
-                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
-            {
-                out.push(b);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).to_string()
-}
+// There is deliberately no `unescape` here any more. `safe_key` is not injective
+// — `_` is both a literal and the escape introducer — so no decoder can be right,
+// and the one that used to live here silently corrupted every key it was given
+// (ADR-0068). The tests below pin the ambiguity so nobody adds it back.
 
 // ---- sqlite ---------------------------------------------------------------
 // One file, one table, `(bucket, key)` as the primary key. The point of it is the
@@ -869,6 +870,23 @@ pub async fn build(
 mod tests {
     use super::*;
 
+    /// The reason `list_keys` hands back stored names rather than decoded ones.
+    ///
+    /// Two DIFFERENT keys encode to the same NATS key, so a decoder cannot know
+    /// which one it is looking at. It used to guess, and it guessed wrong on the
+    /// shape every record key has.
+    #[test]
+    fn the_nats_key_encoding_cannot_be_reversed() {
+        let literal = "rec_orgs_01KZS84N77";
+        // A key that genuinely contains the byte 0x01 escapes to the same thing.
+        let escaped = "rec_orgs\u{1}KZS84N77";
+        assert_eq!(
+            NatsKv::safe_key(literal),
+            NatsKv::safe_key(escaped),
+            "if these ever differ the encoding became reversible and list_keys can decode again"
+        );
+    }
+
     /// Backends are handed a host-built id, never a guest string — that is the
     /// whole point of the type. Tests reach for the same constructor.
     fn bkt(name: &str) -> BucketId {
@@ -1037,13 +1055,28 @@ mod tests {
         assert!(!SqliteKv::open(&s.0).unwrap().shared(), "one file per node is not one store");
     }
 
+    /// This test used to assert that escaping round-trips, and it passed — because
+    /// every example it chose dodged the one shape that breaks. `a_b` has a single
+    /// character after the underscore, so the decoder left it alone; `rec_orgs_01K`
+    /// has two hex digits, and the decoder ate them. That is the shape of every
+    /// record key in the platform (ADR-0068).
+    ///
+    /// So the property is narrower than it looked: a key built from characters NATS
+    /// already accepts is stored verbatim, which is what makes `list_keys` handing
+    /// back stored names correct for every component in this repo.
     #[test]
-    fn nats_keys_survive_a_round_trip_through_escaping() {
-        // NATS KV keys are restricted to [-/_=.a-zA-Z0-9]; guest keys are arbitrary.
-        // A key that does not come back is a record that silently disappears.
-        for key in ["plain", "with space", "a/b", "sess:abc-123", "emoji-\u{1f600}", "a_b", "="] {
-            let round = unescape(&NatsKv::safe_key(key));
-            assert_eq!(round, key, "{key:?} did not survive escaping");
+    fn a_key_of_legal_characters_is_stored_verbatim() {
+        for key in ["plain", "a_b", "rec_orgs_01KZS84N77", "idx_orgs", "sess-abc.123", "="] {
+            assert_eq!(NatsKv::safe_key(key), key, "{key:?} was altered on the way in");
         }
+    }
+
+    /// And a key that needs escaping comes back in escaped form rather than wrong.
+    #[test]
+    fn a_key_needing_escapes_is_escaped_not_corrupted() {
+        assert_eq!(NatsKv::safe_key("with space"), "with_20space");
+        assert_eq!(NatsKv::safe_key("a/b"), "a_2Fb");
+        // The wart, said out loud: `list_keys` hands this back as `with_20space`.
+        // Not the original, and not something else's name either.
     }
 }

@@ -40,7 +40,9 @@ mod bindings;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use bindings::exports::records::store::store::{Entry, Filter, Guest, Page, StoreError};
+use bindings::exports::records::store::store::{
+    Entry, Filter, Guest, Page, RepairReport, StoreError,
+};
 use bindings::wasi::clocks::wall_clock;
 use bindings::comp::store::cas;
 use bindings::wasi::keyvalue::batch;
@@ -285,6 +287,38 @@ fn ids_set_many(bucket: &kv::Bucket, writes: Vec<(String, Vec<u8>)>) -> Result<(
         .map_err(|e| StoreError::BackendUnavailable(format!("set-many: {e:?}")))
 }
 
+/// A chunk together with the revision it is at, for a guarded rewrite.
+///
+/// An absent chunk reads as `(0, [])`, which is what `cas::set` wants for "must
+/// not exist yet" — so creating the first chunk and rewriting the hundredth are
+/// the same code path.
+fn ids_read_chunk_rev(bucket: &kv::Bucket, key: &str) -> Result<(u64, Vec<String>), StoreError> {
+    match cas::get(bucket, key) {
+        Ok(Some(v)) => {
+            let ids = serde_json::from_slice(&v.value)
+                .map_err(|e| StoreError::BackendUnavailable(format!("corrupt chunk {key}: {e}")))?;
+            Ok((v.revision, ids))
+        }
+        Ok(None) => Ok((0, Vec::new())),
+        Err(e) => Err(StoreError::BackendUnavailable(format!("cas get chunk: {e:?}"))),
+    }
+}
+
+/// Rewrite a chunk only if nothing else has. `false` means someone else did, and
+/// the caller has to re-read and redo its edit on top of theirs.
+fn ids_write_chunk_guarded(
+    bucket: &kv::Bucket,
+    key: &str,
+    ids: &[String],
+    expected: u64,
+) -> Result<bool, StoreError> {
+    match cas::set(bucket, key, &enc(&ids.to_vec())?, expected) {
+        Ok(cas::Outcome::Committed(_)) => Ok(true),
+        Ok(cas::Outcome::Conflict(_)) => Ok(false),
+        Err(e) => Err(StoreError::BackendUnavailable(format!("cas set chunk: {e:?}"))),
+    }
+}
+
 fn ids_load(bucket: &kv::Bucket, base: &str) -> Result<IdList, StoreError> {
     match bucket.get(base) {
         Ok(Some(bytes)) => {
@@ -301,16 +335,6 @@ fn ids_load(bucket: &kv::Bucket, base: &str) -> Result<IdList, StoreError> {
         }
         Ok(None) => Ok(IdList::Absent),
         Err(e) => Err(StoreError::BackendUnavailable(format!("get id list: {e:?}"))),
-    }
-}
-
-fn ids_read_chunk(bucket: &kv::Bucket, key: &str) -> Result<Vec<String>, StoreError> {
-    match bucket.get(key) {
-        Ok(Some(bytes)) => serde_json::from_slice(&bytes)
-            .map_err(|e| StoreError::BackendUnavailable(format!("corrupt chunk {key}: {e}"))),
-        // manifest points at a missing chunk (best-effort drift): treat empty.
-        Ok(None) => Ok(Vec::new()),
-        Err(e) => Err(StoreError::BackendUnavailable(format!("get chunk: {e:?}"))),
     }
 }
 
@@ -456,83 +480,117 @@ fn chunk_index_for(m: &Manifest, id: &str) -> usize {
 
 /// Insert `id`, keeping the list sorted and deduped. Touches one chunk (two
 /// on a split) + the manifest, written in one set-many.
+/// Insert `id` into the sorted list, without losing anybody else's.
+///
+/// The chunk is where ids actually live, so it is the write that must not clobber
+/// — and it used to: two concurrent inserts landing in one chunk both read it,
+/// both rewrote it, and one id vanished. Nothing noticed, because `get` and
+/// `find-by` read records directly; only `list`, `count` and `query` page over
+/// this, so the record was still there and simply stopped being listed. That is
+/// indistinguishable from data loss for whoever is looking (ADR-0068).
+///
+/// Now the chunk rewrite is guarded by its revision and a loser re-reads and
+/// redoes its insert on top of the winner's. The MANIFEST is still a plain write:
+/// it holds routing metadata derived from the chunks (`first`, `count`), and
+/// `ids_read_all` concatenates every chunk the manifest names, so drift there
+/// costs ordering, never membership — and `just repair` rebuilds it from the
+/// records, which are authoritative.
 fn ids_insert(bucket: &kv::Bucket, base: &str, id: &str) -> Result<(), StoreError> {
-    let mut m = match ids_load(bucket, base)? {
-        IdList::Absent => Manifest::default(),
-        IdList::Legacy(mut v) => {
-            // one-time conversion: fold the insert into the chunked rewrite.
-            match v.binary_search_by(|x| x.as_str().cmp(id)) {
-                Ok(_) => return Ok(()),
-                Err(pos) => v.insert(pos, id.to_string()),
+    for _ in 0..CAS_TRIES {
+        let mut m = match ids_load(bucket, base)? {
+            IdList::Absent => Manifest::default(),
+            IdList::Legacy(mut v) => {
+                // one-time conversion: fold the insert into the chunked rewrite.
+                match v.binary_search_by(|x| x.as_str().cmp(id)) {
+                    Ok(_) => return Ok(()),
+                    Err(pos) => v.insert(pos, id.to_string()),
+                }
+                return ids_write_chunked(bucket, base, &v);
             }
-            return ids_write_chunked(bucket, base, &v);
+            IdList::Chunked(m) => m,
+        };
+        if m.chunks.is_empty() {
+            return ids_write_chunked(bucket, base, &[id.to_string()]);
         }
-        IdList::Chunked(m) => m,
-    };
-    if m.chunks.is_empty() {
-        return ids_write_chunked(bucket, base, &[id.to_string()]);
+        let ci = chunk_index_for(&m, id);
+        let ckey = chunk_key(base, m.chunks[ci].seq);
+        let (crev, mut ids) = ids_read_chunk_rev(bucket, &ckey)?;
+        match ids.binary_search_by(|x| x.as_str().cmp(id)) {
+            Ok(_) => return Ok(()), // already present
+            Err(pos) => ids.insert(pos, id.to_string()),
+        }
+        let mut extra = Vec::new();
+        if ids.len() > CHUNK_MAX {
+            // split: right half moves to a fresh seq, manifest entry follows.
+            let right = ids.split_off(ids.len() / 2);
+            let new_seq = m.chunks.iter().map(|c| c.seq).max().unwrap_or(0) + 1;
+            m.chunks[ci].first = ids[0].clone();
+            m.chunks[ci].count = ids.len() as u64;
+            m.chunks.insert(
+                ci + 1,
+                ChunkMeta { seq: new_seq, first: right[0].clone(), count: right.len() as u64 },
+            );
+            extra.push((chunk_key(base, new_seq), enc(&right)?));
+        } else {
+            m.chunks[ci].first = ids[0].clone();
+            m.chunks[ci].count = ids.len() as u64;
+        }
+        // The guarded one. Everything after this point only runs if we won.
+        if !ids_write_chunk_guarded(bucket, &ckey, &ids, crev)? {
+            continue;
+        }
+        extra.push((base.to_string(), enc(&m)?));
+        return ids_set_many(bucket, extra);
     }
-    let ci = chunk_index_for(&m, id);
-    let ckey = chunk_key(base, m.chunks[ci].seq);
-    let mut ids = ids_read_chunk(bucket, &ckey)?;
-    match ids.binary_search_by(|x| x.as_str().cmp(id)) {
-        Ok(_) => return Ok(()), // already present
-        Err(pos) => ids.insert(pos, id.to_string()),
-    }
-    let mut writes = Vec::new();
-    if ids.len() > CHUNK_MAX {
-        // split: right half moves to a fresh seq, manifest entry follows.
-        let right = ids.split_off(ids.len() / 2);
-        let new_seq = m.chunks.iter().map(|c| c.seq).max().unwrap_or(0) + 1;
-        m.chunks[ci].first = ids[0].clone();
-        m.chunks[ci].count = ids.len() as u64;
-        m.chunks.insert(
-            ci + 1,
-            ChunkMeta { seq: new_seq, first: right[0].clone(), count: right.len() as u64 },
-        );
-        writes.push((chunk_key(base, new_seq), enc(&right)?));
-    } else {
-        m.chunks[ci].first = ids[0].clone();
-        m.chunks[ci].count = ids.len() as u64;
-    }
-    writes.push((ckey, enc(&ids)?));
-    writes.push((base.to_string(), enc(&m)?));
-    ids_set_many(bucket, writes)
+    Err(StoreError::BackendUnavailable(format!(
+        "id index {base}: {CAS_TRIES} attempts all lost the race"
+    )))
 }
 
 /// Remove `id`. Touches one chunk + the manifest; an emptied chunk is dropped.
 fn ids_remove(bucket: &kv::Bucket, base: &str, id: &str) -> Result<(), StoreError> {
-    let mut m = match ids_load(bucket, base)? {
-        IdList::Absent => return Ok(()),
-        IdList::Legacy(mut v) => {
-            let before = v.len();
-            v.retain(|x| x != id);
-            if v.len() != before {
-                return ids_write_chunked(bucket, base, &v);
+    for _ in 0..CAS_TRIES {
+        let mut m = match ids_load(bucket, base)? {
+            IdList::Absent => return Ok(()),
+            IdList::Legacy(mut v) => {
+                let before = v.len();
+                v.retain(|x| x != id);
+                if v.len() != before {
+                    return ids_write_chunked(bucket, base, &v);
+                }
+                return Ok(());
             }
+            IdList::Chunked(m) => m,
+        };
+        if m.chunks.is_empty() {
             return Ok(());
         }
-        IdList::Chunked(m) => m,
-    };
-    if m.chunks.is_empty() {
-        return Ok(());
-    }
-    let ci = chunk_index_for(&m, id);
-    let ckey = chunk_key(base, m.chunks[ci].seq);
-    let mut ids = ids_read_chunk(bucket, &ckey)?;
-    let Ok(pos) = ids.binary_search_by(|x| x.as_str().cmp(id)) else {
-        return Ok(());
-    };
-    ids.remove(pos);
-    if ids.is_empty() {
-        m.chunks.remove(ci);
-        let _ = bucket.delete(&ckey); // best-effort; manifest no longer points at it
-        ids_set_many(bucket, vec![(base.to_string(), enc(&m)?)])
-    } else {
+        let ci = chunk_index_for(&m, id);
+        let ckey = chunk_key(base, m.chunks[ci].seq);
+        let (crev, mut ids) = ids_read_chunk_rev(bucket, &ckey)?;
+        let Ok(pos) = ids.binary_search_by(|x| x.as_str().cmp(id)) else {
+            return Ok(());
+        };
+        ids.remove(pos);
+        if ids.is_empty() {
+            // Deleting the chunk is not guarded — a delete cannot lose an id it is
+            // removing, and a concurrent insert into a chunk this call is emptying
+            // is a lost id either way. The manifest stops naming it, and `repair`
+            // is what reconciles the two if that race ever lands.
+            m.chunks.remove(ci);
+            let _ = bucket.delete(&ckey);
+            return ids_set_many(bucket, vec![(base.to_string(), enc(&m)?)]);
+        }
+        if !ids_write_chunk_guarded(bucket, &ckey, &ids, crev)? {
+            continue;
+        }
         m.chunks[ci].first = ids[0].clone();
         m.chunks[ci].count = ids.len() as u64;
-        ids_set_many(bucket, vec![(ckey, enc(&ids)?), (base.to_string(), enc(&m)?)])
+        return ids_set_many(bucket, vec![(base.to_string(), enc(&m)?)]);
     }
+    Err(StoreError::BackendUnavailable(format!(
+        "id index {base}: {CAS_TRIES} attempts all lost the race"
+    )))
 }
 
 // ---- id index + secondary indexes over the chunked lists ------------------
@@ -878,6 +936,70 @@ impl Guest for Component {
         let bucket = open()?;
         // manifest chunk counts sum — one kv read regardless of size.
         ids_count(&bucket, &idx_key(&collection))
+    }
+
+    /// Rebuild the id index from the records (ADR-0068).
+    ///
+    /// The records are authoritative and the index is an acceleration layer over
+    /// them, so a disagreement is always resolvable in one direction: scan what
+    /// exists, make the index say that. This is the only call that can bring back
+    /// a record which had gone missing from `list` — and until now nothing could,
+    /// which meant an index that dropped an id was permanent.
+    ///
+    /// It scans the whole bucket. That is fine for an operator action and would
+    /// not be on a request path, which is why it is a separate call rather than
+    /// something `list` does when it smells trouble.
+    fn repair(collection: String) -> Result<RepairReport, StoreError> {
+        let bucket = open()?;
+        let prefix = format!("rec_{}_", sanitize(&collection));
+
+        // Every record that actually exists, by id, straight from the keyspace.
+        let keys = bucket
+            .list_keys(None)
+            .map_err(|e| StoreError::BackendUnavailable(format!("list-keys: {e:?}")))?;
+        let mut real: Vec<String> = keys
+            .keys
+            .iter()
+            .filter_map(|k| k.strip_prefix(&prefix))
+            .map(|id| id.to_string())
+            .collect();
+        // The index is sorted, and `sanitize` is identity for a ULID, so the
+        // stored suffix IS the id. Sorting here makes the comparison below a
+        // set difference rather than a quadratic scan.
+        real.sort();
+        real.dedup();
+
+        let indexed = read_id_index(&bucket, &collection)?;
+        let indexed_set: std::collections::BTreeSet<&String> = indexed.iter().collect();
+        let real_set: std::collections::BTreeSet<&String> = real.iter().collect();
+
+        let missing: Vec<&String> = real_set.difference(&indexed_set).copied().collect();
+        let dangling: Vec<&String> = indexed_set.difference(&real_set).copied().collect();
+        let (readded, pruned) = (missing.len() as u64, dangling.len() as u64);
+
+        // Refuse to act on a scan that found nothing while the index is populated.
+        //
+        // Learned the hard way: `list_keys` was handing back corrupted names on the
+        // NATS backend, so the scan came back empty, and the first version of this
+        // happily pruned a perfectly good index down to zero — a repair that
+        // destroys what it was called to protect. Any scan that disagrees with the
+        // index THAT completely is far more likely to be a broken scan than a
+        // collection that lost every record at once, so it stops and says so.
+        if real.is_empty() && !indexed.is_empty() {
+            return Err(StoreError::BackendUnavailable(format!(
+                "repair {collection}: the scan found no records while the index names {}. \
+                 Refusing to rewrite it — this is a broken scan, not an empty collection.",
+                indexed.len()
+            )));
+        }
+
+        // Rewrite the whole list rather than patching it id by id: the answer is
+        // already computed, and one rewrite cannot half-succeed the way a hundred
+        // guarded inserts can.
+        if readded > 0 || pruned > 0 {
+            ids_write_chunked(&bucket, &idx_key(&collection), &real)?;
+        }
+        Ok(RepairReport { readded, pruned, total: real.len() as u64 })
     }
 }
 
