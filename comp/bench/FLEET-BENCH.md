@@ -75,14 +75,15 @@ is geography and chattiness, in that order.
 ## 4. The hot key is the app using the wrong primitive
 
 22 rps on one key is not the platform being slow, it is twenty writers doing
-optimistic concurrency on one value across a quorum. `gate-domain`'s token bucket
-is a **get-then-set** through `record-store`, when `wasi:keyvalue/atomics`
-already offers `increment` — one round trip, no retry loop, and the only atomic
-operation the contract has. A rate limiter is the exact workload that primitive
-exists for.
+optimistic concurrency on one value across a quorum — on top of a request that
+was making **85 store operations**, because the bucket was stored as a `record`
+with indexes nothing reads.
 
-Worth fixing in the component, and it is a good example of the measurement
-pointing at the app rather than the runtime.
+> The original text here proposed `wasi:keyvalue/atomics::increment` as the fix.
+> That was wrong: a token bucket carries `(tokens, updated_ms)` and refills
+> against the clock, which an integer increment cannot express. The right fix was
+> `comp:store/cas` on one key — 85 operations down to 2, and 4.8× throughput.
+> See [ADR-0070](../docs/adr/0070-a-rate-limit-is-not-a-record.md).
 
 ## 5. A correction: the CAS backoff is not the clear win claimed
 

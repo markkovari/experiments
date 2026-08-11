@@ -1,9 +1,9 @@
 # The platform as it stands
 
 What runs today, what is measured, and what is honestly missing. The reasoning lives
-in [69 ADRs](adr/); this page is the map.
+in [70 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0069.
+Last revised after ADR-0070.
 
 ## Shape
 
@@ -75,6 +75,7 @@ Every number below is from a run recorded in an ADR, not an estimate.
 | losing the STORE server at `--kv-replicas 3` | 0 errors, state intact, leader re-elected ([0067](adr/0067-one-copy-is-not-a-backup.md)) |
 | losing a whole MACHINE's store, 3 real machines | 0 errors, counter unbroken; the host failed over ([FLEET-BENCH](../bench/FLEET-BENCH.md)) |
 | the tailnet's own cost, request touching no storage | 41 707 rps loopback vs 1 230 over Tailscale ([FLEET-BENCH](../bench/FLEET-BENCH.md)) |
+| a rate limit stored as keyed state, not a record | 85 store ops per request → **2**, 4.8× ([0070](adr/0070-a-rate-limit-is-not-a-record.md)) |
 | a real app's store mix, under load | 99.6% reads, **264 reads per write** ([0062](adr/0062-what-a-real-application-asks-the-store-for.md)) |
 | reads a perfect cache would serve | 99.8%, working set 1 926 keys ([0062](adr/0062-what-a-real-application-asks-the-store-for.md)) |
 | durable reads with `--kv-cache-ms 1000` | 99.7% served; NATS reaches the in-memory numbers ([0063](adr/0063-a-ttl-is-cheaper-than-coherence.md)) |
