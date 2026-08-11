@@ -57,7 +57,17 @@ mod bindings {
         world: "host-imports",
         // wasmtime >=34 folded `async` + `trappable_imports` into one knob;
         // sync is the default, `trappable` keeps imports returning Result.
-        imports: { default: trappable },
+        //
+        // `reveal` is the one import that talks to the network — it fetches the
+        // plaintext from the platform on first use (ADR-0051) — so it is the one
+        // import that must not block the executor thread it runs on. A named rule
+        // REPLACES the default rather than adding to it, so `trappable` is repeated
+        // here; and an unmatched rule is a compile error, so a typo cannot silently
+        // leave this synchronous.
+        imports: {
+            default: trappable,
+            "comp:secrets/reader.reveal": async | trappable,
+        },
         with: {
             // wasmtime >=34 keys a resource as `interface.resource`, not `interface/resource`.
             "wasi:keyvalue/store.bucket": super::HostBucket,
@@ -69,6 +79,7 @@ mod bindings {
 
 use bindings::cache::store::sink as cache_sink;
 use bindings::cache::store::source as cache_source;
+use bindings::comp::secrets::reader;
 use bindings::wasi::config::store as config;
 use bindings::wasi::keyvalue::atomics;
 use bindings::wasi::keyvalue::batch;
@@ -364,6 +375,95 @@ impl config::Host for Host {
     }
 }
 
+// ---- comp:secrets/reader host impl ---------------------------------------
+//
+// The guest names a KEY; `Scope::secret` is the only way from that string to a
+// `SecretRef`, and `SecretRef` cannot be built outside `tenant.rs` (ADR-0051).
+// Same shape as buckets and links, for the third time.
+
+impl reader::HostSecret for Host {
+    /// The manifest's name for this secret, not the value. The only thing about a
+    /// secret that is safe to log, which is why it is the only thing exposed.
+    fn key(&mut self, self_: Resource<secrets::SecretHandle>) -> wasmtime::Result<String> {
+        Ok(self.table.get(&self_)?.key.clone())
+    }
+
+    fn drop(&mut self, rep: Resource<secrets::SecretHandle>) -> wasmtime::Result<()> {
+        self.table.delete(rep)?;
+        Ok(())
+    }
+}
+
+impl reader::Host for Host {
+    /// Holding a secret. `none` is "not granted", and deliberately not an error:
+    /// a component may legitimately run with an optional secret absent.
+    fn get(
+        &mut self,
+        key: String,
+    ) -> wasmtime::Result<Result<Option<Resource<secrets::SecretHandle>>, reader::SecretError>> {
+        let Some(reference) = self.scope.secret(&key).cloned() else {
+            return Ok(Ok(None));
+        };
+        let res = self.table.push(secrets::SecretHandle { key, reference })?;
+        Ok(Ok(Some(res)))
+    }
+
+    /// Reading one. The audit point, and the only path to a plaintext.
+    ///
+    /// The value is fetched on FIRST reveal, then cached for this instance — a
+    /// secret on a code path that never runs never enters this process, and an
+    /// instance is per-request anyway (ADR-0037), so the cache is short by
+    /// construction. `expired` is told apart from `unavailable` because one is a
+    /// restart and the other is a manifest problem.
+    async fn reveal(
+        &mut self,
+        s: Resource<secrets::SecretHandle>,
+    ) -> wasmtime::Result<Result<String, reader::SecretError>> {
+        let handle = self.table.get(&s)?;
+        let (key, reference) = (handle.key.clone(), handle.reference.clone());
+
+        // Audited before the value is known, so a failed read is on the record too:
+        // "which component tried to read this, and when" is asked after a leak, and
+        // the attempts matter as much as the successes. Key and identity only —
+        // never a value (ADR-0051).
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "event": "secret.reveal",
+                "tenant": self.scope.tenant,
+                "app": self.scope.app,
+                "component": self.scope.component,
+                "key": key,
+            })
+        );
+
+        if let Some(v) = self.secret_cache.get(&reference) {
+            return Ok(Ok(v.clone()));
+        }
+        match secrets::fetch(
+            &self.fetch_http,
+            &self.platform_url,
+            &self.scope.fetch_token,
+            &reference,
+        )
+        .await
+        {
+            Ok(v) => {
+                self.secret_cache.put(&reference, v.clone());
+                Ok(Ok(v))
+            }
+            Err(e) if e == "expired" => Ok(Err(reader::SecretError::Expired)),
+            // Vague on purpose: the guest learns its secret is unavailable, not
+            // which of the platform's answers produced that. The detail goes to the
+            // node's log, where an operator can act on it.
+            Err(e) => {
+                eprintln!("comp-host: {} could not read secret {key:?}: {e}", self.scope.id());
+                Ok(Err(reader::SecretError::Unavailable("the platform did not supply it".into())))
+            }
+        }
+    }
+}
+
 // ---- egress: the wasi:http outbound allow-list ---------------------------
 
 /// Outbound HTTP policy for one instance.
@@ -610,6 +710,7 @@ pub fn build_linker(engine: &Engine) -> Result<Linker<Host>> {
     config::add_to_linker::<_, HasSelf<Host>>(&mut linker, |h| h)?;
     cache_source::add_to_linker::<_, HasSelf<Host>>(&mut linker, |h| h)?;
     cache_sink::add_to_linker::<_, HasSelf<Host>>(&mut linker, |h| h)?;
+    reader::add_to_linker::<_, HasSelf<Host>>(&mut linker, |h| h)?;
     Ok(linker)
 }
 
