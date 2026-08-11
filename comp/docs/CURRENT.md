@@ -1,9 +1,9 @@
 # The platform as it stands
 
 What runs today, what is measured, and what is honestly missing. The reasoning lives
-in [61 ADRs](adr/); this page is the map.
+in [62 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0061.
+Last revised after ADR-0062.
 
 ## Shape
 
@@ -72,6 +72,8 @@ Every number below is from a run recorded in an ADR, not an estimate.
 | inventory snapshot ceiling | ~50 000 instances per node, zstd'd ([0058](adr/0058-snapshots-compress-and-parses-are-reused.md)) |
 | scale to zero and back | parked at 0, served in 49 ms, parked again in 5 s ([0042](adr/0042-scale-to-zero-and-back.md)) |
 | vs wasmCloud 2.5.2, same component | 3.6× on the Mac, 2.3× on a Pi ([0039](adr/0039-comp-versus-wasmcloud.md)) |
+| a real app's store mix, under load | 99.6% reads, **264 reads per write** ([0062](adr/0062-what-a-real-application-asks-the-store-for.md)) |
+| reads a perfect cache would serve | 99.8%, working set 1 926 keys ([0062](adr/0062-what-a-real-application-asks-the-store-for.md)) |
 
 ## Authoring an app
 
@@ -113,7 +115,7 @@ fast a dead machine is noticed), `max_inflight` (where the ingress starts sheddi
 
 ## Tests
 
-155 across four crates, `cargo nextest`. No Python anywhere in `bench/` or `e2e/`.
+158 across four crates, `cargo nextest`. No Python anywhere in `bench/` or `e2e/`.
 
 ```
 cargo build --release --manifest-path host/Cargo.toml   # tests spawn this
@@ -144,12 +146,12 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 - **The loop does not shard.** One reconciler, no leader election. A steady pass
   at 1000 nodes × 10 000 apps is 46 ms, but the pass after any fleet change is
   1.23 s and that one is `apps × nodes` (ADR-0056).
-- **Nothing caches keyvalue reads.** Each is a JetStream round trip and it is the
-  largest cost on the request path; the obvious mirror was built, measured at
-  2.3× slower on a write-heavy workload, and reverted (ADR-0059).
-- **No real application has ever been profiled**, only a benchmark component
-  chosen because it hammers storage — which is the least representative shape for
-  every caching decision above.
+- **Nothing caches keyvalue reads**, and ADR-0062 says it is now the clearest win
+  available: a real app under load is 99.6% reads, 264 reads per write, and a
+  perfect cache would serve 99.8% of them — about 59% of the request-time budget.
+  The mirror ADR-0059 reverted lost on a component that writes every request, so
+  that rejection was workload-specific. What is still unmeasured is the part that
+  killed it: cross-node coherence. One node's hit rate is demand, not a design.
 - **Cross-machine benchmarks are still unproven since the refactor** — malna and
   bobocat have not been up since. What has been checked without them: every
   `comp-bench` subcommand and flag the scripts pass still exists, as does every

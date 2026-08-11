@@ -24,6 +24,7 @@
 
 mod agent;
 mod kv;
+mod kvprofile;
 mod secrets;
 mod rpc;
 mod tenant;
@@ -596,6 +597,14 @@ struct Args {
     /// memory; this flag exists to reproduce the on-demand baseline.
     #[arg(long = "no-pool", action = clap::ArgAction::SetFalse)]
     pool: bool,
+    /// Count and time every store operation, and report on shutdown.
+    ///
+    /// For answering what a REAL application asks the store for, which is the one
+    /// input every caching decision here has been missing — all of them were
+    /// measured on a component that writes on every request (ADR-0059). Off the
+    /// request path entirely when off: the backend is handed out unwrapped.
+    #[arg(long)]
+    kv_profile: bool,
 
     // ---- who this instance is -------------------------------------------
     /// Tenant this component belongs to. With `--app` it decides the store the
@@ -754,6 +763,28 @@ async fn main() -> Result<()> {
         .or_else(|| args.lattice_nats.clone())
         .unwrap_or_else(|| "127.0.0.1:4222".into());
     let kv_backend: Kv = kv::build(&kv_kind, &args.redis_url, &nats_url, &sqlite_path).await?;
+    // Wrapped, not replaced: `shared()` and every answer come from the real backend,
+    // so a profiled run is the same run with a clock on it.
+    let profile = args.kv_profile.then(|| kvprofile::ProfileKv::wrap(kv_backend.clone()));
+    let kv_backend: Kv = match &profile {
+        Some(p) => p.clone(),
+        None => kv_backend,
+    };
+    if let Some(p) = profile.clone() {
+        // On the way out, because warm-up and steady state have different mixes and
+        // a running total is the honest summary of the whole run. SIGTERM as well as
+        // Ctrl-C: every script here stops a host with `kill`.
+        tokio::spawn(async move {
+            let mut term =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+            eprintln!("{}", p.report());
+            std::process::exit(0);
+        });
+    }
     let kv_shared = kv_backend.shared();
     if lattice_mode && !kv_shared {
         // Not fatal: a single-replica app on a node-local store is a legitimate

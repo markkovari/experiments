@@ -83,6 +83,7 @@ single-component app should be a container, not a wasm workload.
 | [0059](0059-the-read-mirror-lost.md) | The read mirror lost, 2.3× | **rejected** — the code is not in the tree |
 | [0060](0060-the-ingress-forgot-what-it-was-told.md) | The ingress forgot what it had just been told | accepted |
 | [0061](0061-the-secret-reader-was-never-linked.md) | The secret reader was never linked | accepted; **corrects [0051](0051-the-secret-reader.md)**, which said built and was half-built |
+| [0062](0062-what-a-real-application-asks-the-store-for.md) | What a real application asks the store for: 264 reads per write | accepted as a measurement; **shows [0059](0059-the-read-mirror-lost.md)'s rejection was workload-specific** |
 
 ## The shape these add up to
 
