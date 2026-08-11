@@ -1,9 +1,9 @@
 # The platform as it stands
 
 What runs today, what is measured, and what is honestly missing. The reasoning lives
-in [63 ADRs](adr/); this page is the map.
+in [64 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0063.
+Last revised after ADR-0064.
 
 ## Shape
 
@@ -117,7 +117,7 @@ fast a dead machine is noticed), `max_inflight` (where the ingress starts sheddi
 
 ## Tests
 
-163 across four crates, `cargo nextest`. No Python anywhere in `bench/` or `e2e/`.
+165 across four crates, `cargo nextest`. No Python anywhere in `bench/` or `e2e/`.
 
 ```
 cargo build --release --manifest-path host/Cargo.toml   # tests spawn this
@@ -132,6 +132,7 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 | `reconciler/tests/coldstart.rs` | 35 ms vs 0.43 ms, and a corrupt cache recovers |
 | `reconciler/tests/secrets.rs` | one org's secrets are invisible to another by every route |
 | `reconciler/tests/reveal.rs` | a guest reveals the key it was granted, and only that one |
+| `reconciler/tests/staleness.rs` | a cached node serves another node's stale write, and heals |
 | `reconciler/tests/ha.rs` | two ingresses, then one dies |
 | `bench/` | only what drives *other machines* — malna, bobocat, a k8s wasmCloud |
 
@@ -148,14 +149,14 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 - **The loop does not shard.** One reconciler, no leader election. A steady pass
   at 1000 nodes × 10 000 apps is 46 ms, but the pass after any fleet change is
   1.23 s and that one is `apps × nodes` (ADR-0056).
-- **The read cache is off by default and its cross-node cost is unmeasured.**
-  `--kv-cache-ms` puts durable reads at in-memory speed on one node (ADR-0063),
-  and it does that by having no coherence protocol at all — so a write on another
-  node stays invisible until the entry expires. That is bounded divergence on a
-  store the platform still reports as shared, which is what ADR-0027 refuses to
-  allow by accident. The conformance suite passes on one node, which proves the
-  local invalidation and nothing about a fleet. Two nodes with a writer on each
-  is the measurement nobody has taken.
+- **The read cache is off by default, and two concurrent writers are unmeasured.**
+  `--kv-cache-ms` puts durable reads at in-memory speed (ADR-0063) by having no
+  coherence protocol at all. ADR-0064 measured what that costs across nodes: a key
+  one node writes and another reads is stale for up to the TTL, and a key a node
+  writes as well as reads cannot go stale at all. What nobody has measured is two
+  nodes WRITING one key, each holding its own cached read — a lost-update shape,
+  not a stale-read one. Until that exists the flag should stay off for anything
+  written from more than one node.
 - **Conduit's `feed` is an application-level N+1** — per-article author and
   favorite enrichment, 3 940 rps against `tags`'s 14 342 before caching. Removing
   a round trip beats caching one, and this one has not been removed.

@@ -222,8 +222,10 @@ impl Fleet {
         max_inflight: Option<u32>,
         kv: Option<&str>,
     ) -> Self {
-        // Tests run what production runs: pooling on (ADR-0054).
-        Self::start_full(lattice, specs, &[], &[], nodes, max_inflight, kv, true)
+        // Tests run what production runs: pooling on (ADR-0054), read cache off
+        // (ADR-0063 — it trades cross-node freshness, so a test asserting shared
+        // state must not get it by accident).
+        Self::start_full(lattice, specs, &[], &[], nodes, max_inflight, kv, true, 0)
     }
 
     /// A fleet whose control plane holds a vault: `vault://<org>/<name>=value`.
@@ -236,7 +238,14 @@ impl Fleet {
         artifacts: &[String],
         secrets: &[String],
     ) -> Self {
-        Self::start_full(lattice, specs, artifacts, secrets, 1, None, None, true)
+        Self::start_full(lattice, specs, artifacts, secrets, 1, None, None, true, 0)
+    }
+
+    /// Every node caches reads for `cache_ms` (ADR-0063). The interesting fleet is
+    /// two or more: on one node the cache invalidates its own writes and cannot be
+    /// caught being stale.
+    pub fn start_with_cache(lattice: &str, specs: &[&str], nodes: u16, cache_ms: u64) -> Self {
+        Self::start_full(lattice, specs, &[], &[], nodes, None, None, true, cache_ms)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -249,6 +258,8 @@ impl Fleet {
         max_inflight: Option<u32>,
         kv: Option<&str>,
         pool: bool,
+        // 0 leaves the read cache off, which is what every other entry point wants.
+        cache_ms: u64,
     ) -> Self {
         let root = repo_root();
         let host_bin = std::env::var("COMP_HOST_BIN")
@@ -307,6 +318,9 @@ impl Fleet {
             }
             if !pool {
                 c.arg("--no-pool");
+            }
+            if cache_ms > 0 {
+                c.args(["--kv-cache-ms", &cache_ms.to_string()]);
             }
             let child = spawn_logged("comp-host", &mut c, &sp.join(format!("n{n}.log")));
             host_pids.push(child.0.id());
@@ -410,7 +424,7 @@ impl Fleet {
         // request pays two JetStream round trips and the number measures the bus.
         kv: Option<&str>,
     ) -> Self {
-        Self::start_full(lattice, &[spec_dir], artifacts, &[], nodes, None, kv, pool)
+        Self::start_full(lattice, &[spec_dir], artifacts, &[], nodes, None, kv, pool, 0)
     }
 
     /// The host process for node `n`, so a caller can read its RSS.
