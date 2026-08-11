@@ -1,9 +1,9 @@
 # The platform as it stands
 
 What runs today, what is measured, and what is honestly missing. The reasoning lives
-in [51 ADRs](adr/); this page is the map.
+in [61 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0059.
+Last revised after ADR-0061.
 
 ## Shape
 
@@ -46,7 +46,7 @@ Applied four times, each enforced by a private newtype rather than by review:
 | a store name (`"default"`) | `BucketId` | [0023](adr/0023-isolation-is-a-linker-boundary.md) |
 | an import interface | `InstanceId` in the link table | 0013 |
 | a config key | a value the uploader declared | [0047](adr/0047-config-is-declared-and-checked.md) |
-| a secret key | `SecretRef`, then a value it never sees | [0051](adr/0051-the-secret-reader.md) |
+| a secret key | `SecretRef`, then a value it never sees | [0051](adr/0051-the-secret-reader.md), [0061](adr/0061-the-secret-reader-was-never-linked.md) |
 
 ## What is measured
 
@@ -113,7 +113,7 @@ fast a dead machine is noticed), `max_inflight` (where the ingress starts sheddi
 
 ## Tests
 
-158 across four crates, `cargo nextest`. No Python anywhere in `bench/` or `e2e/`.
+155 across four crates, `cargo nextest`. No Python anywhere in `bench/` or `e2e/`.
 
 ```
 cargo build --release --manifest-path host/Cargo.toml   # tests spawn this
@@ -127,6 +127,7 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 | `reconciler/tests/state.rs` | two replicas share one count; node-local stores are refused |
 | `reconciler/tests/coldstart.rs` | 35 ms vs 0.43 ms, and a corrupt cache recovers |
 | `reconciler/tests/secrets.rs` | one org's secrets are invisible to another by every route |
+| `reconciler/tests/reveal.rs` | a guest reveals the key it was granted, and only that one |
 | `reconciler/tests/ha.rs` | two ingresses, then one dies |
 | `bench/` | only what drives *other machines* — malna, bobocat, a k8s wasmCloud |
 
@@ -136,9 +137,6 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   public catalogue is worse than none. Private and org work.
 - **No `@version` in a catalogue key**, so visibility is per component rather than per
   version, which ADR-0007 says it should be.
-- **The secret reader does not check references at start**, so a bad one surfaces at
-  first `reveal` rather than at start — weaker than the fail-closed rule ADR-0051
-  itself states.
 - **No in-transit wrapping or replay protection** on the secret fetch — TLS only, and
   a captured request can be replayed until the token expires.
 - **No UI.** `POST /api/components/satisfies` answers "would this plug fit" with wac's
@@ -152,5 +150,16 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 - **No real application has ever been profiled**, only a benchmark component
   chosen because it hammers storage — which is the least representative shape for
   every caching decision above.
-- **Cross-machine benchmarks are unproven since the refactor.** The scripts were
-  rewired to `comp-bench` and have not been run against malna or bobocat since.
+- **Cross-machine benchmarks are still unproven since the refactor** — malna and
+  bobocat have not been up since. What has been checked without them: every
+  `comp-bench` subcommand and flag the scripts pass still exists, as does every
+  flag they pass to `comp-host`, `comp-stub`, `comp-reconciler` and `comp-ingress`;
+  and the local `bench/tenancy/run.sh` runs clean end to end (3 nodes, both orgs on
+  every node, ~4.8k rps each). Three Justfile recipes — `shared-state`,
+  `five-nodes`, `split-graph` — called scripts deleted three commits ago and are
+  gone. The remote scripts now **fail immediately** when a machine is missing
+  (`bench/preflight.sh`): before, `ssh -f -n` failed silently and the run printed a
+  number for a fleet that never spanned two machines.
+- **Cross-node invocation (ADR-0032) has no test and no script.** `split-graph.sh`
+  was deleted with the others and nothing replaced it; `fixtures/split-graph.yaml`
+  is the input a test would take.
