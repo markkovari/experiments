@@ -73,6 +73,8 @@ Every number below is from a run recorded in an ADR, not an estimate.
 | scale to zero and back | parked at 0, served in 49 ms, parked again in 5 s ([0042](adr/0042-scale-to-zero-and-back.md)) |
 | vs wasmCloud 2.5.2, same component | 3.6× on the Mac, 2.3× on a Pi ([0039](adr/0039-comp-versus-wasmcloud.md)) |
 | losing the STORE server at `--kv-replicas 3` | 0 errors, state intact, leader re-elected ([0067](adr/0067-one-copy-is-not-a-backup.md)) |
+| losing a whole MACHINE's store, 3 real machines | 0 errors, counter unbroken; the host failed over ([FLEET-BENCH](../bench/FLEET-BENCH.md)) |
+| the tailnet's own cost, request touching no storage | 41 707 rps loopback vs 1 230 over Tailscale ([FLEET-BENCH](../bench/FLEET-BENCH.md)) |
 | a real app's store mix, under load | 99.6% reads, **264 reads per write** ([0062](adr/0062-what-a-real-application-asks-the-store-for.md)) |
 | reads a perfect cache would serve | 99.8%, working set 1 926 keys ([0062](adr/0062-what-a-real-application-asks-the-store-for.md)) |
 | durable reads with `--kv-cache-ms 1000` | 99.7% served; NATS reaches the in-memory numbers ([0063](adr/0063-a-ttl-is-cheaper-than-coherence.md)) |
@@ -171,8 +173,10 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 - **Conduit's `feed` is an application-level N+1** — per-article author and
   favorite enrichment, 3 940 rps against `tags`'s 14 342 before caching. Removing
   a round trip beats caching one, and this one has not been removed.
-- **Cross-machine benchmarks are still unproven since the refactor** — malna and
-  bobocat have not been up since. What has been checked without them: every
+- **Cross-machine benchmarks now have one real run** (`bench/FLEET-BENCH.md`:
+  three Macs, R3, a machine killed under load). What is still unproven is the
+  malna/bobocat *scripts* — they target a Linux aarch64 Pi build and were not
+  exercised by that round. What has been checked without them: every
   `comp-bench` subcommand and flag the scripts pass still exists, as does every
   flag they pass to `comp-host`, `comp-stub`, `comp-reconciler` and `comp-ingress`;
   and the local `bench/tenancy/run.sh` runs clean end to end (3 nodes, both orgs on

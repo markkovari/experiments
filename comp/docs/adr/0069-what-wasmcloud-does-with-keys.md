@@ -57,8 +57,13 @@ thundering herd: every loser re-reads and re-collides at full speed, and the
 harder the contention the worse it gets. Now backed off 5ms, 10ms, 20ms… capped,
 with the first attempt still immediate so the uncontended path is unchanged.
 
-Adopted. It is four lines and it is the difference between a retry loop and a
-retry storm.
+Adopted. **Then measured, and it is not the win this sentence originally
+claimed** — see `bench/FLEET-BENCH.md`. On one hot key at c=20 across a
+three-machine quorum, throughput is unchanged within noise; what backoff buys is
+the tail (p99 7 490 ms → 4 007 ms) at the cost of the median (p50 1 095 ms →
+1 737 ms). A defensible trade, and a different one from "prevents a retry storm".
+The original claim came from reading their source rather than from measuring this
+fleet, which is exactly the mistake this repo keeps writing ADRs about.
 
 ## What could not be taken, and why it matters
 
