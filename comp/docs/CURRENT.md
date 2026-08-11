@@ -1,9 +1,9 @@
 # The platform as it stands
 
 What runs today, what is measured, and what is honestly missing. The reasoning lives
-in [65 ADRs](adr/); this page is the map.
+in [66 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0065.
+Last revised after ADR-0066.
 
 ## Shape
 
@@ -149,16 +149,18 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 - **The loop does not shard.** One reconciler, no leader election. A steady pass
   at 1000 nodes × 10 000 apps is 46 ms, but the pass after any fleet change is
   1.23 s and that one is `apps × nodes` (ADR-0056).
-- **The read cache can lose a write, and that is why it is off by default.**
-  `--kv-cache-ms` puts durable reads at in-memory speed (ADR-0063). ADR-0064 found
-  cross-node staleness bounded by the TTL; ADR-0065 then found something no TTL
-  bounds. `record-store::update` enforces its revision guard as a read-compare-write
-  over the same `wasi:keyvalue` the cache sits under, so a cached read makes the
-  guard agree with itself about state that no longer exists — three appends
-  accepted, two survive. The guard is not weakened, it is bypassed, and nothing in
-  it can tell a cached read from a fresh one. Every component builds concurrency on
-  those revisions. The fix is a store-native compare-and-set, which is a contract
-  change; a shorter TTL is not a fix.
+- **The read cache is off by default because reads go stale, not because writes
+  are lost.** ADR-0065 measured a lost update — `record-store::update` enforced its
+  revision guard as a read-compare-write over the very `wasi:keyvalue` the cache
+  sits under — and ADR-0066 fixed it by moving the comparison into the store
+  (`comp:store/cas`, JetStream's own revision on NATS). What remains is the
+  documented trade from ADR-0064: a plain read can be up to the TTL stale, so
+  read-your-own-writes does not hold across nodes. That is a semantic to opt into.
+- **Index maintenance is still read-compare-write.** `record-store` guards the
+  record itself now; its secondary indexes are separate unguarded writes, so a
+  tight interleaving on one index key can drop or duplicate an id. Weaker than
+  losing a record — the records are authoritative and `find-by` re-verifies — and
+  it is the next thing to point `comp:store/cas` at.
 - **Conduit's `feed` is an application-level N+1** — per-article author and
   favorite enrichment, 3 940 rps against `tags`'s 14 342 before caching. Removing
   a round trip beats caching one, and this one has not been removed.

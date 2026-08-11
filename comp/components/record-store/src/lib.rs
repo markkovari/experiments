@@ -23,12 +23,16 @@
 //! `revision-conflict(current)`.
 //!
 //! Storage is `wasi:keyvalue` + `wasi:clocks` (id time) + `wasi:random` (id
-//! entropy). All index maintenance is read-modify-write, single-writer
-//! best-effort: a tight concurrent interleaving on the same index key can drop
-//! or duplicate an id, since wasi:keyvalue@0.2.0-draft exposes no
-//! compare-and-swap. The record values themselves are authoritative; the
-//! indexes are an acceleration layer that `find-by`/`query` re-verify against
-//! the records.
+//! entropy), plus `comp:store/cas` for the one operation that needs a real
+//! guard. `update` compares and writes THROUGH the store (ADR-0065) — it used to
+//! read, compare and write over three separate calls, which let a concurrent
+//! writer's record be overwritten by one that never saw it.
+//!
+//! Index maintenance is still read-modify-write, single-writer best-effort: a
+//! tight concurrent interleaving on the same index key can drop or duplicate an
+//! id. That is a weaker failure than losing a record — the record values are
+//! authoritative and `find-by`/`query` re-verify against them — and it is the
+//! next thing this primitive should be pointed at.
 
 #[allow(warnings)]
 mod bindings;
@@ -38,6 +42,7 @@ use serde_json::Value;
 
 use bindings::exports::records::store::store::{Entry, Filter, Guest, Page, StoreError};
 use bindings::wasi::clocks::wall_clock;
+use bindings::comp::store::cas;
 use bindings::wasi::keyvalue::batch;
 use bindings::wasi::keyvalue::store as kv;
 use bindings::wasi::random::random::get_random_bytes;
@@ -159,6 +164,11 @@ fn mint_ulid() -> String {
 fn open() -> Result<kv::Bucket, StoreError> {
     kv::open(BUCKET).map_err(|e| StoreError::BackendUnavailable(format!("open: {e:?}")))
 }
+
+/// How many times a guarded update re-reads and retries before giving up. The
+/// same bound `gate-domain` uses for its own CAS loop; a caller that loses forty
+/// races in a row is contending with something pathological, not unlucky.
+const CAS_TRIES: u32 = 40;
 
 /// Load + deserialize the record at `id`, `None` if absent. A corrupt stored
 /// record surfaces as `backend-unavailable` (it is our own bug, not bad input).
@@ -657,32 +667,86 @@ impl Guest for Component {
         expected_revision: u64,
     ) -> Result<Entry, StoreError> {
         let bucket = open()?;
-        let current = load_record(&bucket, &collection, &id)?.ok_or(StoreError::NotFound)?;
-
-        if expected_revision != 0 && expected_revision != current.revision {
-            return Err(StoreError::RevisionConflict(current.revision));
-        }
-
         let parsed_new = parse_object(&data)?;
+        let key = rec_key(&collection, &id);
 
-        // Re-index: drop the old field values, add the new ones. Same set of
-        // index fields as the existing record.
-        let old_parsed = serde_json::from_str::<Value>(&current.data).map_err(|e| {
-            StoreError::BackendUnavailable(format!("corrupt record {id} data: {e}"))
-        })?;
-        remove_secondary_indexes(&bucket, &collection, &id, &old_parsed, &current.index_fields)?;
+        // ADR-0065: this used to be `load_record`, compare, `put_record` — three
+        // separate keyvalue calls. Anything that changed the record in between (a
+        // second node, or a host read cache) made the comparison agree with itself
+        // about state that was already gone, and the write silently overwrote it.
+        // Measured: three appends accepted, two survived.
+        //
+        // Now the store does the comparing. `cas::get` reports the revision the
+        // store is actually at and may never be served from a cache; `cas::set`
+        // only lands if the key is still there. A writer that lost the race is told
+        // so and comes round again.
+        for _ in 0..CAS_TRIES {
+            let (store_revision, bytes) = match cas::get(&bucket, &key) {
+                Ok(Some(v)) => (v.revision, v.value),
+                Ok(None) => return Err(StoreError::NotFound),
+                Err(e) => return Err(StoreError::BackendUnavailable(format!("cas get: {e:?}"))),
+            };
+            let current: Stored = serde_json::from_slice(&bytes).map_err(|e| {
+                StoreError::BackendUnavailable(format!("corrupt record {id}: {e}"))
+            })?;
 
-        let stored = Stored {
-            data,
-            revision: current.revision + 1,
-            created: current.created,
-            updated: now(),
-            index_fields: current.index_fields,
-        };
-        put_record(&bucket, &collection, &id, &stored)?;
-        add_secondary_indexes(&bucket, &collection, &id, &parsed_new, &stored.index_fields)?;
+            // The CALLER's expectation is about the record's own revision, which is
+            // a different number from the store's — one is this component's
+            // counter, the other is the backend's sequence. Both have to hold: the
+            // first is optimistic concurrency for the app, the second is what makes
+            // the first enforceable.
+            if expected_revision != 0 && expected_revision != current.revision {
+                return Err(StoreError::RevisionConflict(current.revision));
+            }
 
-        Ok(entry_from(&id, stored))
+            let stored = Stored {
+                data: data.clone(),
+                revision: current.revision + 1,
+                created: current.created,
+                updated: now(),
+                index_fields: current.index_fields.clone(),
+            };
+            let body = serde_json::to_vec(&stored).map_err(|e| {
+                StoreError::BackendUnavailable(format!("serialize record: {e}"))
+            })?;
+
+            match cas::set(&bucket, &key, &body, store_revision) {
+                Ok(cas::Outcome::Committed(_)) => {
+                    // Indexes follow the record. Still separate writes — a crash
+                    // between them leaves an index entry pointing at an old value,
+                    // which is the pre-existing weakness ADR-0065 did not touch and
+                    // is a different problem from losing the record itself.
+                    let old_parsed = serde_json::from_str::<Value>(&current.data).map_err(|e| {
+                        StoreError::BackendUnavailable(format!("corrupt record {id} data: {e}"))
+                    })?;
+                    remove_secondary_indexes(
+                        &bucket,
+                        &collection,
+                        &id,
+                        &old_parsed,
+                        &current.index_fields,
+                    )?;
+                    add_secondary_indexes(
+                        &bucket,
+                        &collection,
+                        &id,
+                        &parsed_new,
+                        &stored.index_fields,
+                    )?;
+                    return Ok(entry_from(&id, stored));
+                }
+                // Someone else wrote between the read and the write. Re-read and
+                // try again — this is the retry the old code could not do, because
+                // it never found out.
+                Ok(cas::Outcome::Conflict(_)) => continue,
+                Err(e) => {
+                    return Err(StoreError::BackendUnavailable(format!("cas set: {e:?}")))
+                }
+            }
+        }
+        Err(StoreError::BackendUnavailable(format!(
+            "update {collection}/{id}: {CAS_TRIES} attempts all lost the race"
+        )))
     }
 
     fn delete(collection: String, id: String) -> Result<(), StoreError> {

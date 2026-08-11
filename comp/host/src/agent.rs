@@ -49,6 +49,7 @@ pub const HOST_IFACES: &[&str] = &[
     "wasi:keyvalue/batch",
     "wasi:config/store",
     "comp:secrets/reader",
+    "comp:store/cas",
 ];
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

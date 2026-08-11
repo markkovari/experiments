@@ -237,22 +237,19 @@ fn two_nodes_writing_one_key_do_not_lose_an_append() {
 /// writes, this node holds a stale value AND a stale revision at the moment it
 /// tries to append.
 ///
-/// It is the third outcome: the append lands and eats the other node's item.
+/// It used to be the third outcome. ADR-0065 measured this losing an append:
+/// `record-store::update` enforced its revision guard as a read-compare-write over
+/// `wasi:keyvalue`, so a cached read made the guard agree with itself about state
+/// that was already gone, and the write clobbered it. Three appends, two survivors.
 ///
-/// `record-store::update` implements its revision guard as a read-compare-write
-/// over `wasi:keyvalue` — `load_record`, compare, `put_record` — rather than a
-/// store-native compare-and-set. Read through a cache, the comparison is against a
-/// stale revision and the new revision is computed from it, so the guard passes on
-/// state that no longer exists and the write clobbers.
+/// ADR-0066 moved the comparison into the store — `comp:store/cas`, backed by
+/// JetStream's own revision on NATS — so the losing writer is now TOLD it lost,
+/// re-reads, and retries. Three appends, three survivors.
 ///
-/// **The cache defeats every compare-and-set in the platform**, and record-store's
-/// revisions are what conduit, platform-domain and gate-domain all build on.
-///
-/// This test pins the defect rather than wishing it away. If it ever fails
-/// because 3 items survive, something got fixed — see ADR-0065 for what that
-/// would have to be.
+/// Both halves matter and both are asserted below: node 2's append has to land
+/// (it is not enough to merely refuse it) and node 1's has to survive.
 #[test]
-fn a_writer_that_reads_between_its_writes_eats_another_nodes_append() {
+fn a_writer_that_reads_between_its_writes_cannot_eat_another_nodes_append() {
     let fleet = Fleet::start_with_cache("lost-mixed", &["fixtures/spread-stateful.yaml"], 2, 2000);
     assert!(fleet.serves("shop.eve.test", Duration::from_secs(90)), "fleet never served");
     wait_for_both(&fleet, Duration::from_secs(60));
@@ -273,13 +270,15 @@ fn a_writer_that_reads_between_its_writes_eats_another_nodes_append() {
         "    3 appends, 2 nodes, a read in between: node 2 claimed {claimed:?}, store holds {held}"
     );
 
-    // Three appends were accepted and two survive: node 1's was overwritten by a
-    // node 2 write built on a stale copy.
+    // All three survive. Two lets this pass for the wrong reason — that was the
+    // measured defect — and node 2 claiming nothing would mean its append was
+    // refused rather than retried, which is the halfway state a store-native CAS
+    // alone leaves you in until the cache also refreshes on the guarded read.
     assert_eq!(
-        held, 2,
-        "three appends went in and {held} survived. If that is 3, the lost update \
-         is fixed — record-store's revision guard now survives a cached read (a \
-         store-native compare-and-set would do it) and ADR-0065 needs revisiting. \
-         If it is fewer than 2, it got worse."
+        held, 3,
+        "three appends went in and {held} survived. 2 means an append was LOST \
+         (ADR-0065's defect is back); anything else means the retry loop stopped \
+         converging."
     );
+    assert!(claimed.is_some(), "node 2's append was refused rather than retried: {claimed:?}");
 }

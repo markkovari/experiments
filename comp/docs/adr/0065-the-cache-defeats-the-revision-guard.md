@@ -1,8 +1,9 @@
 # 0065 — The cache defeats the revision guard
 
-Status: accepted, as a finding. `--kv-cache-ms`
-([ADR-0063](0063-a-ttl-is-cheaper-than-coherence.md)) **stays off by default, and
-this is now the reason** — not caution, a measured lost update.
+Status: accepted, as a finding — and **fixed** by
+[ADR-0066](0066-the-guard-moves-into-the-store.md), which moved the comparison
+into the store where it belongs. The defect below is real, was measured, and no
+longer reproduces; the test that found it now asserts three appends survive.
 
 ## What was left to measure
 

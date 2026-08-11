@@ -82,6 +82,7 @@ mod bindings {
 use bindings::cache::store::sink as cache_sink;
 use bindings::cache::store::source as cache_source;
 use bindings::comp::secrets::reader;
+use bindings::comp::store::cas;
 use bindings::wasi::config::store as config;
 use bindings::wasi::keyvalue::atomics;
 use bindings::wasi::keyvalue::batch;
@@ -374,6 +375,45 @@ impl config::Host for Host {
     }
     fn get_all(&mut self) -> wasmtime::Result<Result<Vec<(String, String)>, config::Error>> {
         Ok(Ok(self.scope.cfg.iter().map(|(k, v)| (k.clone(), v.clone())).collect()))
+    }
+}
+
+// ---- comp:store/cas host impl --------------------------------------------
+//
+// The guard, enforced where the data is (ADR-0065). Both calls take the same
+// `HostBucket` resource `wasi:keyvalue` hands out, so the guest still cannot name
+// a store it was not given — the ADR-0012 boundary is untouched by this.
+
+impl cas::Host for Host {
+    fn get(
+        &mut self,
+        b: Resource<HostBucket>,
+        key: String,
+    ) -> wasmtime::Result<Result<Option<cas::Versioned>, store::Error>> {
+        let id = self.table.get(&b)?.id.clone();
+        Ok(self
+            .kv
+            .get_revision(&id, &key)
+            .map(|o| o.map(|(revision, value)| cas::Versioned { revision, value }))
+            .map_err(kv_err))
+    }
+
+    fn set(
+        &mut self,
+        b: Resource<HostBucket>,
+        key: String,
+        value: Vec<u8>,
+        expected: u64,
+    ) -> wasmtime::Result<Result<cas::Outcome, store::Error>> {
+        let id = self.table.get(&b)?.id.clone();
+        Ok(self
+            .kv
+            .set_if_revision(&id, &key, &value, expected)
+            .map(|c| match c {
+                kv::Cas::Committed(r) => cas::Outcome::Committed(r),
+                kv::Cas::Conflict(r) => cas::Outcome::Conflict(r),
+            })
+            .map_err(kv_err))
     }
 }
 
@@ -730,6 +770,7 @@ pub fn build_linker(engine: &Engine) -> Result<Linker<Host>> {
     cache_source::add_to_linker::<_, HasSelf<Host>>(&mut linker, |h| h)?;
     cache_sink::add_to_linker::<_, HasSelf<Host>>(&mut linker, |h| h)?;
     reader::add_to_linker::<_, HasSelf<Host>>(&mut linker, |h| h)?;
+    cas::add_to_linker::<_, HasSelf<Host>>(&mut linker, |h| h)?;
     Ok(linker)
 }
 

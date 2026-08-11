@@ -105,4 +105,8 @@ world record-store {
     import wasi:keyvalue/batch@0.2.0-draft;
     import wasi:clocks/wall-clock@0.2.0;
     import wasi:random/random@0.2.0;
+    // The revision guard, enforced where the data is. `update` used to read,
+    // compare and write over three separate keyvalue calls, which is not a guard
+    // once anything changes the value in between (ADR-0065).
+    import comp:store/cas@0.1.0;
 }

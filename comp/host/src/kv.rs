@@ -44,13 +44,56 @@ pub trait KvBackend: Send + Sync {
     /// Atomic increment of an integer stored as a decimal string. Returns the
     /// new value. (redis INCRBY; in-memory read-modify-write; sqlite transactional.)
     fn increment(&self, bucket: &BucketId, key: &str, delta: u64) -> Result<u64>;
+
+    /// The value together with the revision it is at, or `None` if absent.
+    ///
+    /// The read half of a compare-and-set. Every backend keeps a revision per key
+    /// and bumps it on every write, `set` included — a revision that only moved for
+    /// guarded writes would let a plain `set` slip past a guard silently.
+    fn get_revision(&self, bucket: &BucketId, key: &str) -> Result<Option<(u64, Vec<u8>)>>;
+
+    /// Write only if the key is still at `expected`. `expected == 0` means "must not
+    /// exist yet", so a create and an update are the same call.
+    ///
+    /// This exists because ADR-0065 measured a lost update:
+    /// `record-store::update` enforced its revision guard by reading, comparing and
+    /// writing over three separate calls, which is not a guard at all once anything
+    /// — another node, or a cache — changes the value in between. The comparison has
+    /// to happen where the data is, and this is the smallest primitive that puts it
+    /// there.
+    ///
+    /// No default implementation, for the same reason `shared` has none: a backend
+    /// that quietly emulated this with get-then-set would compile, pass, and lose
+    /// writes.
+    fn set_if_revision(
+        &self,
+        bucket: &BucketId,
+        key: &str,
+        value: &[u8],
+        expected: u64,
+    ) -> Result<Cas>;
+}
+
+/// What a revision-guarded write did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cas {
+    /// It landed. Carries the revision it landed at.
+    Committed(u64),
+    /// It did not. Carries the revision the store actually holds — 0 when the key
+    /// is absent — so a caller can re-read and retry without a second round trip
+    /// to find out what it missed.
+    Conflict(u64),
 }
 
 // ---- in-memory (default) -------------------------------------------------
 
+/// A value and the revision it is at. Every write bumps it, including a plain
+/// `set` — see `get_revision` on the trait for why that matters.
+type Versioned = (u64, Vec<u8>);
+
 #[derive(Default)]
 pub struct MemoryKv {
-    buckets: Mutex<HashMap<String, HashMap<String, Vec<u8>>>>,
+    buckets: Mutex<HashMap<String, HashMap<String, Versioned>>>,
 }
 
 impl KvBackend for MemoryKv {
@@ -61,11 +104,14 @@ impl KvBackend for MemoryKv {
 
     fn get(&self, bucket: &BucketId, key: &str) -> Result<Option<Vec<u8>>> {
         let bucket = bucket.as_str();
-        Ok(self.buckets.lock().unwrap().get(bucket).and_then(|b| b.get(key)).cloned())
+        Ok(self.buckets.lock().unwrap().get(bucket).and_then(|b| b.get(key)).map(|(_, v)| v.clone()))
     }
     fn set(&self, bucket: &BucketId, key: &str, value: &[u8]) -> Result<()> {
         let bucket = bucket.as_str();
-        self.buckets.lock().unwrap().entry(bucket.into()).or_default().insert(key.into(), value.to_vec());
+        let mut g = self.buckets.lock().unwrap();
+        let b = g.entry(bucket.into()).or_default();
+        let rev = b.get(key).map(|(r, _)| *r).unwrap_or(0) + 1;
+        b.insert(key.into(), (rev, value.to_vec()));
         Ok(())
     }
     fn delete(&self, bucket: &BucketId, key: &str) -> Result<()> {
@@ -87,10 +133,42 @@ impl KvBackend for MemoryKv {
         let bucket = bucket.as_str();
         let mut g = self.buckets.lock().unwrap();
         let b = g.entry(bucket.into()).or_default();
-        let cur: u64 = b.get(key).and_then(|v| std::str::from_utf8(v).ok()).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let (rev, cur) = b
+            .get(key)
+            .map(|(r, v)| {
+                (*r, std::str::from_utf8(v).ok().and_then(|s| s.parse().ok()).unwrap_or(0u64))
+            })
+            .unwrap_or((0, 0));
         let next = cur.saturating_add(delta);
-        b.insert(key.into(), next.to_string().into_bytes());
+        b.insert(key.into(), (rev + 1, next.to_string().into_bytes()));
         Ok(next)
+    }
+
+    fn get_revision(&self, bucket: &BucketId, key: &str) -> Result<Option<Versioned>> {
+        let bucket = bucket.as_str();
+        Ok(self.buckets.lock().unwrap().get(bucket).and_then(|b| b.get(key)).cloned())
+    }
+
+    /// Atomic because the compare and the write happen under one lock. That is the
+    /// whole difference from the three-call version this replaces: nothing can land
+    /// between the two halves, because nothing else can hold this mutex.
+    fn set_if_revision(
+        &self,
+        bucket: &BucketId,
+        key: &str,
+        value: &[u8],
+        expected: u64,
+    ) -> Result<Cas> {
+        let bucket = bucket.as_str();
+        let mut g = self.buckets.lock().unwrap();
+        let b = g.entry(bucket.into()).or_default();
+        let current = b.get(key).map(|(r, _)| *r).unwrap_or(0);
+        if current != expected {
+            return Ok(Cas::Conflict(current));
+        }
+        let next = current + 1;
+        b.insert(key.into(), (next, value.to_vec()));
+        Ok(Cas::Committed(next))
     }
 }
 
@@ -114,6 +192,12 @@ impl RedisKv {
     fn k(bucket: &str, key: &str) -> String {
         format!("{bucket}{SEP}{key}")
     }
+
+    /// Where a key's revision lives. Prefixed rather than suffixed so it cannot be
+    /// caught by `list_keys`, which scans `{bucket}{SEP}*`.
+    fn rev_k(bucket: &str, key: &str) -> String {
+        format!("__rev{SEP}{bucket}{SEP}{key}")
+    }
 }
 
 impl KvBackend for RedisKv {
@@ -132,16 +216,27 @@ impl KvBackend for RedisKv {
     }
     fn set(&self, bucket: &BucketId, key: &str, value: &[u8]) -> Result<()> {
         let bucket = bucket.as_str();
-        use redis::Commands;
         let mut c = self.conn.lock().unwrap();
-        c.set::<_, _, ()>(Self::k(bucket, key), value).context("redis set")?;
+        // The revision moves for a plain `set` too, or a guarded write could land
+        // on top of one and never know.
+        redis::pipe()
+            .atomic()
+            .set(Self::k(bucket, key), value)
+            .ignore()
+            .incr(Self::rev_k(bucket, key), 1)
+            .ignore()
+            .query::<()>(&mut c)
+            .context("redis set")?;
         Ok(())
     }
     fn delete(&self, bucket: &BucketId, key: &str) -> Result<()> {
         let bucket = bucket.as_str();
         use redis::Commands;
         let mut c = self.conn.lock().unwrap();
-        c.del::<_, ()>(Self::k(bucket, key)).context("redis del")?;
+        // The revision goes with it: a lingering one would make the next create
+        // look like an update of something that is not there.
+        c.del::<_, ()>(&[Self::k(bucket, key), Self::rev_k(bucket, key)][..])
+            .context("redis del")?;
         Ok(())
     }
     fn exists(&self, bucket: &BucketId, key: &str) -> Result<bool> {
@@ -161,10 +256,60 @@ impl KvBackend for RedisKv {
     }
     fn increment(&self, bucket: &BucketId, key: &str, delta: u64) -> Result<u64> {
         let bucket = bucket.as_str();
+        let mut c = self.conn.lock().unwrap();
+        let (next,): (i64,) = redis::pipe()
+            .atomic()
+            .incr(Self::k(bucket, key), delta as i64)
+            .incr(Self::rev_k(bucket, key), 1)
+            .ignore()
+            .query(&mut c)
+            .context("redis incrby")?;
+        Ok(next as u64)
+    }
+
+    fn get_revision(&self, bucket: &BucketId, key: &str) -> Result<Option<Versioned>> {
+        let bucket = bucket.as_str();
         use redis::Commands;
         let mut c = self.conn.lock().unwrap();
-        let next: i64 = c.incr(Self::k(bucket, key), delta as i64).context("redis incrby")?;
-        Ok(next as u64)
+        // One MGET so the value and its revision come from the same instant. Two
+        // round trips could straddle a write and hand back a revision that does not
+        // belong to the value beside it.
+        let (v, rev): (Option<Vec<u8>>, Option<i64>) =
+            c.mget(&[Self::k(bucket, key), Self::rev_k(bucket, key)][..]).context("redis mget")?;
+        Ok(v.map(|v| (rev.unwrap_or(0).max(0) as u64, v)))
+    }
+
+    /// Atomic because Redis runs a script to completion with nothing interleaved,
+    /// so the compare and the write are one operation server-side. A pipeline would
+    /// not do: `MULTI` queues commands but cannot branch on what it read.
+    fn set_if_revision(
+        &self,
+        bucket: &BucketId,
+        key: &str,
+        value: &[u8],
+        expected: u64,
+    ) -> Result<Cas> {
+        let bucket = bucket.as_str();
+        let script = redis::Script::new(
+            r#"
+            local cur = tonumber(redis.call('GET', KEYS[2]) or '0')
+            if redis.call('EXISTS', KEYS[1]) == 0 then cur = 0 end
+            if cur ~= tonumber(ARGV[2]) then return {0, cur} end
+            local nxt = cur + 1
+            redis.call('SET', KEYS[1], ARGV[1])
+            redis.call('SET', KEYS[2], nxt)
+            return {1, nxt}
+            "#,
+        );
+        let mut c = self.conn.lock().unwrap();
+        let (ok, rev): (i64, i64) = script
+            .key(Self::k(bucket, key))
+            .key(Self::rev_k(bucket, key))
+            .arg(value)
+            .arg(expected.to_string())
+            .invoke(&mut c)
+            .context("redis cas script")?;
+        Ok(if ok == 1 { Cas::Committed(rev as u64) } else { Cas::Conflict(rev.max(0) as u64) })
     }
 }
 
@@ -357,6 +502,70 @@ impl KvBackend for NatsKv {
             anyhow::bail!("nats kv increment: 32 CAS attempts all lost the race")
         })
     }
+
+    fn get_revision(&self, bucket: &BucketId, key: &str) -> Result<Option<Versioned>> {
+        let s = self.store_for(bucket.as_str())?;
+        let k = Self::safe_key(key);
+        let entry = self.block(async move { s.entry(&k).await }).context("nats kv entry")?;
+        // An empty value is a tombstone, matching what `increment` above has always
+        // assumed. Nothing here stores an empty value on purpose — record-store
+        // writes JSON — and treating one as present would hand a caller a revision
+        // for a key that `get` reports as absent.
+        Ok(entry.filter(|e| !e.value.is_empty()).map(|e| (e.revision, e.value.to_vec())))
+    }
+
+    /// The only implementation here that is atomic ACROSS MACHINES, which is the
+    /// reason this whole primitive exists (ADR-0065).
+    ///
+    /// The comparison happens inside JetStream, against the sequence it assigned —
+    /// so it holds no matter how many nodes are writing, what any of them cached, or
+    /// how stale the caller's copy is. A caller with an old revision gets a
+    /// `Conflict` and re-reads; it can never overwrite what it did not see.
+    fn set_if_revision(
+        &self,
+        bucket: &BucketId,
+        key: &str,
+        value: &[u8],
+        expected: u64,
+    ) -> Result<Cas> {
+        let s = self.store_for(bucket.as_str())?;
+        let k = Self::safe_key(key);
+        let v: bytes::Bytes = value.to_vec().into();
+        self.block(async move {
+            let entry = s.entry(&k).await.context("nats kv entry")?;
+            // What the CALLER should have seen: 0 for absent or tombstoned, the
+            // sequence otherwise. The tombstone's own revision is kept separately
+            // because JetStream still needs it to guard the write.
+            let (visible, guard) = match &entry {
+                Some(e) if !e.value.is_empty() => (e.revision, Some(e.revision)),
+                Some(e) => (0, Some(e.revision)),
+                None => (0, None),
+            };
+            if visible != expected {
+                return Ok(Cas::Conflict(visible));
+            }
+            // The two calls have different error types and this only cares whether
+            // the write landed, so both collapse to the revision or nothing.
+            let landed: Option<u64> = match guard {
+                Some(rev) => s.update(&k, v, rev).await.ok(),
+                // No entry at all: `create` is the CAS for the absent case — it
+                // fails if another writer created it in the meantime.
+                None => s.create(&k, v).await.ok(),
+            };
+            match landed {
+                Some(rev) => Ok(Cas::Committed(rev)),
+                // JetStream refused, which means the revision moved between the
+                // read above and the write. Report what it is now rather than
+                // guessing: the caller re-reads and retries.
+                None => {
+                    let now = s.entry(&k).await.ok().flatten();
+                    Ok(Cas::Conflict(
+                        now.filter(|e| !e.value.is_empty()).map(|e| e.revision).unwrap_or(0),
+                    ))
+                }
+            }
+        })
+    }
 }
 
 /// Reverse of `NatsKv::safe_key`.
@@ -426,6 +635,10 @@ impl SqliteKv {
             [],
         )
         .context("creating the kv table")?;
+        // Added to databases that predate revisions. `ALTER TABLE` has no
+        // `IF NOT EXISTS` in SQLite, so the error on a second run is the check —
+        // and it is the only thing that can fail here for a benign reason.
+        let _ = conn.execute("ALTER TABLE kv ADD COLUMN rev INTEGER NOT NULL DEFAULT 0", []);
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -468,9 +681,11 @@ impl KvBackend for SqliteKv {
     fn set(&self, bucket: &BucketId, key: &str, value: &[u8]) -> Result<()> {
         let bucket = bucket.as_str();
         let conn = self.conn.lock().unwrap();
+        // The revision moves for a plain `set` too, or a guarded write could land
+        // on top of one and never know.
         conn.prepare_cached(
-            "INSERT INTO kv (bucket, key, value) VALUES (?1, ?2, ?3)
-             ON CONFLICT(bucket, key) DO UPDATE SET value = excluded.value",
+            "INSERT INTO kv (bucket, key, value, rev) VALUES (?1, ?2, ?3, 1)
+             ON CONFLICT(bucket, key) DO UPDATE SET value = excluded.value, rev = kv.rev + 1",
         )?
         .execute(rusqlite::params![bucket, key, value])?;
         Ok(())
@@ -523,12 +738,56 @@ impl KvBackend for SqliteKv {
         };
         let next = n.saturating_add(delta);
         tx.prepare_cached(
-            "INSERT INTO kv (bucket, key, value) VALUES (?1, ?2, ?3)
-             ON CONFLICT(bucket, key) DO UPDATE SET value = excluded.value",
+            "INSERT INTO kv (bucket, key, value, rev) VALUES (?1, ?2, ?3, 1)
+             ON CONFLICT(bucket, key) DO UPDATE SET value = excluded.value, rev = kv.rev + 1",
         )?
         .execute(rusqlite::params![bucket, key, next.to_string().as_bytes()])?;
         tx.commit()?;
         Ok(next)
+    }
+
+    fn get_revision(&self, bucket: &BucketId, key: &str) -> Result<Option<Versioned>> {
+        let bucket = bucket.as_str();
+        let conn = self.conn.lock().unwrap();
+        let mut q =
+            conn.prepare_cached("SELECT rev, value FROM kv WHERE bucket = ?1 AND key = ?2")?;
+        let mut rows = q.query(rusqlite::params![bucket, key])?;
+        match rows.next()? {
+            Some(row) => Ok(Some((row.get::<_, i64>(0)?.max(0) as u64, row.get(1)?))),
+            None => Ok(None),
+        }
+    }
+
+    /// Atomic: the compare and the write are one IMMEDIATE transaction, so nothing
+    /// can land between them. Node-local like the rest of this backend — which is
+    /// enough, because a store only one process can reach has only that process
+    /// racing against itself.
+    fn set_if_revision(
+        &self,
+        bucket: &BucketId,
+        key: &str,
+        value: &[u8],
+        expected: u64,
+    ) -> Result<Cas> {
+        let bucket = bucket.as_str();
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current: u64 = tx
+            .prepare_cached("SELECT rev FROM kv WHERE bucket = ?1 AND key = ?2")?
+            .query_row(rusqlite::params![bucket, key], |r| r.get::<_, i64>(0))
+            .map(|r| r.max(0) as u64)
+            .unwrap_or(0);
+        if current != expected {
+            return Ok(Cas::Conflict(current));
+        }
+        let next = current + 1;
+        tx.prepare_cached(
+            "INSERT INTO kv (bucket, key, value, rev) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(bucket, key) DO UPDATE SET value = excluded.value, rev = excluded.rev",
+        )?
+        .execute(rusqlite::params![bucket, key, value, next as i64])?;
+        tx.commit()?;
+        Ok(Cas::Committed(next))
     }
 }
 
