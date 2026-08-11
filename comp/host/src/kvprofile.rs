@@ -26,7 +26,7 @@
 //! Off by default and not on the request path when off: without the flag the real
 //! backend is handed out directly and this file allocates nothing.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -71,10 +71,20 @@ struct Stats {
     /// have to hold to reach the hit rate above.
     warm: HashSet<String>,
     peak_warm: usize,
+    /// Reads per key, and writes per key.
+    ///
+    /// A hit rate says a cache would work; it does not say WHAT to cache. A key
+    /// read a million times and written once is a different proposition from a
+    /// million keys read once each — the first is a small targeted cache with an
+    /// easy invalidation story, the second needs the general mirror ADR-0059
+    /// rejected. Only per-key counts tell them apart.
+    reads_by_key: HashMap<String, u64>,
+    writes_by_key: HashMap<String, u64>,
 }
 
 impl Stats {
     fn touch(&mut self, k: String) -> bool {
+        *self.reads_by_key.entry(k.clone()).or_default() += 1;
         let hit = self.warm.contains(&k);
         if hit {
             self.warm_reads += 1;
@@ -86,6 +96,7 @@ impl Stats {
     }
 
     fn invalidate(&mut self, k: &str) {
+        *self.writes_by_key.entry(k.to_string()).or_default() += 1;
         self.warm.remove(k);
     }
 }
@@ -148,6 +159,41 @@ impl ProfileKv {
              \x20 multi-node cache also has to notice another node's writes, which this\n\
              \x20 does not model (ADR-0059).\n",
         );
+
+        // Which keys, because the hit rate does not say what to cache.
+        let mut hot: Vec<(&String, &u64)> = s.reads_by_key.iter().collect();
+        hot.sort_by(|a, b| b.1.cmp(a.1));
+        out.push_str("\n  hottest keys by read count\n");
+        out.push_str("       reads   writes    share  key\n");
+        for (k, n) in hot.iter().take(12) {
+            out.push_str(&format!(
+                "  {:>10}  {:>7}   {:>5.1}%  {}\n",
+                n,
+                s.writes_by_key.get(*k).copied().unwrap_or(0),
+                100.0 * **n as f64 / s.get.calls.max(1) as f64,
+                // The bucket prefix is the same for every key in a single-app run
+                // and just eats the column.
+                k.split('\x1f').next_back().unwrap_or(k)
+            ));
+        }
+        let top: u64 = hot.iter().take(12).map(|(_, n)| **n).sum();
+        out.push_str(&format!(
+            "\n  those 12 keys are {:.1}% of all gets; {} distinct keys were read\n",
+            100.0 * top as f64 / s.get.calls.max(1) as f64,
+            s.reads_by_key.len()
+        ));
+        // A key never written during the run is one a cache can hold without ever
+        // being wrong about it — the population a targeted cache would serve.
+        let (never_written, nw_reads) = s
+            .reads_by_key
+            .iter()
+            .filter(|(k, _)| !s.writes_by_key.contains_key(*k))
+            .fold((0u64, 0u64), |(c, r), (_, n)| (c + 1, r + n));
+        out.push_str(&format!(
+            "  {} of them were never written: {:.1}% of all gets\n",
+            never_written,
+            100.0 * nw_reads as f64 / s.get.calls.max(1) as f64
+        ));
         out
     }
 }

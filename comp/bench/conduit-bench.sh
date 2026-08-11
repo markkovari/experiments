@@ -22,6 +22,9 @@ args=(--component "$COMPONENT" --addr "$ADDR" --kv "$KV")
 # default because it takes a lock per operation, which is not what a bench should
 # be measuring.
 [ "${PROFILE:-}" = 1 ] && args+=(--kv-profile)
+# CACHE_MS=<n> turns on the per-node read cache (ADR-0063). Compare a run with and
+# without: the guest-side op counts are identical, only what reaches the store moves.
+[ -n "${CACHE_MS:-}" ] && args+=(--kv-cache-ms "$CACHE_MS")
 VET_TENANT=conduit "$BIN" "${args[@]}" >/tmp/conduit-bench-host.log 2>&1 &
 HPID=$!
 trap 'kill $HPID 2>/dev/null || true' EXIT

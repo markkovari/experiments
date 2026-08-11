@@ -24,6 +24,7 @@
 
 mod agent;
 mod kv;
+mod kvcache;
 mod kvprofile;
 mod secrets;
 mod rpc;
@@ -605,6 +606,15 @@ struct Args {
     /// request path entirely when off: the backend is handed out unwrapped.
     #[arg(long)]
     kv_profile: bool,
+    /// Serve repeat reads from a per-node cache for this many milliseconds.
+    ///
+    /// 0 (the default) is off. ADR-0062 measured 264 reads per write on a real
+    /// app, which is why a TTL and no coherence protocol is the trade worth making
+    /// — but it IS a trade: a write on another node stays invisible here until the
+    /// entry expires. Sound for reads that tolerate a bounded lag, unsound
+    /// otherwise, and nothing about the number changes which one an app is.
+    #[arg(long, default_value = "0")]
+    kv_cache_ms: u64,
 
     // ---- who this instance is -------------------------------------------
     /// Tenant this component belongs to. With `--app` it decides the store the
@@ -763,6 +773,16 @@ async fn main() -> Result<()> {
         .or_else(|| args.lattice_nats.clone())
         .unwrap_or_else(|| "127.0.0.1:4222".into());
     let kv_backend: Kv = kv::build(&kv_kind, &args.redis_url, &nats_url, &sqlite_path).await?;
+    // The profiler ends up OUTSIDE the cache, so it keeps counting what the guest
+    // asked for rather than what survived the cache. That is what makes a cached
+    // run comparable to an uncached one — the demand is the same number in both —
+    // and the cache reports its own hit rate separately.
+    let cache = (args.kv_cache_ms > 0)
+        .then(|| kvcache::CacheKv::wrap(kv_backend.clone(), args.kv_cache_ms));
+    let kv_backend: Kv = match &cache {
+        Some(c) => c.clone(),
+        None => kv_backend,
+    };
     // Wrapped, not replaced: `shared()` and every answer come from the real backend,
     // so a profiled run is the same run with a clock on it.
     let profile = args.kv_profile.then(|| kvprofile::ProfileKv::wrap(kv_backend.clone()));
@@ -770,7 +790,27 @@ async fn main() -> Result<()> {
         Some(p) => p.clone(),
         None => kv_backend,
     };
-    if let Some(p) = profile.clone() {
+    if let Some(c) = cache.clone() {
+        eprintln!(
+            "comp-host: keyvalue reads cached for {}ms per node. A write on another \
+             node is invisible here until then (ADR-0063).",
+            args.kv_cache_ms
+        );
+        let p = profile.clone();
+        tokio::spawn(async move {
+            let mut term =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+            if let Some(p) = p {
+                eprintln!("{}", p.report());
+            }
+            eprintln!("{}", c.report());
+            std::process::exit(0);
+        });
+    } else if let Some(p) = profile.clone() {
         // On the way out, because warm-up and steady state have different mixes and
         // a running total is the honest summary of the whole run. SIGTERM as well as
         // Ctrl-C: every script here stops a host with `kill`.
