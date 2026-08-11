@@ -19,6 +19,8 @@ use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 
+use comp_lattice::nats::servers;
+
 use crate::tenant::BucketId;
 
 /// A named-bucket key-value store. Errors surface as anyhow; the caller maps
@@ -313,6 +315,10 @@ impl KvBackend for RedisKv {
     }
 }
 
+/// What an unconfigured `--kv-replicas` aims for. Three is the smallest number
+/// that survives losing a server, because quorum needs a majority (ADR-0067).
+pub const DEFAULT_REPLICAS: usize = 3;
+
 // ---- nats (JetStream KV) --------------------------------------------------
 //
 // The only backend on this list where TWO REPLICAS OF ONE APP SEE ONE STORE.
@@ -355,15 +361,24 @@ pub struct NatsKv {
 }
 
 impl NatsKv {
+    /// `url` may be a comma-separated LIST, and in a replicated deployment it
+    /// should be.
+    ///
+    /// A client given one address does discover the rest of the cluster — NATS
+    /// servers advertise their peers in the INFO they send — and it will fail over
+    /// to them. But that only works once it has connected to something. A host
+    /// starting while its single listed server is the one that is down cannot
+    /// bootstrap at all, and that is precisely the moment it matters.
     pub async fn connect(url: &str, replicas: usize) -> Result<Self> {
-        let client = async_nats::connect(url)
+        let urls = servers(url);
+        let client = async_nats::connect(urls.clone())
             .await
-            .with_context(|| format!("connecting to NATS at {url}"))?;
+            .with_context(|| format!("connecting to NATS at {}", urls.join(", ")))?;
         Ok(Self {
             handle: tokio::runtime::Handle::current(),
             js: async_nats::jetstream::new(client),
             stores: std::sync::RwLock::new(HashMap::new()),
-            replicas: replicas.max(1),
+            replicas,
         })
     }
 
@@ -402,19 +417,38 @@ impl NatsKv {
         let store = self.block(async {
             match self.js.get_key_value(&name).await {
                 Ok(s) => Ok(s),
-                Err(_) => self
-                    .js
-                    .create_key_value(async_nats::jetstream::kv::Config {
+                Err(_) => {
+                    // Applies to buckets created FROM NOW ON. An existing bucket
+                    // keeps whatever it was made with — `nats stream update` or a
+                    // restore with `REPLICAS=` changes those.
+                    let want = if self.replicas == 0 { DEFAULT_REPLICAS } else { self.replicas };
+                    let cfg = |n| async_nats::jetstream::kv::Config {
                         bucket: name.clone(),
                         history: 1,
-                        // Applies to buckets created FROM NOW ON. An existing
-                        // bucket keeps whatever it was made with — `nats stream
-                        // update` or a restore with `REPLICAS=` changes those.
-                        num_replicas: self.replicas,
+                        num_replicas: n,
                         ..Default::default()
-                    })
-                    .await
-                    .map_err(anyhow::Error::from),
+                    };
+                    match self.js.create_key_value(cfg(want)).await {
+                        Ok(s) => Ok(s),
+                        // Asking for more copies than the cluster can hold is the
+                        // one failure worth surviving: it is what a single-server
+                        // NATS says, and refusing to start there would break every
+                        // single-node deployment. Only the AUTOMATIC choice falls
+                        // back — an operator who typed a number gets the error,
+                        // because they asked for something specific and did not
+                        // get it.
+                        Err(e) if self.replicas == 0 && want > 1 => {
+                            eprintln!(
+                                "comp-host: WARNING this NATS cannot hold {want} copies of \
+                                 {name} ({e}), falling back to ONE. That is a single disk \
+                                 holding this data: `just backup` is the floor, and a NATS \
+                                 cluster of 3 with --kv-replicas 3 is the fix."
+                            );
+                            self.js.create_key_value(cfg(1)).await.map_err(anyhow::Error::from)
+                        }
+                        Err(e) => Err(anyhow::Error::from(e)),
+                    }
+                }
             }
         })?;
         self.stores.write().unwrap().insert(bucket.to_string(), store.clone());

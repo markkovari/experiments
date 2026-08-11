@@ -48,15 +48,39 @@ stream first and say so.
 `REPLICAS=` on a restore overrides the copy count, which makes restore the way to
 re-replicate a bucket that was created before any of this.
 
-## Then replication
+## Then replication, without anyone having to remember
 
-`--kv-replicas` (default 1) is passed to every bucket the host creates. Three is
-the smallest number that survives a loss, because quorum needs a majority.
+`--kv-replicas` defaults to **0, meaning "as many as this NATS can hold, up to
+3"**. The host asks for three and falls back to one *only* when the server is not
+clustered, saying so loudly when it does.
 
-The default stays at 1 because 3 against a single-server NATS simply fails to
-create buckets, and that would break every existing single-node deployment and
-every test. Instead the host says so, once, loudly, at startup — the failure it
-describes is total and silent until the day it happens.
+The alternative — defaulting to 1 and warning — was the first version of this ADR
+and it was wrong. A default that is safe only if you read the warning is a default
+that loses data, and "3 breaks single-node deployments" is an argument for
+handling that case, not for making everyone opt in to durability.
+
+An **explicit** number is taken literally and never falls back. Asking for three
+copies and quietly getting one is how you believe you are safe when you are not,
+so that case fails to start instead:
+
+```
+A. clustered, no flag                Replicas: 3, no warning
+B. single unclustered server         falls back to 1, warns, keeps serving
+C. list whose FIRST address is dead  connects via the others, Replicas: 3
+D. explicit --kv-replicas 3, solo    refuses — 503, no bucket created
+```
+
+## And one flag can name the whole cluster
+
+`--nats-url` and `--lattice-nats` take a comma-separated list. A client given a
+single address does learn its peers from the INFO the server sends and fails over
+to them — but only after it has connected to something. A process starting while
+its one listed server is the one that is down cannot bootstrap at all, which is
+exactly the moment it matters. Row C above is that case.
+
+Everything in the workspace that dials NATS now goes through one `servers()`
+helper, so the store, the control bus, the reconciler and the ingress all take a
+list rather than three different opinions about it.
 
 ## Measured: losing the server that holds the data
 
@@ -78,13 +102,11 @@ Zero errors, and the counter kept counting down rather than resetting: the state
 survived the loss of the server that led it. At one replica that same kill is
 every tenant's data, gone.
 
-Two things worth noting from the run. The host was given **one** NATS URL and
-kept working after that server died — NATS clients learn the cluster from the
-server's own INFO and fail over. That is a nice property to have and a bad one to
-depend on: a host started while its only listed server is down cannot bootstrap,
-so a real deployment lists all three.
+The host in that run was given **one** NATS URL and kept working after that
+server died, because NATS clients learn the cluster from the server's own INFO.
+Nice to have, and not a thing to depend on — which is why the URL is now a list.
 
-And a cluster of three processes on one machine proves the *code*, not the
+A cluster of three processes on one machine proves the *code*, not the
 *hardware*. It exercises the same quorum, replication and election paths; what it
 cannot show is a disk dying, a power loss, or a network partition between rooms.
 For that the three copies have to be on three machines — which this fleet has.

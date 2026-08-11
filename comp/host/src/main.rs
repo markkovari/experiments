@@ -627,9 +627,16 @@ struct Args {
     /// `DynamicUser=yes`. Falls back to ./comp-kv.db when run by hand.
     #[arg(long)]
     sqlite_path: Option<String>,
-    /// NATS URL for `--kv nats`. Defaults to the lattice's own NATS when
-    /// `--lattice-nats` is given, because running a node's store on a different
-    /// cluster from its control bus is a thing to do on purpose, not by default.
+    /// NATS URL for `--kv nats`, or a comma-separated list of them.
+    ///
+    /// List every server in the cluster. A client given one address does learn the
+    /// others from the INFO the server sends, and fails over to them — but only
+    /// after it has connected to something, so a host starting while its one
+    /// listed server is the one that is down cannot bootstrap (ADR-0067).
+    ///
+    /// Defaults to the lattice's own NATS when `--lattice-nats` is given, because
+    /// running a node's store on a different cluster from its control bus is a
+    /// thing to do on purpose, not by default.
     #[arg(long)]
     nats_url: Option<String>,
     /// Fall back to wasmtime's on-demand allocator. The POOLING allocator
@@ -657,15 +664,18 @@ struct Args {
     kv_cache_ms: u64,
     /// How many copies of each `--kv nats` bucket JetStream keeps.
     ///
-    /// The default of 1 is one disk holding every tenant's data. ADR-0035 measured
-    /// this fleet surviving the loss of a HOST; nothing survives the loss of the
-    /// STORE at one replica. 3 is the smallest number that tolerates losing a
-    /// server, because quorum needs a majority — and it needs a NATS cluster of at
-    /// least that many, or bucket creation simply fails.
+    /// **0 (the default) means as many as this NATS can hold, up to 3** — it asks
+    /// for 3, and falls back to 1 with a warning if the server is not clustered.
+    /// So a single-node deployment still works and a clustered one is replicated
+    /// without anyone remembering to ask, which is the right way round: one copy
+    /// is a total, silent loss the day that disk dies (ADR-0067).
+    ///
+    /// An explicit number is taken literally and does NOT fall back — asking for
+    /// 3 and quietly getting 1 is how you think you are safe when you are not.
     ///
     /// Applies to buckets created from now on. An existing one keeps what it was
     /// made with; `nats stream update` or `DIR=… REPLICAS=3 just restore` moves it.
-    #[arg(long, default_value = "1")]
+    #[arg(long, default_value = "0")]
     kv_replicas: usize,
 
     // ---- who this instance is -------------------------------------------
@@ -827,15 +837,14 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "127.0.0.1:4222".into());
     let kv_backend: Kv =
         kv::build(&kv_kind, &args.redis_url, &nats_url, &sqlite_path, args.kv_replicas).await?;
-    // Said once, loudly, because the failure it describes is total and silent
-    // until the day it happens.
-    if kv_kind == "nats" && args.kv_replicas < 3 {
+    // An explicit 1 is a choice, and it is still worth saying out loud once. The
+    // automatic path warns from inside `store_for`, where it knows whether the
+    // fallback actually happened rather than guessing here.
+    if kv_kind == "nats" && args.kv_replicas == 1 {
         eprintln!(
-            "comp-host: WARNING --kv nats with {} replica(s). Every bucket this node \
-             creates has that many copies, so losing the server that holds them loses \
-             the data. --kv-replicas 3 against a 3-server NATS cluster is the smallest \
-             arrangement that survives one loss; `just backup` is the floor either way.",
-            args.kv_replicas
+            "comp-host: WARNING --kv-replicas 1 was asked for explicitly. Every bucket \
+             this node creates has ONE copy, so losing the server that holds it loses \
+             the data. Drop the flag to take as many copies as this NATS can hold."
         );
     }
     // The profiler ends up OUTSIDE the cache, so it keeps counting what the guest
@@ -999,10 +1008,15 @@ async fn main() -> Result<()> {
             });
             // The node's own NATS connection, shared with the agent so wRPC clients
             // ride the same link rather than opening a second one per instance.
+            // Every server in the list, for the same reason the store takes a list:
+            // failover only helps a process that managed to connect once.
+            let lattice_servers = comp_lattice::nats::servers(nats_url_for_lattice);
             let raw_nats = Arc::new(
-                async_nats::connect(nats_url_for_lattice)
+                async_nats::connect(lattice_servers.clone())
                     .await
-                    .with_context(|| format!("connecting to NATS at {nats_url_for_lattice}"))?,
+                    .with_context(|| {
+                        format!("connecting to NATS at {}", lattice_servers.join(", "))
+                    })?,
             );
             let ag = Arc::new(agent::Agent {
                 platform_url: args.platform_url.clone(),
