@@ -31,4 +31,10 @@ package mock:provider@0.1.0;
 world mock-provider {
     export llm:inference/inference@0.1.0;
     import wasi:config/store@0.2.0-rc.1;
+    /// So a rule can WAIT. A mock that answers in microseconds gives a load test
+    /// the wrong shape entirely: real inference takes hundreds of milliseconds to
+    /// seconds, and that latency is what decides how many branches are in flight
+    /// at once, how long an environment is held, and whether anything queues.
+    /// Stress-testing against an instant provider measures the harness.
+    import wasi:clocks/monotonic-clock@0.2.0;
 }

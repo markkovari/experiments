@@ -22,6 +22,14 @@
 //! the contract for reproducibility, so nothing had to be invented for it, and a
 //! swarm that varies its branches by seed varies its mock the same way.
 //!
+//! ## Delay, because latency changes the shape of everything
+//!
+//! `"delay_ms"` on a rule makes it wait before answering. A mock that returns in
+//! microseconds turns a stress test into a measurement of the harness: real
+//! inference takes hundreds of milliseconds to seconds, and THAT is what decides
+//! how many branches are in flight at once, how long an environment is held open,
+//! and whether anything queues behind anything else.
+//!
 //! ## Failure modes are the point
 //!
 //! A rule may return an error instead of text. The interesting paths through a
@@ -49,6 +57,7 @@ mod bindings;
 use bindings::exports::llm::inference::inference::{
     Completion, Guest, InferError, Message, Options, Role, Usage,
 };
+use bindings::wasi::clocks::monotonic_clock;
 use bindings::wasi::config::store as config;
 
 use sha2::{Digest, Sha256};
@@ -136,6 +145,14 @@ fn completion_from(
     prompt_len: usize,
     default_model: &str,
 ) -> Result<Completion, InferError> {
+    // Before the answer AND before an error, because a provider that refuses you
+    // still made you wait for the refusal — and a retry loop that assumes
+    // failures are free is a retry loop that will surprise somebody.
+    if let Some(ms) = rule["delay_ms"].as_u64() {
+        if ms > 0 {
+            monotonic_clock::subscribe_duration(ms * 1_000_000).block();
+        }
+    }
     if let Some(name) = rule["error"].as_str() {
         return Err(error_for(name, rule["detail"].as_str().unwrap_or_default()));
     }

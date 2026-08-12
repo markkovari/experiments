@@ -28,6 +28,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 // ---- identity --------------------------------------------------------------
 
@@ -99,9 +100,35 @@ pub fn dns_label(s: &str) -> String {
 /// One application's identity across the fleet. Derived from tenant + app, never
 /// supplied — a tenant able to set this would be a tenant able to name someone
 /// else's storage.
+/// One application's identity across the fleet. Derived from tenant + app, never
+/// supplied — a tenant able to set this would be a tenant able to name someone
+/// else's storage.
+///
+/// The 53-character cap is a real constraint, and plain truncation was a silent
+/// isolation break. Environments nest (`shop-env-a-env-b`, ADR-0078), so names
+/// grow by six characters per level, and past the cap two SIBLINGS differing only
+/// in their last segment truncate to the same string — one store, two
+/// environments, each reading the other's writes. With single-character names it
+/// happens at depth seven, and nothing anywhere would have said so.
+///
+/// So an over-long name keeps a readable prefix and earns a suffix derived from
+/// the WHOLE name. Names that fit are untouched, which keeps the common case
+/// legible and every case distinct.
 pub fn env_for(tenant: &str, app: &str) -> String {
-    let e = format!("app-{}-{}", dns_label(tenant), dns_label(app));
-    e.chars().take(53).collect::<String>().trim_matches('-').to_string()
+    const CAP: usize = 53;
+    /// 8 hex characters plus the separator.
+    const SUFFIX: usize = 9;
+
+    let full = format!("app-{}-{}", dns_label(tenant), dns_label(app));
+    if full.len() <= CAP {
+        return full.trim_matches('-').to_string();
+    }
+    let mut h = Sha256::new();
+    h.update(full.as_bytes());
+    let digest = h.finalize();
+    let tag: String = digest.iter().take(4).map(|b| format!("{b:02x}")).collect();
+    let head: String = full.chars().take(CAP - SUFFIX).collect();
+    format!("{}-{tag}", head.trim_end_matches('-'))
 }
 
 // ---- egress ----------------------------------------------------------------
@@ -568,6 +595,38 @@ mod tests {
         assert!(p.permits_addr("10.1.2.3:8000".parse().unwrap()), "another port on the same host");
     }
 
+
+    /// The bug this function was written with, and the reason it now hashes.
+    ///
+    /// Environments nest, names grow six characters a level, and plain truncation
+    /// made two siblings share a bucket — silently, with each reading the other's
+    /// writes. This walks the nesting down and asserts that never happens.
+    #[test]
+    fn nested_environments_never_share_a_bucket() {
+        let mut chain = "graph".to_string();
+        let mut seen = std::collections::BTreeSet::new();
+        for depth in 0..12 {
+            let a = env_for("ada", &format!("{chain}-env-a"));
+            let b = env_for("ada", &format!("{chain}-env-b"));
+            assert_ne!(
+                a, b,
+                "at depth {depth} two SIBLING environments share one bucket — each would \
+                 read the other's writes, and nothing would say so"
+            );
+            assert!(a.len() <= 53, "at depth {depth} the name is {} chars: {a}", a.len());
+            assert!(seen.insert(a.clone()), "depth {depth} collided with an ancestor: {a}");
+            assert!(seen.insert(b), "depth {depth} collided with an ancestor");
+            chain = format!("{chain}-env-x");
+        }
+    }
+
+    /// A name that fits is left exactly as it was — the hash is a fallback, not a
+    /// rename, and existing stores must keep their names.
+    #[test]
+    fn a_name_that_fits_is_not_rewritten() {
+        assert_eq!(env_for("ada", "graph"), "app-ada-graph");
+        assert_eq!(env_for("ada", "graph-env-node-7"), "app-ada-graph-env-node-7");
+    }
 
     #[test]
     fn an_app_name_is_derived_and_length_capped() {
