@@ -260,59 +260,102 @@ discovered later:
 3. **Provenance on every write** — which environment, which attempt, at what
    score. That is what keeps attribution recoverable when it matters.
 
-### Our own embedder and chunker
+### Embeddings come from a provider; chunking is ours
 
-**Decided: own both.** Four reasons, in order of how much they matter:
+**Decided: no local models.** Embeddings come from a hosted provider behind the
+`llm:inference` boundary already built, the same way completions do. That is a
+deployment choice and it is the user's to make.
 
-1. **A remote embedder means the codebase leaves the building.** Embedding a
-   repository means sending every chunk of it to a third party. That is a
-   different decision from sending one prompt, and it should not be made
-   implicitly by picking the convenient provider.
-2. **A remote model changes under you.** When a hosted embedding model is updated,
-   vectors stored last month are from a different space than vectors computed
-   today, and nothing errors — cosine similarity between them is simply
-   meaningless. The index silently rots. A pinned local model cannot do that.
-3. **Cost.** Re-embedding a repository is the largest recurring token cost here,
-   and the one that scales with the number of branches.
-4. **Latency.** Local is milliseconds; a hosted call is a network round trip per
-   chunk.
+It does not, however, make the problem that argued for local models go away — it
+sharpens it:
 
-The shape, matching what is already proven:
+> **A hosted embedding model changes under you, and nothing errors.** Vectors
+> stored last month come from a different space than vectors computed today.
+> Cosine similarity between them is not an error; it is a number, and it is
+> meaningless. The index rots silently and retrieval quality degrades in a way no
+> alert fires for.
 
-- **`embed:vectors`** — a contract, mirroring `llm:inference`, with a provider
-  component pointed at a **local** embedding server over `wasi:http`, reached
-  through the egress allow-list exactly as `knowledge-graph` reaches SurrealDB.
-  The dimension and the model id are config, and the model id is **stored beside
-  every vector**: a vector whose model is unknown cannot be safely compared to
-  anything, and an index that mixes two models is worse than no index.
-- **Chunking is a pure component.** No model, no network, no host capability —
-  which makes it the easy half and the half worth owning outright.
+So the mitigation moves from *avoid the problem* to *detect and survive it*:
 
-Chunking is where owning it actually pays, because a generic chunker is bad at
-code:
+- **The model id and dimension are stored beside every vector**, not in config.
+  An index holding two models is worse than no index, and this is what makes that
+  detectable rather than invisible.
+- **A model change is an index invalidation**, handled explicitly: the corpus is
+  re-embedded, or the old vectors are quarantined. Never silently mixed.
+- **A canary set** — a handful of fixed strings whose pairwise similarities are
+  recorded at index build. If those drift, the model moved. This is cheap, it is
+  the only way to notice a silent provider-side change, and it costs a few
+  embeddings per run.
+- **`min_similarity` thresholds are per-model**, because a threshold tuned on one
+  model is a superstition on another.
 
-- **Split on syntax, not on token count.** A function, a struct, an `impl`, a doc
-  section. Fixed windows cut declarations in half and produce chunks that retrieve
-  well and read uselessly.
+**Chunking is a pure component and stays ours.** No model, no network, no host
+capability — so nothing about the provider decision touches it, and it is the
+half where the quality actually comes from:
+
+- **Split on syntax, not token count.** A function, a struct, an `impl`, a doc
+  section. Fixed windows cut declarations in half and produce chunks that
+  retrieve well and read uselessly.
 - **Prepend a context header** to every chunk — file path, parent symbol,
-  language. A chunk that says only `fn new(...)` is unfindable; the same chunk
+  language. A chunk reading only `fn open(...)` is unfindable; the same chunk
   headed `components/knowledge-graph/src/lib.rs · impl Conn · fn open` is
-  findable by three different queries. This one trick is worth more than the
-  choice of embedding model.
+  findable three ways. This is worth more than the choice of embedding model.
 - **Overlap for prose, none for code.** Code has natural boundaries; prose does
   not.
-- **A chunk is a NODE in the knowledge graph**, with an edge to the entity it came
-  from. This is the payoff for owning the chunker *and* having a graph: a
-  retrieval hit expands to its structural neighbours by traversal, which is
-  alpha-swarm2's third retrieval layer arriving for free rather than as separate
-  machinery. An external embedding service returns a flat list and can never do
-  this.
+- **A chunk is a NODE in the knowledge graph**, edged to the entity it came from.
+  This is the payoff for owning the chunker while having a graph: a retrieval hit
+  expands to its structural neighbours by traversal — alpha-swarm2's third
+  retrieval layer arriving for free rather than as separate machinery. A provider
+  returns a flat list and can never do this.
 
-And the half that is already built: **`search:index`** is a TF-IDF inverted index
-over the KV store, pure WASI, no network. That is the sparse side of hybrid
-retrieval, done. What is missing is the dense side and the fusion —
-reciprocal-rank fusion over the two, with the reported similarity kept as the
-dense cosine so a `min_similarity` threshold keeps meaning what it says.
+Owning the chunker also caps the provider cost, which is the practical reason to
+care: chunk boundaries decide how many embeddings a repository costs, and a
+syntax-aware chunker produces far fewer, larger, more useful ones than a sliding
+window.
+
+And the half already built: **`search:index`** is a TF-IDF inverted index over
+the KV store, pure WASI, no network, no provider. That is the sparse side of
+hybrid retrieval, done — and it is the side that keeps working when the embedding
+provider is down or has changed underneath you. What is missing is the dense side
+and reciprocal-rank fusion over the two.
+
+### Tiers and the router
+
+Not every call deserves the same model. alpha-swarm2 has three tiers
+(orchestrator, agent, worker) and picks between two of them with a **UCB1
+contextual bandit** — arms are the tiers, context is a coarse shape of the goal
+(`doc | simple | complex`), and the reward is attributed on **the real gate
+verdict**, not on anything the model said about itself. That last detail is what
+makes it a measurement rather than a preference, and it is worth copying exactly.
+
+The router is a **decorator**, the same shape as the meter: exports
+`llm:inference/inference`, imports it once per tier, and chooses. Which means the
+composition is a chain, and the order is a decision:
+
+    caller → router → meter → provider(tier)
+
+The router picks first so that the meter charges what was actually spent at the
+price of the tier that actually served it. Reversed, the meter would have to
+guess a price before the model was chosen.
+
+This is where tiers stop being a performance knob and become a *spending*
+decision: a tier is a price, so routing is the main lever on what a run costs.
+Three consequences:
+
+- **The price list is per model, not per token.** `1000 prompt tokens on tier-A =
+  N units, on tier-B = M units`, versioned with the run (see fuel, below).
+- **Escalation is a purchase.** Retrying a failed cheap call on an expensive
+  model is the correct move and it must come out of the same budget, or
+  escalation becomes a way to spend money the budget cannot see.
+- **The bandit's reward must be gate-attributed.** Reward a tier for what passed
+  the gate, never for what a model claimed. Anything else selects for
+  confidence.
+
+Fallback matters as much as selection: when a tier is rate-limited or down, the
+router degrades to another tier and **records that it did**. A run whose results
+came from an unplanned fallback is not comparable to one that did not, and a
+router that silently substitutes models poisons every fitness comparison
+downstream.
 
 ### Confidence is derived from outcomes, never asserted
 
@@ -361,6 +404,91 @@ that stack, has never been called. **That is the dependency to close first** —
 without retrieval, a knowledge store is a write-only log.
 
 ---
+
+## 2b. The human: the ticket is the spec, and the pauses are real
+
+**Decided: the user authors the goal spec, and human intervention points are
+ticket transitions.** The ticket system is the interface — Jira specifically.
+
+That answers the question this ADR left open ("what authors the goal spec") in
+the best available way. A person writing acceptance criteria in a ticket is doing
+something they already do, in a tool their team already reads, with an audit
+trail that already exists. Nothing here has to invent a review surface.
+
+### The mapping
+
+| the swarm | the ticket |
+|---|---|
+| a run | an issue |
+| the goal spec (tier 2 of the gate) | the acceptance criteria field, frozen and hashed at run start |
+| a human intervention point | a status transition, or a comment command |
+| the verdict, the diff, what it cost | comments |
+| `refuted`, `plateaued`, `exhausted` | a transition back to the human, with the reason |
+
+The pieces to build this on are already here: **`webhook:ingest`** (HMAC verify
+plus replay dedup, and Jira webhooks are signed), **`fsm:workflow`** (legal
+transitions — a run's lifecycle is a state machine and this is a component that
+already refuses illegal jumps), **`sched:timer`** (durable timers, for the
+poll-fallback and for reminding a human they are the blocker), and the secret
+path for the API token.
+
+The spec must be **frozen at run start and content-addressed**, exactly as the
+gate section requires — a human editing the acceptance criteria mid-run must
+produce a *new* spec version and an explicit decision about whether the in-flight
+branches are still comparable. Silently judging generation 5 against different
+criteria than generation 1 makes every fitness comparison in the run a lie.
+
+### Suspension is not blocking, and it is not death
+
+A human takes hours or days to answer. This has one consequence that is easy to
+miss and expensive to get wrong:
+
+> **A node waiting on a human must release its resources without losing its
+> place.**
+
+Blocking is wrong: an environment held open for two days over a weekend is an
+environment costing money to wait. So a node at an intervention point
+**checkpoints to the graph, releases its environment, and resumes on the
+webhook** — the environment is derived from a revision, so re-deriving it is
+cheap and the checkpoint is the thing that matters.
+
+And here is the trap where this meets the fuel design, worth writing down because
+it would be found the hard way otherwise:
+
+> **Fuel is refunded on lease expiry, so that a crashed branch cannot strand it.
+> A suspended branch looks exactly like a crashed one.**
+
+Left alone, every human-gated branch has its fuel reclaimed while somebody is at
+lunch, and resumes with nothing. So suspension must be a distinct state, not an
+absence of heartbeat: a suspended node's fuel moves into **escrow held by the
+parent**, earmarked and not redistributable, and is returned on resume. The
+distinction between "stopped answering" and "waiting for you" has to exist in the
+fuel system, not only in the status field.
+
+That makes a sixth ending, alongside the five in the fitness section:
+
+6. **`awaiting-human`** — checkpointed, environment released, fuel in escrow,
+   resumes on a ticket transition. Not running, not finished, not dead.
+
+An escrow needs an expiry of its own, or a ticket nobody ever answers holds fuel
+forever. A long timer — days, not minutes — that returns escrowed fuel to the
+parent and moves the ticket back to the human with "this expired waiting".
+
+### What a human is asked, and when
+
+Intervention points are worth being stingy with; a swarm that asks about
+everything is a swarm someone stops reading. The three that earn it:
+
+- **Before spending.** The plan and its estimated cost, once, at the start.
+  alpha-swarm2 has exactly this (plan approval) and it is the highest-value
+  interrupt — it is the last moment where stopping is free.
+- **Before landing.** A gate pass is necessary and not sufficient for a merge.
+- **On a held-out failure.** A branch that passed the public checks and failed
+  the held-out ones fitted the gate, which is evidence the spec is gameable and
+  precisely the thing a person needs to see.
+
+Everything else — a plateau, a refutation, an exhausted branch — is a comment,
+not a question. The distinction is whether the loop is *blocked* on the answer.
 
 ## 3. Fuel: budgeting with propagation
 
@@ -487,13 +615,17 @@ Not a wish-list. This is the ADR's own rule applied to itself.
   distance between sibling diffs, or how much of each branch's prompt came from
   retrieval — is unsolved here, and a swarm that cannot see its own diversity
   cannot notice it losing it.
-- **Which local embedding model, and who runs it?** A container beside SurrealDB
-  is the obvious answer and has not been tried. Whether a wasm-native embedder is
-  fast enough to avoid the sidecar entirely is unmeasured.
-- **What authors the goal spec?** The gate is per-goal and frozen; nothing here
-  says who writes it. A person writing acceptance criteria is the reliable
-  answer and does not scale; a model proposing them needs the held-out set to
-  mean anything.
+- **What are the tiers, concretely?** The router is designed and the tier list is
+  not. It needs real models with real prices, and a measurement of which classes
+  of work the cheap tier actually completes — which cannot be guessed and has to
+  be run.
+- **Re-embedding cost on a provider model change.** The canary detects the drift;
+  nothing here budgets for the re-index it triggers, which for a large corpus is
+  the single largest bill this system can generate.
+- **Does a Jira transition survive a comp restart?** The checkpoint is in the
+  graph and the webhook is at-least-once, but nothing here says what happens to a
+  transition that arrives while the platform is down. `webhook:ingest` dedups
+  replays; it does not replay what was missed.
 - **Who runs the loop?** This ADR describes the mechanisms, not the driver. A
   component that spawns, evaluates, selects and refuels is a separate decision,
   and ADR-0079 only established that a component *can* fork its own app.
