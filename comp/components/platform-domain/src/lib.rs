@@ -118,6 +118,9 @@ impl Guest for Component {
             (Method::Post, ["api", "internal", "pushed"]) => internal_pushed(&request),
             (Method::Post, ["api", "internal", "repair"]) => internal_repair(&request, &query),
             (Method::Get, ["api", "internal", "verify"]) => internal_verify(&request, &query),
+            (Method::Post, ["api", "environments"]) => env_spawn(&request, &query),
+            (Method::Get, ["api", "environments"]) => env_list(&request, &query),
+            (Method::Delete, ["api", "environments"]) => env_despawn(&request, &query),
             (Method::Post, ["api", "keys"]) => key_add(&request, &query),
             (Method::Get, ["api", "keys"]) => key_list(&request, &query),
             (Method::Post, ["api", "keys", "revoke"]) => key_revoke(&request, &query),
@@ -1418,6 +1421,210 @@ fn sanitize_key(s: &str) -> String {
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
         .take(80)
         .collect()
+}
+
+/// The app name an environment runs under.
+///
+/// An environment IS a derived app, which is the whole trick (ADR-0078): the
+/// store a component opens is `b-app-{tenant}-{app}` (ADR-0023), so deriving the
+/// app name gives each environment its own store with no new isolation
+/// machinery. Placement, scaling, links and reaping all keep working because
+/// nothing below the platform knows this app was born differently.
+fn env_app(app: &str, env: &str) -> String {
+    format!("{app}-env-{env}")
+}
+
+/// Environment names are restricted because the derived name is collapsed to a
+/// DNS label before it becomes a bucket, and two names that collapse together
+/// would share a store.
+fn valid_env_name(env: &str) -> bool {
+    !env.is_empty()
+        && env.len() <= 32
+        && env.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && !env.starts_with('-')
+        && !env.ends_with('-')
+}
+
+/// Spawn a parallel environment: the same graph, its own store (ADR-0078).
+///
+/// Recorded as desired state rather than started directly, and that is not a
+/// preference. `plan()` stops any instance no manifest asks for — "nothing wanted
+/// here at all: take it off this node" — so anything started behind the
+/// reconciler's back is reaped within one pass. Desired state is the only durable
+/// way to ask for an instance.
+fn env_spawn(request: &IncomingRequest, _query: &Map<String, Value>) -> Outcome {
+    let Some(p) = caller(request) else {
+        return Outcome::Err(401, "no session".into());
+    };
+    let b = match body(request) {
+        Ok(v) => v,
+        Err(o) => return o,
+    };
+    let (app, env) = (str_of(&b, "app"), str_of(&b, "env"));
+    if app.is_empty() || !valid_env_name(&env) {
+        return Outcome::Err(
+            422,
+            "app required, and env must be 1-32 chars of [a-z0-9-] not starting or ending with -"
+                .into(),
+        );
+    }
+
+    // The parent's newest revision is what an environment is a copy OF. Spawning
+    // from a deployment that does not exist, or one this principal cannot see, is
+    // the same 404 either way.
+    // Deployments are indexed on `org` and `tenant` only, so neither a name nor an
+    // id is a `find_by` — the first two versions of this line looked up fields
+    // that carry no index and 404'd on a deployment that plainly existed.
+    // Fetching by record id when it looks like one, and otherwise scanning this
+    // principal's own deployments by name, which is what a caller actually types.
+    // Both halves are needed and they are different strings: revisions are keyed
+    // by the deployment's RECORD ID, while a manifest's `app` — and therefore the
+    // store name — is its NAME. Losing the id here is what made the revision
+    // lookup come up empty for a deployment that had just been saved.
+    let parent = records::get(DEPLOYMENTS, &app)
+        .ok()
+        .and_then(|e| serde_json::from_str::<Value>(&e.data).ok().map(|d| (e.id, d)))
+        .or_else(|| {
+            records::list_records(DEPLOYMENTS, 1000, "")
+                .map(|p| p.entries)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok().map(|d| (e.id, d)))
+                .find(|(_, d)| str_of(d, "name") == app)
+        });
+    let Some((parent_id, parent)) = parent else {
+        return Outcome::Err(404, format!("no deployment `{app}`"));
+    };
+    // Everything downstream keys on the deployment's NAME, because that is what
+    // the manifest's `app` is and therefore what the store is named after.
+    let app = str_of(&parent, "name");
+    let owner = str_of(&parent, "org");
+    if let Err((code, msg)) =
+        orgs::acting(&p.subject, &personal_org(&p), &Map::from_iter([("org".into(), json!(owner))]), orgs::Role::Member)
+    {
+        return Outcome::Err(code, msg);
+    }
+    let Some(latest) = newest_revision(&parent_id) else {
+        return Outcome::Err(409, format!("`{app}` has no saved revision to copy"));
+    };
+
+    let derived = env_app(&app, &env);
+    // A derived name that collides with a real deployment would put two apps in
+    // one store. Refused rather than resolved: `shop` + env `x` and an app called
+    // `shop-env-x` are indistinguishable once the name is a DNS label.
+    let name_taken = records::list_records(DEPLOYMENTS, 1000, "")
+        .map(|p| p.entries)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok())
+        .any(|d| str_of(&d, "name") == derived);
+    if name_taken {
+        return Outcome::Err(409, format!("`{derived}` is already a deployment"));
+    }
+    if newest_revision(&derived).is_some() {
+        return Outcome::Err(409, format!("environment `{env}` of `{app}` already exists"));
+    }
+
+    let mut manifest = latest["manifest"].clone();
+    manifest["app"] = json!(derived);
+    // An environment is not a front door. It exists to be explored, and giving it
+    // the parent's hostname would make two apps answer to one name — the ingress
+    // would route to whichever it saw last.
+    manifest["ingress"] = Value::Null;
+
+    let revision_doc = json!({
+        "deployment": derived, "tenant": str_of(&latest, "tenant"), "revision": 1,
+        "strategy": latest["strategy"], "manifest": manifest,
+        "org": owner, "saved": now(),
+        // What it is and where it came from, so a listing can show the family and
+        // a despawn knows what it is removing.
+        "environment": { "of": app, "name": env, "from_revision": latest["revision"] },
+    });
+    match records::create(
+        REVISIONS,
+        &revision_doc.to_string(),
+        &["deployment".to_string(), "tenant".to_string()],
+    ) {
+        Ok(_) => Outcome::Json(
+            201,
+            json!({
+                "environment": env, "of": app, "app": derived,
+                "from_revision": latest["revision"],
+                "note": "the reconciler converges on the next pass",
+            })
+            .to_string(),
+        ),
+        Err(e) => Outcome::Err(500, format!("recording the environment: {e:?}")),
+    }
+}
+
+/// Every environment of an app, with the revision each was copied from.
+fn env_list(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome {
+    let Some(_p) = caller(request) else {
+        return Outcome::Err(401, "no session".into());
+    };
+    let of = query.get("app").and_then(|v| v.as_str()).unwrap_or_default();
+    let envs: Vec<Value> = records::list_records(REVISIONS, 1000, "")
+        .map(|p| p.entries)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok())
+        .filter(|r| !r["environment"].is_null() && (of.is_empty() || r["environment"]["of"] == json!(of)))
+        .map(|r| {
+            json!({
+                "environment": r["environment"]["name"],
+                "of": r["environment"]["of"],
+                "app": r["deployment"],
+                "from_revision": r["environment"]["from_revision"],
+            })
+        })
+        .collect();
+    Outcome::Json(200, json!({ "count": envs.len(), "environments": envs }).to_string())
+}
+
+/// Remove an environment. The reconciler stops its instances on the next pass,
+/// for the same reason it started them: nothing wants them any more.
+fn env_despawn(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome {
+    let Some(p) = caller(request) else {
+        return Outcome::Err(401, "no session".into());
+    };
+    let (app, env) = (
+        query.get("app").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        query.get("env").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+    );
+    if app.is_empty() || env.is_empty() {
+        return Outcome::Err(422, "?app=&env= required".into());
+    }
+    let derived = env_app(&app, &env);
+    let mut removed = 0;
+    for e in records::find_by(REVISIONS, "deployment", &json!(derived).to_string()).unwrap_or_default() {
+        let Ok(row) = serde_json::from_str::<Value>(&e.data) else { continue };
+        if row["environment"].is_null() {
+            // Not an environment: a real deployment that happens to be named this.
+            // Refusing beats deleting somebody's app because the names rhyme.
+            return Outcome::Err(409, format!("`{derived}` is a deployment, not an environment"));
+        }
+        let _ = p;
+        if records::delete(REVISIONS, &e.id).is_ok() {
+            removed += 1;
+        }
+    }
+    if removed == 0 {
+        return Outcome::Err(404, format!("no environment `{env}` of `{app}`"));
+    }
+    Outcome::Json(
+        200,
+        json!({ "environment": env, "of": app, "app": derived, "removed": removed }).to_string(),
+    )
+}
+
+/// The newest revision row for a deployment id.
+fn newest_revision(id: &str) -> Option<Value> {
+    records::find_by(REVISIONS, "deployment", &json!(id).to_string())
+        .ok()?
+        .into_iter()
+        .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok())
+        .max_by_key(|v| v["revision"].as_u64().unwrap_or(0))
 }
 
 /// What `repair` WOULD do, changing nothing (ADR-0075).
