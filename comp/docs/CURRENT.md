@@ -1,9 +1,9 @@
 # The platform as it stands
 
 What runs today, what is measured, and what is honestly missing. The reasoning lives
-in [74 ADRs](adr/); this page is the map.
+in [75 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0074.
+Last revised after ADR-0075.
 
 ## Shape
 
@@ -171,11 +171,13 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   (`comp:store/cas`, JetStream's own revision on NATS). What remains is the
   documented trade from ADR-0064: a plain read can be up to the TTL stale, so
   read-your-own-writes does not hold across nodes. That is a semantic to opt into.
-- **A record and its indexes are still separate writes.** Both are guarded
-  individually now (ADR-0068), so nothing is lost to a race, but a crash between
-  them leaves them disagreeing until someone runs `repair` — and nothing detects
-  that automatically. `repair` rebuilds both the id index and the secondary ones
-  (ADR-0071).
+- **Nothing SCHEDULES the index check.** A record and its indexes are separate
+  writes, so a crash between them leaves them disagreeing. A read now reports the
+  half it can see (`{"drift":true,…}` from `list`), and `verify` reports both
+  halves without fixing anything (ADR-0075) — but it is a question nobody is
+  asking on a timer. A cron or a pass folded into the reconciler closes it.
+- **Drift lines land in the tenant's host log**, since `record-store` runs in the
+  tenant's graph, and nothing aggregates those yet (ADR-0075).
 - **`list-keys` returns keys as STORED on the NATS backend**, not as the guest
   wrote them. For every component here that is identical, because they sanitize
   their own key segments; a key containing bytes that needed escaping comes back

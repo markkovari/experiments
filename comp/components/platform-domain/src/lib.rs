@@ -117,6 +117,7 @@ impl Guest for Component {
             // The seam the push step calls once an artifact is in the registry.
             (Method::Post, ["api", "internal", "pushed"]) => internal_pushed(&request),
             (Method::Post, ["api", "internal", "repair"]) => internal_repair(&request, &query),
+            (Method::Get, ["api", "internal", "verify"]) => internal_verify(&request, &query),
             (Method::Post, ["api", "keys"]) => key_add(&request, &query),
             (Method::Get, ["api", "keys"]) => key_list(&request, &query),
             _ => Outcome::Err(404, "not_found".into()),
@@ -1325,6 +1326,40 @@ fn sanitize_key(s: &str) -> String {
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
         .take(80)
         .collect()
+}
+
+/// What `repair` WOULD do, changing nothing (ADR-0075).
+///
+/// A GET, because it is a question. Something has to run it on a schedule for a
+/// disagreement to be noticed rather than stumbled over — that scheduler is not
+/// here, and pretending otherwise would be worse than saying so.
+fn internal_verify(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome {
+    if !internal_ok(request) {
+        return Outcome::Err(401, "internal endpoint".into());
+    }
+    let collection = query.get("collection").and_then(|v| v.as_str()).unwrap_or_default();
+    if collection.is_empty() {
+        return Outcome::Err(422, "?collection=<name> required".into());
+    }
+    match records::verify(collection) {
+        Ok(r) => {
+            let clean = r.readded == 0 && r.pruned == 0 && r.indexes_dropped == 0;
+            Outcome::Json(
+                200,
+                json!({
+                    "collection": collection,
+                    "clean": clean,
+                    // Named for what they WOULD be, since nothing was written.
+                    "records_unindexed": r.readded,
+                    "index_entries_dangling": r.pruned,
+                    "stale_index_keys": r.indexes_dropped,
+                    "total": r.total,
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => Outcome::Err(500, format!("verify {collection}: {e:?}")),
+    }
 }
 
 fn internal_ok(request: &IncomingRequest) -> bool {
