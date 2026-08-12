@@ -368,6 +368,11 @@ impl Fleet {
                 // makes the whole secret path untestable — and a fixed test key
                 // is fine precisely because nothing real is ever stored here.
                 .args(["--config", "master-key=Y29tcC10ZXN0LW9ubHktbWFzdGVyLWtleS0zMmJ5dGU="]);
+            // Admission control (ADR-0082). A test that wants to see the refusal
+            // sets it low; everything else needs it high enough not to fire.
+            if let Ok(lag) = std::env::var("COMP_MAX_PLACEMENT_LAG") {
+                cp.args(["--config", &format!("max-placement-lag={lag}")]);
+            }
             children.push(spawn_logged("control-plane", &mut cp, &sp.join("platform.log")));
             std::thread::sleep(Duration::from_secs(2));
         }

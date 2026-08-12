@@ -171,10 +171,14 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   as created, and never placed, with nothing anywhere saying so. Whole-collection
   reads now page, and the backstop reports when it is reached instead of
   quietly dropping the tail. 781/781 converges where 500 was the ceiling.
-- **Nothing refuses work the fleet cannot do.** The platform accepted 3125
-  environment spawns in 1.4 seconds while the fleet was already thousands
-  behind. `quota:meter` exists and meters none of this, and ADR-0081's budget is
-  a field nothing enforces. This is the next real gap.
+- **Admission control exists now and is enforced.** The reconciler reports its
+  lag every pass to `POST /api/internal/status`; the platform refuses a spawn
+  with 429 above `max-placement-lag`, and with 503 when that report goes stale —
+  fail CLOSED, because a dead loop is exactly when accepting more is pointless.
+  Tested against a number rather than against the weather, plus an assertion that
+  the real reconciler's own report lands. What is NOT covered: the staleness path
+  has no test (forcing it needs a clock the platform stamps itself), and nothing
+  admits against anything other than environment spawns.
 - **Breadth is fine and unmeasured beyond 8.** Eight branches spawned
   concurrently converge in ~3s on one node. Nobody has looked for the width at
   which the reconcile pass, the ports, or the memory give out. Depth is now

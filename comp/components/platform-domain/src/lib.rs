@@ -121,6 +121,7 @@ impl Guest for Component {
 
             // The applier polls this to re-apply current revisions (ADR-0004).
             (Method::Get, ["api", "internal", "revisions"]) => internal_revisions(&request),
+            (Method::Post, ["api", "internal", "status"]) => internal_status_put(&request),
             // The push path (ADR-0017), reconciled like everything else: the applier
             // asks what needs pushing, fetches the bytes, pushes, then reports back.
             (Method::Get, ["api", "internal", "pending-pushes"]) => internal_pending(&request),
@@ -1518,6 +1519,13 @@ fn env_spawn(request: &IncomingRequest, _query: &Map<String, Value>) -> Outcome 
         Ok(v) => v,
         Err(o) => return o,
     };
+    // BEFORE the lookup, not after. Admission is about whether the fleet can take
+    // more work at all, so it must not depend on the request being otherwise
+    // valid — and putting it later meant a refusal never fired, because the
+    // parent lookup answered first.
+    if let Err(refusal) = admit_one_more() {
+        return refusal;
+    }
     let (app, env) = (str_of(&b, "app"), str_of(&b, "env"));
     if app.is_empty() || !valid_env_name(&env) {
         return Outcome::Err(
@@ -3238,4 +3246,108 @@ fn goal_transition(
         ),
         Err(e) => Outcome::Err(500, format!("moving the goal: {e:?}")),
     }
+}
+
+// ---- fleet status and admission control ------------------------------------
+
+const FLEET: &str = "fleet";
+
+/// Where the reconciler's last report is kept. One row, overwritten.
+const FLEET_ROW: &str = "status";
+
+/// The reconciler POSTs here every pass. Until now nothing received it: the
+/// endpoint did not exist, and the reconciler's `let _ = …send()` swallowed the
+/// 404, so `unschedulable` and `at_ceiling` had been reported into the void.
+fn internal_status_put(request: &IncomingRequest) -> Outcome {
+    if !internal_ok(request) {
+        return Outcome::Err(401, "internal endpoint".into());
+    }
+    let Ok(raw) = read_body(request) else {
+        return Outcome::Err(400, "could not read body".into());
+    };
+    let Ok(mut body) = serde_json::from_slice::<Value>(&raw) else {
+        return Outcome::Err(400, "status must be JSON".into());
+    };
+    body["at"] = json!(now());
+
+    // One row, replaced. History would be a metrics system's job, and keeping it
+    // here would grow without bound in the collection the admission check reads
+    // on every spawn.
+    let existing = records::find_by(FLEET, "row", &json!(FLEET_ROW).to_string())
+        .unwrap_or_default()
+        .into_iter()
+        .next();
+    body["row"] = json!(FLEET_ROW);
+    let stored = match existing {
+        Some(e) => records::update(FLEET, &e.id, &body.to_string(), e.revision).map(|_| ()),
+        None => records::create(FLEET, &body.to_string(), &["row".to_string()]).map(|_| ()),
+    };
+    match stored {
+        Ok(()) => Outcome::Json(200, json!({ "recorded": true }).to_string()),
+        Err(e) => Outcome::Err(500, format!("recording fleet status: {e:?}")),
+    }
+}
+
+/// How far behind the fleet is, and how old that number is.
+fn fleet_lag() -> Option<(u64, u64)> {
+    let row = records::find_by(FLEET, "row", &json!(FLEET_ROW).to_string())
+        .ok()?
+        .into_iter()
+        .next()
+        .and_then(|e| serde_json::from_str::<Value>(&e.data).ok())?;
+    let lag = row["lag"].as_u64().unwrap_or(0);
+    let at = row["at"].as_u64().unwrap_or(0);
+    let age = now().saturating_sub(at);
+    Some((lag, age))
+}
+
+fn cfg_u64(key: &str, default: u64) -> u64 {
+    config::get(key).ok().flatten().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
+
+/// May the fleet be asked to run one more thing?
+///
+/// Admission belongs HERE and not in the reconciler: the loop's job is to place
+/// what it is told as fast as it can, and a loop that also decided whether work
+/// should exist would be judging its own backlog.
+///
+/// Refusing beats queueing. A queue that grows while nothing drains it is the
+/// same bug one level up, and a caller told "not now" can back off — which under
+/// ADR-0082 is a person, who can simply try later.
+fn admit_one_more() -> Result<(), Outcome> {
+    let limit = cfg_u64("max-placement-lag", 200);
+    if limit == 0 {
+        return Ok(()); // explicitly disabled
+    }
+    let stale_after = cfg_u64("status-max-age", 90);
+
+    let Some((lag, age)) = fleet_lag() else {
+        // Nothing has ever reported. Allowed: a platform that refused every
+        // spawn until a reconciler had spoken would be unusable on a fresh
+        // install, and there is no backlog to protect against yet either.
+        return Ok(());
+    };
+
+    // FAIL CLOSED on a stale report. If the loop has stopped, accepting more work
+    // is pointless — nothing will place it — and failing open here would mean
+    // unbounded acceptance at exactly the moment nothing is being done.
+    if age > stale_after {
+        return Err(Outcome::Err(
+            503,
+            format!(
+                "the reconciler has not reported for {age}s (stale after {stale_after}s) — \
+                 nothing is placing work, so nothing new is accepted"
+            ),
+        ));
+    }
+    if lag > limit {
+        return Err(Outcome::Err(
+            429,
+            format!(
+                "the fleet is {lag} instance(s) behind and the limit is {limit} — this would \
+                 be accepted and never placed. Try again once it has caught up."
+            ),
+        ));
+    }
+    Ok(())
 }

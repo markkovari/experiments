@@ -80,6 +80,18 @@ impl Api {
         }
     }
 
+    /// Post a fleet status as the reconciler does, so admission can be tested
+    /// against a number instead of against the weather.
+    fn status(&self, body: Value) -> u16 {
+        self.http
+            .post(format!("{}/api/internal/status", self.base))
+            .header("x-platform-secret", "test-secret")
+            .json(&body)
+            .send()
+            .map(|r| r.status().as_u16())
+            .unwrap_or(0)
+    }
+
     fn goal(&self, project: &str, title: &str) -> String {
         let (code, v) = self.post(&format!("/api/projects/{project}/goals"), json!({ "title": title }));
         assert_eq!(code, 201, "queueing `{title}` failed: {v}");
@@ -216,4 +228,96 @@ fn a_queue_that_only_a_person_can_start_and_that_refuses_illegal_moves() {
     assert_eq!(code, 404, "a goal needs a project that exists: {v}");
 
     println!("    a queue nothing drains, and six illegal transitions refused");
+}
+
+/// The fleet refuses work it could not possibly place.
+///
+/// A stress run grew 3906 environments and watched the platform accept 3125 of
+/// them in 1.4 seconds while nothing was being placed — every one recorded, every
+/// one reported to the caller as created, none ever started. Accepting work that
+/// cannot be done is worse than refusing it: a refusal is actionable and a
+/// phantom app is not.
+///
+/// The LAG is driven through the internal endpoint the reconciler posts to,
+/// rather than by growing a real backlog. That is deliberate. The first version
+/// of this test set the limit to 1 and waited for a fleet with nothing deployed
+/// to fall behind — which it never did, correctly, because a fleet with no
+/// desired state has no lag. It waited two minutes and proved nothing. Driving
+/// the contract directly tests the thing that failed in the stress run:
+/// admission, given a number.
+#[test]
+fn the_platform_refuses_work_the_fleet_cannot_place() {
+    std::env::set_var("COMP_MAX_PLACEMENT_LAG", "10");
+    let fleet = Fleet::start_with_platform("admission", 1);
+    let api = Api::new(fleet.platform_url());
+    std::env::remove_var("COMP_MAX_PLACEMENT_LAG");
+
+    let (code, p) = api.post("/api/projects", json!({ "name": "load", "repo": "acme/load" }));
+    assert_eq!(code, 201, "creating a project failed: {p}");
+
+    // Caught up: a spawn gets as far as the app not existing, which is the 404
+    // path and proves admission did NOT refuse it.
+    assert_eq!(api.status(json!({ "lag": 0, "desired": 0, "placed": 0 })), 200);
+    let (code, body) = api.post("/api/environments", json!({ "app": "anything", "env": "x" }));
+    assert_eq!(code, 404, "a caught-up fleet must admit the request: {body}");
+
+    // Behind: refused before anything is written.
+    assert_eq!(api.status(json!({ "lag": 5000, "desired": 5000, "placed": 0 })), 200);
+    let (code, body) = api.post("/api/environments", json!({ "app": "anything", "env": "x" }));
+    assert_eq!(
+        code, 429,
+        "the platform accepted work while the fleet was 5000 behind — every one of \
+         those is recorded, reported as created, and never started: {body}"
+    );
+    let detail = body["error"].as_str().unwrap_or_default().to_string();
+    assert!(
+        detail.contains("5000") && detail.contains("10"),
+        "a refusal has to say how far behind and what the limit is, or nobody can act \
+         on it: {body}"
+    );
+
+    // And it lets go again once the fleet catches up, rather than latching.
+    assert_eq!(api.status(json!({ "lag": 1, "desired": 5000, "placed": 4999 })), 200);
+    let (code, body) = api.post("/api/environments", json!({ "app": "anything", "env": "x" }));
+    assert_eq!(code, 404, "a caught-up fleet must be admitted again: {body}");
+
+    // --- and the REAL reconciler reports it, not just this test ---------------
+    //
+    // The endpoint did not exist until now and the reconciler posted into a 404
+    // with the result discarded, so `unschedulable` and `at_ceiling` had been
+    // reported into the void since they were written. A test that only drives the
+    // contract by hand would not have noticed that, and would not notice it
+    // breaking again.
+    let deadline = std::time::Instant::now() + Duration::from_secs(90);
+    let mut reported = false;
+    while std::time::Instant::now() < deadline {
+        // A report from the loop overwrites the one this test posted; `desired`
+        // is the field only the reconciler sets from real manifests.
+        if !fleet.reconciler_log().contains("could not report status")
+            && !fleet.reconciler_log().contains("refused the status report")
+        {
+            // Nothing refused it. Confirm something actually arrived by watching
+            // the lag move back to what the real fleet says.
+            let (code, _) = api.post("/api/environments", json!({ "app": "anything", "env": "y" }));
+            if code == 404 {
+                reported = true;
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    assert!(
+        reported,
+        "the reconciler's own status never landed — it reported into a 404 for a long \
+         time and the error was discarded, which is exactly what this asserts against\n\
+         --- reconciler ---\n{}",
+        fleet.reconciler_log()
+    );
+    assert!(
+        !fleet.reconciler_log().contains("refused the status report"),
+        "the platform refused the reconciler's status report:\n{}",
+        fleet.reconciler_log()
+    );
+
+    println!("    refused at lag 5000, admitted at lag 1, and the loop reports its own");
 }

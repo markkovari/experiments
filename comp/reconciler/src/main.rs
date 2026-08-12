@@ -286,7 +286,20 @@ async fn main() -> Result<()> {
         *known.write().unwrap() = (desired.clone(), observed.to_vec());
 
         let outcome = plan(&desired, &observed, load.as_ref(), &mut hyst, &cfg);
-        report(&args, &http, &outcome).await;
+
+        // How far behind the fleet is: every replica the manifests ask for,
+        // against every instance the nodes say they are running. This is the
+        // number the platform admits new work against, so it is computed on
+        // every pass rather than only when something is stuck.
+        let wanted: u64 = desired
+            .iter()
+            .flat_map(|m| m.components.iter())
+            .map(|c| c.replicas.max(1) as u64)
+            .sum();
+        let running: u64 =
+            observed.iter().map(|n| n.instances.iter().map(|i| i.count.max(1) as u64).sum::<u64>()).sum();
+        let lag = wanted.saturating_sub(running);
+        report(&args, &http, &outcome, lag, wanted, running).await;
 
         if outcome.commands.is_empty() {
             continue;
@@ -532,7 +545,7 @@ async fn send(
 
 /// Tell the platform what could not be placed. One endpoint, so an app stuck
 /// unschedulable is visible in the UI instead of only in these logs.
-async fn report(args: &Args, http: &reqwest::Client, outcome: &Outcome) {
+async fn report(args: &Args, http: &reqwest::Client, outcome: &Outcome, lag: u64, desired: u64, placed: u64) {
     // Said out loud even though nothing here can fix it: `max` is the operator's
     // limit, so a component pinned against it with demand still arriving is a
     // decision only they can make. Silence would make it indistinguishable from an
