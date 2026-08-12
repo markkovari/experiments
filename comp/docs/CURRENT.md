@@ -72,6 +72,7 @@ Every number below is from a run recorded in an ADR, not an estimate.
 | inventory snapshot ceiling | ~50 000 instances per node, zstd'd ([0058](adr/0058-snapshots-compress-and-parses-are-reused.md)) |
 | scale to zero and back | parked at 0, served in 49 ms, parked again in 5 s ([0042](adr/0042-scale-to-zero-and-back.md)) |
 | vs wasmCloud 2.5.2, same component | 3.6× on the Mac, 2.3× on a Pi ([0039](adr/0039-comp-versus-wasmcloud.md)) |
+| one cross-node call | **57 µs** (5.4% of a do-nothing request) ([0074](adr/0074-the-split-graph-still-works.md)) |
 | losing the STORE server at `--kv-replicas 3` | 0 errors, state intact, leader re-elected ([0067](adr/0067-one-copy-is-not-a-backup.md)) |
 | losing a whole MACHINE's store, 3 real machines | 0 errors, counter unbroken; the host failed over ([FLEET-BENCH](../bench/FLEET-BENCH.md)) |
 | the tailnet's own cost, request touching no storage | 41 707 rps loopback vs 1 230 over Tailscale ([FLEET-BENCH](../bench/FLEET-BENCH.md)) |
@@ -196,7 +197,7 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   gone. The remote scripts now **fail immediately** when a machine is missing
   (`bench/preflight.sh`): before, `ssh -f -n` failed silently and the run printed a
   number for a fleet that never spanned two machines.
-- **Cross-node invocation's COST is unverified.** The mechanism is covered again
-  (ADR-0074: `reconciler/tests/crossnode.rs` — two nodes, both imports over wrpc,
-  and it serves), but ADR-0032's ~4% hop has not been re-measured since, and doing
-  so needs a co-located baseline, which is a benchmark rather than a test.
+- **The hop's PERCENTAGE is not a platform property.** ADR-0074 re-measured a
+  cross-node call at **57 µs** — 5.4% of a request that deliberately does almost
+  nothing, and a far smaller share of one that touches JetStream. Quote the
+  microseconds, not the percentage.

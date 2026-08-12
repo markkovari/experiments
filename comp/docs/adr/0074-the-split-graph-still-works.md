@@ -57,12 +57,46 @@ The test prints the lines it matched. A test that says only "passed" is a test
 nobody can audit later, and this whole ADR exists because of assertions nobody
 audited.
 
-## What is still unverified
+## And the price, re-measured
 
-**The 4% itself.** This proves the capability, not the price. Measuring the hop
-again needs a co-located baseline to compare against — the same app with no
-placement constraints — and that is a benchmark rather than a test, because the
-number is noisy and machine-dependent in a way an assertion should not be.
+`comp-hopcost` runs the same graph twice — pinned to one node, then split — and
+loads both identically:
 
-So ADR-0032's *mechanism* is now covered by CI and its *number* is still a
-2026-era measurement nobody has repeated.
+```
+co-located   19 938 rps    1 003 us per request
+split        18 863 rps    1 060 us per request
+
+one cross-node call adds 57 us, which is 5.4% of THIS request
+```
+
+**ADR-0032's ~4% survives**, with a correction to what the number means: the
+microseconds are the portable figure and the percentage is not. A hop is a share
+of whatever else the request does, and this one deliberately does as little as
+possible — in-memory store, one call, no work. Put a JetStream round trip in the
+path and the same 57 µs is a much smaller fraction. That is how 4% and 5.4% are
+both right, and it is ADR-0057's point about a latency column that was arithmetic,
+arriving again.
+
+## Three ways the measurement was wrong first
+
+Worth recording, because each produced a confident number:
+
+**17.1%** — the load helper drives one key, and `gate`'s rate limit is a
+compare-and-set retry loop where every retry calls `shaper` again. On a contended
+key the split arm pays several hops per request, so this priced contention
+amplification. Fixed with a distinct key per request.
+
+**−0.1%** — a fresh HTTP client per request, so every request opened a TCP
+connection. That cost both arms the same and buried the hop under it. Throughput
+went from 1 951 to 18 490 rps when the client was reused, and only then was there
+anything to see.
+
+**Still −0.1%** — and this is the instructive one. `shaper` was **unconstrained**
+in `split-graph.yaml`, so the planner was free to put it beside `gate`. Since
+ADR-0070, `/api/ratelimit` calls only `shaper`. The "split" arm had no hop in it
+at all, while the file's own comment claimed "every call crosses the bus". The
+fixture now pins it, and the benchmark **verifies the placement of each arm before
+trusting its number** — a co-located arm has to find shaper local, a split arm has
+to find it remote, or it refuses to report.
+
+A benchmark that cannot fail is a benchmark that measures nothing.

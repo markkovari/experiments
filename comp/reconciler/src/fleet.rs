@@ -262,6 +262,19 @@ impl Fleet {
         artifacts: &[String],
         labels: &[&str],
     ) -> Self {
+        Self::start_labelled_kv(lattice, specs, artifacts, labels, None)
+    }
+
+    /// The same, choosing the store. `memory` is what a hop measurement wants:
+    /// ADR-0057's lesson is that JetStream round trips dominate everything else,
+    /// and a cross-node call hidden under them cannot be seen at all.
+    pub fn start_labelled_kv(
+        lattice: &str,
+        specs: &[&str],
+        artifacts: &[String],
+        labels: &[&str],
+        kv: Option<&str>,
+    ) -> Self {
         Self::start_full(
             lattice,
             specs,
@@ -269,7 +282,7 @@ impl Fleet {
             &[],
             labels.len().max(1) as u16,
             None,
-            None,
+            kv,
             true,
             0,
             labels,
