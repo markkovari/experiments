@@ -152,9 +152,15 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   They agree today only because three defaults coincide at 15s. The ingress now
   takes `--inventory-ttl` explicitly and refreshes at a third of it (it used to
   refresh on an interval unrelated to the TTL it was reading against, which is
-  what made `ha.rs` fail under load and report `no app answers`). What remains
-  missing is anything that NOTICES the mismatch: the bucket's real `max_age` is
-  never compared with the one asked for.
+  a real hazard). What remains missing is anything that NOTICES the mismatch: the
+  bucket's real `max_age` is never compared with the one asked for.
+- **`ha.rs` still fails under the full parallel suite, and the TTL was not the
+  cause.** The diagnostic settled it: the first ingress logs `0 route(s) over 3
+  node(s)` — it SEES all three nodes and builds no routes from them, so this is
+  route construction, not inventory expiry. `table_of` skips any instance whose
+  `ingress-host` is empty, and an instance placed by the ACTIVATION path appears
+  to advertise without one. Instrumented further (instances seen vs instances
+  carrying a host); not yet fixed, and the earlier TTL diagnosis was wrong.
 - **Breadth is fine and unmeasured beyond 8.** Eight branches spawned
   concurrently converge in ~3s on one node. Nobody has looked for the width at
   which the reconcile pass, the ports, or the memory give out. Depth is now

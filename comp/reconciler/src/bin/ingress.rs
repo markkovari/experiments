@@ -456,6 +456,30 @@ async fn main() -> Result<()> {
                             empty_streak = 0;
                         }
 
+                        // Nodes present but no routes means the advertisements
+                        // carry instances with no `ingress-host`, which is a
+                        // different bug from an empty inventory and was mistaken
+                        // for one: `0 route(s) over 3 node(s)` is a routing
+                        // problem, not a TTL problem. Counting both halves is
+                        // what tells them apart.
+                        if next.routes.is_empty() && !nodes.is_empty() {
+                            let instances: usize = nodes.iter().map(|n| n.instances.len()).sum();
+                            let with_host: usize = nodes
+                                .iter()
+                                .flat_map(|n| n.instances.iter())
+                                .filter(|i| {
+                                    i.ingress_host.as_ref().is_some_and(|h| !h.is_empty())
+                                })
+                                .count();
+                            let addressed = nodes.iter().filter(|n| !n.address.is_empty()).count();
+                            eprintln!(
+                                "comp-ingress: 0 routes from {} node(s) — {addressed} with an \
+                                 address, {instances} instance(s), {with_host} carrying an \
+                                 ingress-host",
+                                nodes.len()
+                            );
+                        }
+
                         let mut cur = table.write().unwrap();
                         if *cur != next {
                             eprintln!(
