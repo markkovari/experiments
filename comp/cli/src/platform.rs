@@ -468,3 +468,122 @@ extern "C" {
     #[link_name = "isatty"]
     fn libc_isatty(fd: i32) -> i32;
 }
+
+// ---- projects and goals (ADR-0082) -----------------------------------------
+
+pub fn project_add(name: &str, repo: &str, base: &str, org: Option<&str>) -> Result<()> {
+    let s = load()?;
+    let path = match org {
+        Some(o) => format!("/api/projects?org={o}"),
+        None => "/api/projects".to_string(),
+    };
+    let v = call(&s, "POST", &path,
+        Some(json!({ "name": name, "repo": repo, "base": base }).to_string().into_bytes()),
+        "application/json")?;
+    println!("created project {} -> {} ({})",
+        v["name"].as_str().unwrap_or(name),
+        v["repo"].as_str().unwrap_or(repo),
+        v["base"].as_str().unwrap_or(base));
+    println!("  grant it a forge token and a model key:");
+    println!("    comp secret set forge-token");
+    println!("    comp secret set openai-api-key");
+    println!("  then queue something: `comp goal add {name} \"...\"`");
+    Ok(())
+}
+
+pub fn project_ls(org: Option<&str>) -> Result<()> {
+    let s = load()?;
+    let path = match org {
+        Some(o) => format!("/api/projects?org={o}"),
+        None => "/api/projects".to_string(),
+    };
+    let v = call(&s, "GET", &path, None, "application/json")?;
+    let rows = v["projects"].as_array().cloned().unwrap_or_default();
+    if rows.is_empty() {
+        println!("no projects — `comp project add <name> --repo owner/name` starts one");
+        return Ok(());
+    }
+    println!("{:<20} {:<28} {:<8} {:>6} {:>7} {:>6}", "NAME", "REPO", "BASE", "QUEUED", "RUNNING", "FAILED");
+    for r in rows {
+        println!("{:<20} {:<28} {:<8} {:>6} {:>7} {:>6}",
+            r["name"].as_str().unwrap_or("?"),
+            r["repo"].as_str().unwrap_or("?"),
+            r["base"].as_str().unwrap_or("?"),
+            r["queued"].as_u64().unwrap_or(0),
+            r["running"].as_u64().unwrap_or(0),
+            r["failed"].as_u64().unwrap_or(0));
+    }
+    Ok(())
+}
+
+pub fn goal_add(project: &str, title: &str, spec: Option<&str>, priority: Option<i64>) -> Result<()> {
+    let s = load()?;
+    let mut body = json!({ "title": title });
+    if let Some(p) = spec {
+        body["spec"] = json!(p);
+    }
+    if let Some(p) = priority {
+        body["priority"] = json!(p);
+    }
+    let v = call(&s, "POST", &format!("/api/projects/{project}/goals"),
+        Some(body.to_string().into_bytes()), "application/json")?;
+    let id = v["id"].as_str().unwrap_or("?");
+    println!("queued {id}: {}", v["title"].as_str().unwrap_or(title));
+    // Nothing drains this queue. Saying so here is the difference between a
+    // person waiting for something that will never happen and a person starting
+    // it (ADR-0082).
+    println!("  nothing starts it on its own — `comp goal start {id}` when you are ready");
+    Ok(())
+}
+
+pub fn goal_ls(project: &str, state: Option<&str>) -> Result<()> {
+    let s = load()?;
+    let path = match state {
+        Some(st) => format!("/api/projects/{project}/goals?state={st}"),
+        None => format!("/api/projects/{project}/goals"),
+    };
+    let v = call(&s, "GET", &path, None, "application/json")?;
+    let rows = v["goals"].as_array().cloned().unwrap_or_default();
+    if rows.is_empty() {
+        println!("no goals — `comp goal add {project} \"what to do\"` queues one");
+        return Ok(());
+    }
+    println!("{:<28} {:<16} {:>4}  {}", "ID", "STATE", "PRI", "TITLE");
+    for r in rows {
+        let title = r["title"].as_str().unwrap_or("?");
+        let reason = r["reason"].as_str().unwrap_or_default();
+        println!("{:<28} {:<16} {:>4}  {title}{}",
+            r["id"].as_str().unwrap_or("?"),
+            r["state"].as_str().unwrap_or("?"),
+            r["priority"].as_i64().unwrap_or(100),
+            if reason.is_empty() { String::new() } else { format!("  ({reason})") });
+    }
+    Ok(())
+}
+
+/// The one transition a person must make for work to happen.
+pub fn goal_start(id: &str) -> Result<()> {
+    let s = load()?;
+    let v = call(&s, "POST", &format!("/api/goals/{id}/start"), Some(b"{}".to_vec()), "application/json")?;
+    println!("started {id}: {}", v["title"].as_str().unwrap_or("?"));
+    Ok(())
+}
+
+pub fn goal_fail(id: &str, reason: &str) -> Result<()> {
+    let s = load()?;
+    let v = call(&s, "POST", &format!("/api/goals/{id}/fail"),
+        Some(json!({ "reason": reason }).to_string().into_bytes()), "application/json")?;
+    println!("failed {id}: {}", v["title"].as_str().unwrap_or("?"));
+    // A dead letter is terminal on purpose: re-running an LLM goal unchanged
+    // costs money and fails the same way. A retry is a NEW goal, so the history
+    // of what was tried stays honest.
+    println!("  it stays in the dead-letter queue — requeue by adding a new goal");
+    Ok(())
+}
+
+pub fn goal_abandon(id: &str) -> Result<()> {
+    let s = load()?;
+    call(&s, "DELETE", &format!("/api/goals/{id}"), None, "application/json")?;
+    println!("abandoned {id}");
+    Ok(())
+}

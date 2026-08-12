@@ -101,6 +101,17 @@ impl Guest for Component {
             (Method::Get, ["api", "secrets"]) => secrets_list(&request, &query),
             (Method::Delete, ["api", "secrets", name]) => secret_delete(&request, name, &query),
 
+            (Method::Post, ["api", "projects"]) => project_create(&request, &query),
+            (Method::Get, ["api", "projects"]) => projects_list(&request, &query),
+            (Method::Post, ["api", "projects", project, "goals"]) => goal_create(&request, project, &query),
+            (Method::Get, ["api", "projects", project, "goals"]) => goals_list(&request, project, &query),
+            // A human starts every goal; there is no loop that does (ADR-0082).
+            (Method::Post, ["api", "goals", id, "start"]) => goal_transition(&request, id, "running", &query),
+            (Method::Post, ["api", "goals", id, "fail"]) => goal_transition(&request, id, "failed", &query),
+            (Method::Post, ["api", "goals", id, "done"]) => goal_transition(&request, id, "done", &query),
+            (Method::Post, ["api", "goals", id, "review"]) => goal_transition(&request, id, "awaiting-human", &query),
+            (Method::Delete, ["api", "goals", id]) => goal_transition(&request, id, "abandoned", &query),
+
             (Method::Post, ["api", "deployments"]) => deployment_create(&request, &query),
             (Method::Get, ["api", "deployments"]) => deployments_list(&request),
             (Method::Get, ["api", "deployments", id]) => deployment_get(&request, id),
@@ -2942,5 +2953,251 @@ mod query_tests {
     fn a_stray_percent_is_kept_rather_than_swallowed() {
         let (_, q) = split_query("/api/market?q=100%");
         assert_eq!(q["q"], json!("100%"));
+    }
+}
+
+// ---- projects and goals (ADR-0082) -----------------------------------------
+
+const PROJECTS: &str = "projects";
+const GOALS: &str = "goals";
+
+/// The goal lifecycle, as the only legal transitions.
+///
+/// A table rather than scattered `if state == …` checks, because the illegal
+/// moves are the interesting ones: nothing may leave `failed` (a requeue makes a
+/// NEW goal, so what was tried stays visible), and nothing may reach `done`
+/// without having run.
+fn goal_may(from: &str, to: &str) -> bool {
+    matches!(
+        (from, to),
+        ("queued", "running")
+            | ("queued", "abandoned")
+            | ("running", "awaiting-human")
+            | ("running", "failed")
+            | ("running", "abandoned")
+            | ("awaiting-human", "done")
+            | ("awaiting-human", "failed")
+            | ("awaiting-human", "abandoned")
+    )
+}
+
+/// A project name that is safe as part of a store name and a branch name.
+fn valid_project_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 40
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+}
+
+fn project_create(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome {
+    let Some(p) = caller(request) else {
+        return Outcome::Err(401, "no session".into());
+    };
+    let org = match orgs::acting(&p.subject, &personal_org(&p), query, orgs::Role::Member) {
+        Ok((org, _)) => org,
+        Err((code, msg)) => return Outcome::Err(code, msg),
+    };
+    let b: req::NewProject = match read_body(request)
+        .map_err(|_| Outcome::Err(400, "could not read body".into()))
+        .and_then(|raw| req::parse(&raw))
+    {
+        Ok(v) => v,
+        Err(o) => return o,
+    };
+    if !valid_project_name(&b.name) {
+        return Outcome::Err(422, "name must be 1-40 chars of [a-z0-9-], not starting or ending with -".into());
+    }
+    // `owner/name`, checked here rather than at the first forge call, where the
+    // answer is a 404 that reads like "the repository does not exist".
+    if b.repo.split('/').filter(|s| !s.is_empty()).count() != 2 {
+        return Outcome::Err(422, format!("repo must be \"owner/name\", got {:?}", b.repo));
+    }
+    if projects_of(&org).iter().any(|d| str_of(d, "name") == b.name) {
+        return Outcome::Err(409, format!("project `{}` already exists", b.name));
+    }
+
+    let doc = json!({
+        "name": b.name, "org": org, "repo": b.repo,
+        "base": b.base.unwrap_or_else(|| "main".into()),
+        "forge_token_ref": b.forge_token_ref.unwrap_or_default(),
+        "llm_key_ref": b.llm_key_ref.unwrap_or_default(),
+        "budget": b.budget.unwrap_or(0),
+        // One at a time, which is the whole answer to concurrent pull requests
+        // (ADR-0082). Raising it is what makes that a problem worth solving.
+        "max_concurrent_runs": 1,
+        "created": now(),
+    });
+    match records::create(PROJECTS, &doc.to_string(), &["org".to_string()]) {
+        Ok(e) => Outcome::Json(201, json!({ "id": e.id, "name": doc["name"], "repo": doc["repo"], "base": doc["base"] }).to_string()),
+        Err(e) => Outcome::Err(500, format!("recording the project: {e:?}")),
+    }
+}
+
+fn projects_of(org: &str) -> Vec<Value> {
+    records::find_by(PROJECTS, "org", &json!(org).to_string())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok())
+        .collect()
+}
+
+fn projects_list(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome {
+    let Some(p) = caller(request) else {
+        return Outcome::Err(401, "no session".into());
+    };
+    let org = match orgs::acting(&p.subject, &personal_org(&p), query, orgs::Role::Viewer) {
+        Ok((org, _)) => org,
+        Err((code, msg)) => return Outcome::Err(code, msg),
+    };
+    let rows: Vec<Value> = projects_of(&org)
+        .into_iter()
+        .map(|d| {
+            let name = str_of(&d, "name");
+            let goals = goals_of(&name);
+            json!({
+                "name": name, "repo": d["repo"], "base": d["base"],
+                "queued": goals.iter().filter(|g| str_of(g, "state") == "queued").count(),
+                "running": goals.iter().filter(|g| str_of(g, "state") == "running").count(),
+                "failed": goals.iter().filter(|g| str_of(g, "state") == "failed").count(),
+            })
+        })
+        .collect();
+    Outcome::Json(200, json!({ "count": rows.len(), "projects": rows }).to_string())
+}
+
+fn goals_of(project: &str) -> Vec<Value> {
+    records::find_by(GOALS, "project", &json!(project).to_string())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok().map(|mut v| {
+            v["id"] = json!(e.id);
+            v
+        }))
+        .collect()
+}
+
+fn goal_create(request: &IncomingRequest, project: &str, query: &Map<String, Value>) -> Outcome {
+    let Some(p) = caller(request) else {
+        return Outcome::Err(401, "no session".into());
+    };
+    let org = match orgs::acting(&p.subject, &personal_org(&p), query, orgs::Role::Member) {
+        Ok((org, _)) => org,
+        Err((code, msg)) => return Outcome::Err(code, msg),
+    };
+    if !projects_of(&org).iter().any(|d| str_of(d, "name") == project) {
+        return Outcome::Err(404, format!("no project `{project}`"));
+    }
+    let b: req::NewGoal = match read_body(request)
+        .map_err(|_| Outcome::Err(400, "could not read body".into()))
+        .and_then(|raw| req::parse(&raw))
+    {
+        Ok(v) => v,
+        Err(o) => return o,
+    };
+    if b.title.trim().is_empty() {
+        return Outcome::Err(422, "a goal needs a title".into());
+    }
+    let doc = json!({
+        "project": project, "org": org,
+        "title": b.title.trim(),
+        "spec": b.spec.unwrap_or_default(),
+        "priority": b.priority.unwrap_or(100),
+        // Queued, and it stays there. A human starts every goal (ADR-0082): there
+        // is no loop that drains this, on purpose.
+        "state": "queued",
+        "created": now(),
+    });
+    match records::create(GOALS, &doc.to_string(), &["project".to_string(), "org".to_string()]) {
+        Ok(e) => Outcome::Json(201, json!({ "id": e.id, "project": project, "state": "queued", "title": doc["title"] }).to_string()),
+        Err(e) => Outcome::Err(500, format!("recording the goal: {e:?}")),
+    }
+}
+
+fn goals_list(request: &IncomingRequest, project: &str, query: &Map<String, Value>) -> Outcome {
+    let Some(p) = caller(request) else {
+        return Outcome::Err(401, "no session".into());
+    };
+    if let Err((code, msg)) = orgs::acting(&p.subject, &personal_org(&p), query, orgs::Role::Viewer) {
+        return Outcome::Err(code, msg);
+    }
+    let want = query.get("state").and_then(|v| v.as_str()).unwrap_or_default();
+    let mut rows: Vec<Value> = goals_of(project)
+        .into_iter()
+        .filter(|g| want.is_empty() || str_of(g, "state") == want)
+        .collect();
+    // Priority first, then oldest — a worklist someone reads top-down.
+    rows.sort_by(|a, b| {
+        a["priority"]
+            .as_i64()
+            .unwrap_or(100)
+            .cmp(&b["priority"].as_i64().unwrap_or(100))
+            .then(str_of(a, "created").cmp(&str_of(b, "created")))
+    });
+    Outcome::Json(200, json!({ "count": rows.len(), "goals": rows }).to_string())
+}
+
+/// Move a goal, refusing anything the lifecycle does not allow.
+fn goal_transition(
+    request: &IncomingRequest,
+    id: &str,
+    to: &str,
+    query: &Map<String, Value>,
+) -> Outcome {
+    let Some(p) = caller(request) else {
+        return Outcome::Err(401, "no session".into());
+    };
+    if let Err((code, msg)) = orgs::acting(&p.subject, &personal_org(&p), query, orgs::Role::Member) {
+        return Outcome::Err(code, msg);
+    }
+    let Ok(entry) = records::get(GOALS, id) else {
+        return Outcome::Err(404, format!("no goal `{id}`"));
+    };
+    let Ok(mut doc) = serde_json::from_str::<Value>(&entry.data) else {
+        return Outcome::Err(500, "the goal record is unreadable".into());
+    };
+    let from = str_of(&doc, "state");
+    if !goal_may(&from, to) {
+        // Naming both ends beats "invalid transition": the caller usually has the
+        // wrong idea about where the goal currently IS.
+        return Outcome::Err(409, format!("a goal cannot go from `{from}` to `{to}`"));
+    }
+
+    doc["state"] = json!(to);
+    match to {
+        "running" => {
+            doc["started"] = json!(now());
+            // A goal is FROZEN once it starts (ADR-0081): the spec it was judged
+            // against must not change under a run. Editing a running goal forks
+            // it into a new one instead.
+            doc["frozen_spec"] = doc["spec"].clone();
+        }
+        "failed" => {
+            let reason = read_body(request)
+                .ok()
+                .and_then(|raw| req::parse::<req::FailGoal>(&raw).ok())
+                .map(|b| b.reason)
+                .unwrap_or_else(|| "no reason given".into());
+            doc["reason"] = json!(reason);
+            doc["failed_at"] = json!(now());
+        }
+        "done" => doc["finished"] = json!(now()),
+        _ => {}
+    }
+
+    // Guarded on the revision we READ, so two people starting the same goal at the
+    // same moment cannot both win. Without it the second write silently overwrites
+    // the first and two runs believe they own one goal — which, with one run per
+    // project, is exactly the case this design exists to prevent.
+    match records::update(GOALS, id, &doc.to_string(), entry.revision) {
+        Err(records::StoreError::RevisionConflict(_)) => Outcome::Err(
+            409,
+            format!("`{id}` moved while you were looking at it — read it again"),
+        ),
+        Ok(_) => Outcome::Json(
+            200,
+            json!({ "id": id, "from": from, "state": to, "title": doc["title"] }).to_string(),
+        ),
+        Err(e) => Outcome::Err(500, format!("moving the goal: {e:?}")),
     }
 }
