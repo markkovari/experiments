@@ -353,3 +353,118 @@ pub fn org_remove(org: &str, subject: &str) -> Result<()> {
     println!("removed {subject} from {org}");
     Ok(())
 }
+
+// ---- secrets ---------------------------------------------------------------
+
+/// Store a secret, reading the VALUE from a file or stdin — never from argv.
+///
+/// A token on a command line is a token in `~/.bash_history`, in `ps` output for
+/// every other user on the box, and in the shell's own recall. Those are three
+/// disclosures that no amount of care at the platform end can undo, so this tool
+/// will not accept one that way.
+///
+/// The reference it prints is what a manifest carries (ADR-0010): the manifest
+/// gets a pointer, never the value.
+pub fn secret_set(name: &str, from: Option<&PathBuf>, org: Option<&str>) -> Result<()> {
+    let s = load()?;
+    let value = match from {
+        Some(p) => std::fs::read_to_string(p)
+            .with_context(|| format!("reading {}", p.display()))?,
+        // Not a terminal: something is piping. Read it and stay silent, so this
+        // composes in a script.
+        None if !stdin_is_a_terminal() => {
+            let mut buf = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+                .context("reading the value from stdin")?;
+            buf
+        }
+        // A person is here. Ask, with the echo off — a key pasted into a visible
+        // prompt is a key in the scrollback, on the screen behind them, and in
+        // any terminal recording.
+        None => {
+            let first = rpassword::prompt_password(format!("value for {name}: "))
+                .context("reading the value")?;
+            let again = rpassword::prompt_password("again: ").context("reading the confirmation")?;
+            if first != again {
+                // Worth confirming precisely BECAUSE it is hidden: a mistyped key
+                // that nobody can see fails later, at a provider, with a message
+                // about authentication rather than about typing.
+                anyhow::bail!("the two values differ — nothing was stored");
+            }
+            first
+        }
+    };
+    // Trailing newlines are what `echo` and every editor add, and a bearer token
+    // with one on the end fails authentication in a way whose error message says
+    // nothing about a newline.
+    let value = value.trim_end_matches(['\n', '\r']).to_string();
+    if value.is_empty() {
+        anyhow::bail!("the value is empty — nothing was stored");
+    }
+    let path = match org {
+        Some(o) => format!("/api/secrets?org={o}"),
+        None => "/api/secrets".to_string(),
+    };
+    let v = call(&s, "POST", &path, Some(json!({ "name": name, "value": value }).to_string().into_bytes()),
+                 "application/json")?;
+    let reference = v["ref"].as_str().unwrap_or("?");
+    println!("stored {reference} (version {})", v["version"].as_str().unwrap_or("?"));
+    println!("  grant it to a component with:");
+    println!("    secrets:");
+    println!("      - key: {name}");
+    println!("        ref: {reference}");
+    Ok(())
+}
+
+/// Names, never values. There is no endpoint that returns one.
+pub fn secret_ls(org: Option<&str>) -> Result<()> {
+    let s = load()?;
+    let path = match org {
+        Some(o) => format!("/api/secrets?org={o}"),
+        None => "/api/secrets".to_string(),
+    };
+    let v = call(&s, "GET", &path, None, "application/json")?;
+    let rows = v["secrets"].as_array().cloned().unwrap_or_default();
+    if rows.is_empty() {
+        println!("no secrets — `comp secret set <name> --from <file>` stores one");
+        return Ok(());
+    }
+    println!("{:<28} {}", "NAME", "REFERENCE");
+    for r in rows {
+        println!("{:<28} {}", r["name"].as_str().unwrap_or("?"), r["ref"].as_str().unwrap_or("?"));
+    }
+    Ok(())
+}
+
+pub fn secret_rm(name: &str, org: Option<&str>) -> Result<()> {
+    let s = load()?;
+    let path = match org {
+        Some(o) => format!("/api/secrets/{name}?org={o}"),
+        None => format!("/api/secrets/{name}"),
+    };
+    call(&s, "DELETE", &path, None, "application/json")?;
+    // Deliberately blunt: an instance granted this reference will fail to START
+    // on its next reconcile, rather than failing on its first request (ADR-0051).
+    println!("deleted {name} — any component granted it will stop starting");
+    Ok(())
+}
+
+/// Is stdin a terminal? Decides between prompting and reading a pipe.
+fn stdin_is_a_terminal() -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        // SAFETY: isatty on a valid fd is a read-only query and cannot fail badly.
+        unsafe { libc_isatty(std::io::stdin().as_raw_fd()) == 1 }
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+#[cfg(unix)]
+extern "C" {
+    #[link_name = "isatty"]
+    fn libc_isatty(fd: i32) -> i32;
+}

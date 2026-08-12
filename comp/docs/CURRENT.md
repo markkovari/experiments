@@ -146,6 +146,10 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 
 ## Honestly missing
 
+- **No automated cover for the interactive secret prompt.** `comp secret set`
+  reads a value with the echo off and asks twice; the pipe and `--from` paths are
+  tested, the terminal path was verified under a pty by hand. A test for it needs
+  a pty in the harness.
 - **The graph loop has memory and no shape for it.** `knowledge-graph` stores
   nodes, edges and traversal against a real SurrealDB (ADR-0080), and nothing
   decides what an environment should remember: whether a fork inherits its

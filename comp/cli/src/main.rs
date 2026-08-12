@@ -387,6 +387,9 @@ enum Cmd {
     /// Organisations: who owns a deployment, when a person belongs to several.
     #[command(subcommand)]
     Org(OrgCmd),
+    /// Secrets: values a manifest must never carry, stored by reference.
+    #[command(subcommand)]
+    Secret(SecretCmd),
 }
 
 #[derive(Subcommand)]
@@ -454,6 +457,39 @@ enum OrgCmd {
 }
 
 #[derive(Subcommand)]
+enum SecretCmd {
+    /// Store one. The VALUE never comes from the command line — an argument
+    /// lands in shell history and in `ps` for every other user on the box, and
+    /// neither can be taken back.
+    ///
+    ///   comp secret set openai            # prompts, hidden, asks twice
+    ///   comp secret set openai --from ./key.txt
+    ///   pbpaste | comp secret set openai  # a pipe stays silent, for scripts
+    Set {
+        /// The name the reference is built from: `vault://<org>/<name>`.
+        name: String,
+        /// Read the value from this file instead of stdin.
+        #[arg(long)]
+        from: Option<PathBuf>,
+        /// Which org owns it. Defaults to your personal one.
+        #[arg(long)]
+        org: Option<String>,
+    },
+    /// Names and references. There is no command that prints a value, because
+    /// there is no endpoint that returns one.
+    Ls {
+        #[arg(long)]
+        org: Option<String>,
+    },
+    /// Delete one. Anything granted it stops starting on the next reconcile.
+    Rm {
+        name: String,
+        #[arg(long)]
+        org: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum NodeCmd {
     /// Render a TLS front for `comp-ingress`, so the lattice has one HTTPS door.
     ///
@@ -512,6 +548,11 @@ fn main() -> Result<()> {
         Cmd::App(AppCmd::Create { name, strategy, components, links, org }) => {
             platform::app_create(&name, &strategy, &components, &links, org.as_deref())?
         }
+        Cmd::Secret(SecretCmd::Set { name, from, org }) => {
+            platform::secret_set(&name, from.as_ref(), org.as_deref())?
+        }
+        Cmd::Secret(SecretCmd::Ls { org }) => platform::secret_ls(org.as_deref())?,
+        Cmd::Secret(SecretCmd::Rm { name, org }) => platform::secret_rm(&name, org.as_deref())?,
         Cmd::Org(OrgCmd::Create { name }) => platform::org_create(&name)?,
         Cmd::Org(OrgCmd::Ls) => platform::org_ls()?,
         Cmd::Org(OrgCmd::Invite { org, role }) => platform::org_invite(&org, &role)?,

@@ -362,7 +362,12 @@ impl Fleet {
                 .arg(sp.join("platform.db"))
                 .args(["--tenant", "platform", "--app", "control-plane"])
                 .args(["--config", "applier-secret=test-secret"])
-                .args(["--config", "ingress-suffix=test"]);
+                .args(["--config", "ingress-suffix=test"])
+                // Envelope encryption for the vault (`secrets-vault`). Without
+                // it every write is refused with "master key missing", which
+                // makes the whole secret path untestable — and a fixed test key
+                // is fine precisely because nothing real is ever stored here.
+                .args(["--config", "master-key=Y29tcC10ZXN0LW9ubHktbWFzdGVyLWtleS0zMmJ5dGU="]);
             children.push(spawn_logged("control-plane", &mut cp, &sp.join("platform.log")));
             std::thread::sleep(Duration::from_secs(2));
         }
