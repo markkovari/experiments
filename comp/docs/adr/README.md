@@ -100,6 +100,7 @@ single-component app should be a container, not a wasm workload.
 | [0076](0076-revocation-without-versions.md) | Revocation without versions — and why per-version keys stay unbuilt | accepted, and built |
 | [0077](0077-asking-the-same-question-twenty-times.md) | Asking the same question twenty times — the `feed` N+1, removed | accepted, and built |
 | [0078](0078-an-environment-is-a-derived-app.md) | An environment is a derived app — parallel exploration, and why not a host per branch | accepted; desired-state half built |
+| [0079](0079-a-component-forks-its-own-app.md) | A component forks its own app — the instance token as identity | accepted; platform half built |
 
 ## The shape these add up to
 

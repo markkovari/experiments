@@ -453,28 +453,50 @@ async fn wire_command(
         .iter()
         .map(|s| (s.key.clone(), s.reference.clone()))
         .collect::<std::collections::BTreeMap<_, _>>());
-    if secrets.is_empty() {
-        return Ok(body);
-    }
+    // Minted even with no secrets: the token is this instance's proof of identity,
+    // which is what lets a component ask the platform to fork its own app
+    // (ADR-0079) without the host holding a credential that could touch anyone
+    // else's. A token with no refs authorises no secret.
+
     let instance = format!("{tenant}/{app}/{component}@{node}");
     let refs: Vec<&str> = secrets.iter().map(|s| s.reference.as_str()).collect();
     let url = format!("{}/api/internal/fetch-token", args.platform_url.trim_end_matches('/'));
-    let res = http
-        .post(&url)
-        .header("x-platform-secret", &args.secret)
-        .json(&json!({ "instance": instance, "refs": refs }))
-        .send()
-        .await
-        .context("asking for a fetch token")?;
-    if !res.status().is_success() {
-        anyhow::bail!("the platform refused a fetch token: {}", res.status());
+    // Hard for secrets, soft for identity. An instance that was GRANTED secrets and
+    // cannot get a token must not start — it would fail at the first reveal, in
+    // front of a user (ADR-0061). An instance with no secrets wants the token only
+    // to prove who it is when it asks to fork its own app (ADR-0079), and refusing
+    // to start it would make a brand-new optional capability able to take the
+    // whole fleet down. It did, for one commit: every start began minting, and a
+    // control plane without that route served nothing at all.
+    let need = !secrets.is_empty();
+    let minted = async {
+        let res = http
+            .post(&url)
+            .header("x-platform-secret", &args.secret)
+            .json(&json!({ "instance": instance, "refs": refs }))
+            .send()
+            .await
+            .context("asking for an instance token")?;
+        if !res.status().is_success() {
+            anyhow::bail!("the platform refused an instance token: {}", res.status());
+        }
+        let token = res.json::<serde_json::Value>().await.context("reading the token")?;
+        let token = token["token"].as_str().unwrap_or_default().to_string();
+        if token.is_empty() {
+            anyhow::bail!("the platform returned an empty token");
+        }
+        Ok::<_, anyhow::Error>(token)
     }
-    let token = res.json::<serde_json::Value>().await.context("reading the fetch token")?;
-    let token = token["token"].as_str().unwrap_or_default().to_string();
-    if token.is_empty() {
-        anyhow::bail!("the platform returned an empty fetch token");
+    .await;
+    match minted {
+        Ok(token) => body["fetch_token"] = json!(token),
+        Err(e) if need => return Err(e),
+        Err(e) => {
+            // Said once per start rather than swallowed: an instance without a
+            // token cannot spawn, and finding that out from silence is worse.
+            eprintln!("comp-reconciler: {instance} starts without an instance token ({e:#})");
+        }
     }
-    body["fetch_token"] = json!(token);
     Ok(body)
 }
 

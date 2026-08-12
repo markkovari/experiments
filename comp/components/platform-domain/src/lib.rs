@@ -119,6 +119,9 @@ impl Guest for Component {
             (Method::Post, ["api", "internal", "repair"]) => internal_repair(&request, &query),
             (Method::Get, ["api", "internal", "verify"]) => internal_verify(&request, &query),
             (Method::Post, ["api", "environments"]) => env_spawn(&request, &query),
+            (Method::Post, ["api", "internal", "environments"]) => {
+                internal_env_spawn(&request, &query)
+            }
             (Method::Get, ["api", "environments"]) => env_list(&request, &query),
             (Method::Delete, ["api", "environments"]) => env_despawn(&request, &query),
             (Method::Post, ["api", "keys"]) => key_add(&request, &query),
@@ -702,8 +705,12 @@ fn fetch_token_mint(request: &IncomingRequest) -> Outcome {
         .as_array()
         .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
-    if instance.is_empty() || refs.is_empty() {
-        return Outcome::Err(422, "instance and refs are required".into());
+    // `refs` may be empty. This started as a SECRETS credential, minted only for
+    // instances that had any — but it is really an instance's proof of who it is,
+    // and ADR-0079 needs that for an instance with no secrets at all. An empty
+    // ref list simply authorises no secret.
+    if instance.is_empty() {
+        return Outcome::Err(422, "instance is required".into());
     }
     // Long enough to outlive an instance's useful life, short enough that a leaked
     // token is not a standing grant. A restart mints a new one, and a start costs
@@ -1445,6 +1452,46 @@ fn valid_env_name(env: &str) -> bool {
         && !env.ends_with('-')
 }
 
+/// Spawn on behalf of a RUNNING INSTANCE, authorised by its own token (ADR-0079).
+///
+/// The token says which instance is calling — `{tenant}/{app}/{component}@{node}`,
+/// minted by the reconciler and never seen by the guest — so a component can fork
+/// the app it is part of and nothing else. Scoped by construction rather than by
+/// checking a parameter the caller supplied.
+fn internal_env_spawn(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome {
+    let token = request
+        .headers()
+        .get(&"x-fetch-token".to_string())
+        .into_iter()
+        .next()
+        .and_then(|v| String::from_utf8(v).ok())
+        .unwrap_or_default();
+    if token.is_empty() {
+        return Outcome::Err(401, "no instance token".into());
+    }
+    let Ok(entry) = records::get(FETCH_TOKENS, &token) else {
+        return Outcome::Err(401, "unknown instance token".into());
+    };
+    let Ok(doc) = serde_json::from_str::<Value>(&entry.data) else {
+        return Outcome::Err(401, "unreadable instance token".into());
+    };
+    if doc["expires"].as_u64().unwrap_or(0) < now() {
+        return Outcome::Err(401, "expired".into());
+    }
+    // `tenant/app/component@node` — the app is the middle segment, and it is the
+    // only thing this call is allowed to fork.
+    let instance = str_of(&doc, "instance");
+    let app = instance.split('/').nth(1).unwrap_or_default().to_string();
+    if app.is_empty() {
+        return Outcome::Err(422, format!("unreadable instance `{instance}`"));
+    }
+    let env = query.get("env").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    if !valid_env_name(&env) {
+        return Outcome::Err(422, "env must be 1-32 chars of [a-z0-9-]".into());
+    }
+    spawn_environment(&app, &env)
+}
+
 /// Spawn a parallel environment: the same graph, its own store (ADR-0078).
 ///
 /// Recorded as desired state rather than started directly, and that is not a
@@ -1504,11 +1551,31 @@ fn env_spawn(request: &IncomingRequest, _query: &Map<String, Value>) -> Outcome 
     {
         return Outcome::Err(code, msg);
     }
+    // Whether there IS a revision to copy is `spawn_environment`'s business; this
+    // route only has to establish that the caller may act for the owning org.
+    let _ = parent_id;
+    spawn_environment(&app, &env)
+}
+
+/// Everything after "who is asking": copy the app's newest revision under a
+/// derived name. Shared by the user-facing route and the instance one, because a
+/// fork requested by an agent and a fork requested by a person must produce the
+/// same thing.
+fn spawn_environment(app: &str, env: &str) -> Outcome {
+    let parent = records::list_records(DEPLOYMENTS, 1000, "")
+        .map(|p| p.entries)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok().map(|d| (e.id, d)))
+        .find(|(_, d)| str_of(d, "name") == app);
+    let Some((parent_id, parent)) = parent else {
+        return Outcome::Err(404, format!("no deployment `{app}`"));
+    };
+    let owner = str_of(&parent, "org");
     let Some(latest) = newest_revision(&parent_id) else {
         return Outcome::Err(409, format!("`{app}` has no saved revision to copy"));
     };
-
-    let derived = env_app(&app, &env);
+    let derived = env_app(app, env);
     // A derived name that collides with a real deployment would put two apps in
     // one store. Refused rather than resolved: `shop` + env `x` and an app called
     // `shop-env-x` are indistinguishable once the name is a DNS label.
