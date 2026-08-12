@@ -1,9 +1,9 @@
 # The platform as it stands
 
 What runs today, what is measured, and what is honestly missing. The reasoning lives
-in [73 ADRs](adr/); this page is the map.
+in [74 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0073.
+Last revised after ADR-0074.
 
 ## Shape
 
@@ -121,7 +121,7 @@ fast a dead machine is noticed), `max_inflight` (where the ingress starts sheddi
 
 ## Tests
 
-171 across four crates, `cargo nextest`. No Python anywhere in `bench/` or `e2e/`.
+172 across four crates, `cargo nextest`. No Python anywhere in `bench/` or `e2e/`.
 
 ```
 cargo build --release --manifest-path host/Cargo.toml   # tests spawn this
@@ -140,6 +140,7 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 | `reconciler/tests/ha.rs` | two ingresses, then one dies |
 | `reconciler/tests/leader.rs` | two reconcilers: one acts, and the standby takes over |
 | `reconciler/tests/publish.rs` | public needs a real signature over the real digest |
+| `reconciler/tests/crossnode.rs` | one graph over two nodes, both links over wrpc |
 | `bench/` | only what drives *other machines* — malna, bobocat, a k8s wasmCloud |
 
 ## Honestly missing
@@ -195,6 +196,7 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   gone. The remote scripts now **fail immediately** when a machine is missing
   (`bench/preflight.sh`): before, `ssh -f -n` failed silently and the run printed a
   number for a fleet that never spanned two machines.
-- **Cross-node invocation (ADR-0032) has no test and no script.** `split-graph.sh`
-  was deleted with the others and nothing replaced it; `fixtures/split-graph.yaml`
-  is the input a test would take.
+- **Cross-node invocation's COST is unverified.** The mechanism is covered again
+  (ADR-0074: `reconciler/tests/crossnode.rs` — two nodes, both imports over wrpc,
+  and it serves), but ADR-0032's ~4% hop has not been re-measured since, and doing
+  so needs a co-located baseline, which is a benchmark rather than a test.
