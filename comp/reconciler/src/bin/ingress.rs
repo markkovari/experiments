@@ -452,11 +452,52 @@ async fn main() -> Result<()> {
     // Refreshed on a timer and read from a lock per request. A request that had to
     // ask the bus for its route would put the control plane on the data path, which
     // is the thing this design keeps apart.
+    // ON ITS OWN THREAD, WITH ITS OWN RUNTIME AND ITS OWN CONNECTION.
+    //
+    // Every request depends on this table, so letting the task that maintains it
+    // compete with request handling for scheduler time is a priority inversion —
+    // the ingress is busiest exactly when it most needs to know where to send
+    // things. And it is worse than a slow refresh: async-nats drives its
+    // connection from a task on the runtime it was created on, so a starved
+    // runtime does not merely delay `read_all`, it can leave it awaiting a reply
+    // that nothing is left to deliver. The loop then stops printing and stops
+    // updating, with no panic and no exit — which is exactly what was seen, and
+    // is indistinguishable from a dead task from the outside.
+    //
+    // A dedicated OS thread with a current-thread runtime and a SEPARATE NATS
+    // connection removes the coupling entirely. It costs one thread.
     {
-        let (inventory, table, every) = (inventory.clone(), table.clone(), refresh_secs);
-        tokio::spawn(async move {
+        let (table, every) = (table.clone(), refresh_secs);
+        let (nats_url, lattice_name, ttl) =
+            (args.nats_url.clone(), args.lattice.clone(), inventory_ttl);
+        std::thread::Builder::new()
+            .name("inventory-refresh".into())
+            .spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    eprintln!("comp-ingress: could not build the refresh runtime: {e}");
+                    return;
+                }
+            };
+            rt.block_on(async move {
+            let inventory: Arc<dyn Inventory> = loop {
+                match NatsLattice::connect(&nats_url, &lattice_name, Duration::from_secs(ttl)).await
+                {
+                    Ok(l) => break Arc::new(l),
+                    // Retried rather than fatal: an ingress that cannot reach the
+                    // bus at startup still serves what it is told to activate, and
+                    // giving up here would mean it never routes again even once
+                    // the bus comes back.
+                    Err(e) => {
+                        eprintln!("comp-ingress: refresh connection failed ({e:#}), retrying");
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                }
+            };
             let mut tick = tokio::time::interval(Duration::from_secs(every.max(1)));
             let mut empty_streak: u32 = 0;
+            let mut reads: u64 = 0;
             loop {
                 tick.tick().await;
                 match inventory.read_all().await {
@@ -466,6 +507,18 @@ async fn main() -> Result<()> {
                             .filter_map(|e| serde_json::from_slice(&e.value).ok())
                             .collect();
                         let next = table_of(&nodes);
+
+                        // A heartbeat on EVERY read, so silence in the log means
+                        // the loop is not running rather than the loop having
+                        // nothing to say. Distinguishing those two took three
+                        // wrong diagnoses.
+                        eprintln!(
+                            "comp-ingress: refresh #{reads}: {} node(s), {} instance(s), {} route(s)",
+                            nodes.len(),
+                            nodes.iter().map(|n| n.instances.len()).sum::<usize>(),
+                            next.routes.len()
+                        );
+                        reads += 1;
 
                         // The decision lives in `verdict` so it can be tested
                         // without waiting for a machine to be busy enough to go
@@ -542,7 +595,9 @@ async fn main() -> Result<()> {
                      is frozen and will never update again"
                 );
             }
-        });
+            });
+        })
+        .expect("spawning the inventory refresh thread");
     }
 
     let client: Client = Arc::new(

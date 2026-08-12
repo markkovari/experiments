@@ -15,6 +15,29 @@ fn a_second_ingress_serves_the_same_fleet_and_outlives_the_first() {
     let mut fleet = Fleet::start("ha", &["fixtures/five-replicas.yaml"], 3, None);
     assert!(fleet.serves("shop.eve.test", Duration::from_secs(90)), "never served");
 
+    // `serves` is NOT convergence, and taking it for one is what made this test
+    // fail under load while passing in isolation — through four wrong diagnoses.
+    //
+    // An ingress with an empty routing table still answers: it asks the
+    // reconciler to activate the app and routes to whatever address comes back.
+    // So a successful request proves an instance exists SOMEWHERE, not that the
+    // fleet has been placed or that any ingress can route to it. Polling until
+    // requests stop failing has the same hole, for the same reason — it was the
+    // second version of this gate and it also passed while inventory was empty.
+    //
+    // Inventory is the only honest answer, because inventory is what routing is
+    // built from. Under load, placement lagged past the ten seconds this test
+    // used to allow: the ingress read `3 node(s), 0 instance(s)` for its whole
+    // life, every request fell through to activation, and activation answered
+    // "already placed, or nothing to start". Thirty failures, and nothing at all
+    // wrong with the ingress.
+    assert!(
+        fleet.wait_for_placement("shop.eve.test", Duration::from_secs(180)),
+        "the fleet never placed the app anywhere\n--- ingress ---\n{}\n--- reconciler ---\n{}",
+        fleet.ingress_log(""),
+        fleet.reconciler_log()
+    );
+
     let b = fleet.second_ingress();
     std::thread::sleep(Duration::from_secs(6)); // let it read inventory once
 

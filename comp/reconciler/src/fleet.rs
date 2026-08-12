@@ -485,6 +485,57 @@ impl Fleet {
         port
     }
 
+    /// Wait until the fleet has actually PLACED the app — until some node
+    /// advertises an instance carrying `host` as its ingress.
+    ///
+    /// This exists because every cheaper check is a lie. A successful request
+    /// proves nothing: an ingress with an empty routing table still answers, by
+    /// asking the reconciler to activate the app and routing to whatever address
+    /// comes back. So both `serves()` and "poll until requests stop failing" go
+    /// green while inventory is still empty and no ingress can route anything —
+    /// which is precisely how a test could pass in isolation, fail under load,
+    /// and be misdiagnosed four times.
+    ///
+    /// Inventory is the only honest answer to "has it converged", because
+    /// inventory is what routing is built from.
+    pub fn wait_for_placement(&self, host: &str, within: Duration) -> bool {
+        let (url, lattice) = (self.nats_url.clone(), self.lattice.clone());
+        let host = host.to_ascii_lowercase();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let Ok(inv) =
+                comp_lattice::nats::NatsLattice::connect(&url, &lattice, Duration::from_secs(15))
+                    .await
+            else {
+                return false;
+            };
+            let deadline = Instant::now() + within;
+            while Instant::now() < deadline {
+                if let Ok(entries) = comp_lattice::Inventory::read_all(&inv).await {
+                    let placed = entries.iter().any(|e| {
+                        serde_json::from_slice::<serde_json::Value>(&comp_lattice::snapshot::expand(
+                            e.value.clone(),
+                        ))
+                        .ok()
+                        .and_then(|v| v["instances"].as_array().cloned())
+                        .is_some_and(|is| {
+                            is.iter().any(|i| {
+                                i["ingress_host"]
+                                    .as_str()
+                                    .is_some_and(|h| h.eq_ignore_ascii_case(&host))
+                            })
+                        })
+                    });
+                    if placed {
+                        return true;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            false
+        })
+    }
+
     /// What an ingress said. `""` is the first one, any other name is a suffix —
     /// `"-b"` for the second.
     ///
