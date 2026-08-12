@@ -102,6 +102,7 @@ single-component app should be a container, not a wasm workload.
 | [0078](0078-an-environment-is-a-derived-app.md) | An environment is a derived app — parallel exploration, and why not a host per branch | accepted; desired-state half built |
 | [0079](0079-a-component-forks-its-own-app.md) | A component forks its own app — the instance token as identity | accepted; platform half built |
 | [0080](0080-the-graph-remembers.md) | The graph remembers — a knowledge graph over SurrealDB, as a component | accepted; proven against a live database |
+| [0081](0081-fitness-fuel-and-what-the-swarm-knows.md) | Fitness, fuel, and what the swarm knows — judging a branch, sharing knowledge, and stopping | **proposed**; nothing built |
 
 ## The shape these add up to
 
