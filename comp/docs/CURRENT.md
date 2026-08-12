@@ -154,13 +154,23 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   refresh on an interval unrelated to the TTL it was reading against, which is
   a real hazard). What remains missing is anything that NOTICES the mismatch: the
   bucket's real `max_age` is never compared with the one asked for.
-- **`ha.rs` still fails under the full parallel suite, and the TTL was not the
-  cause.** The diagnostic settled it: the first ingress logs `0 route(s) over 3
-  node(s)` — it SEES all three nodes and builds no routes from them, so this is
-  route construction, not inventory expiry. `table_of` skips any instance whose
-  `ingress-host` is empty, and an instance placed by the ACTIVATION path appears
-  to advertise without one. Instrumented further (instances seen vs instances
-  carrying a host); not yet fixed, and the earlier TTL diagnosis was wrong.
+- **`ha.rs` still fails under the full parallel suite. Three diagnoses so far,
+  two of them wrong.** What is now certain from the log: the first ingress reads
+  `3 node(s), 0 instance(s)` — the nodes are there, advertising nothing — and
+  then its refresh loop goes SILENT, printing neither a route count nor the
+  "still 0 routes" line it should print on every subsequent read. Meanwhile a
+  second ingress on the same bucket sees all three nodes with instances and
+  serves perfectly. Two ingresses reading one bucket cannot both be right, so the
+  first one's refresh loop is not running.
+  Ruled out along the way: the inventory TTL (it sees the nodes), route
+  construction alone (it never gets far enough), and a poisoned lock (made
+  tolerable, no change). The remaining candidate is runtime starvation — the
+  refresh task sharing a tokio runtime with request handling on a machine running
+  28 test binaries — which is a fact about the harness rather than the product,
+  and is not yet demonstrated.
+  The guard work it prompted stands on its own and is now covered by
+  `blink.rs` and the `verdict` unit tests, both of which fail against the old
+  behaviour.
 - **Breadth is fine and unmeasured beyond 8.** Eight branches spawned
   concurrently converge in ~3s on one node. Nobody has looked for the width at
   which the reconcile pass, the ports, or the memory give out. Depth is now
