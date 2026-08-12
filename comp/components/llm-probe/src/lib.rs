@@ -44,13 +44,17 @@ fn err(e: llm::InferError) -> String {
     format!("{{\"error\":\"{kind}\",\"detail\":\"{}\"}}", esc(&msg))
 }
 
-fn options() -> llm::Options {
+/// The SEED is the interesting knob here. It exists in the contract for
+/// reproducibility, and a swarm uses it for the same reason in reverse: N
+/// branches asking one question with N seeds is how they explore differently
+/// while staying replayable.
+fn options(seed: u64) -> llm::Options {
     llm::Options {
         model: String::new(),
         temperature: 0,
         max_tokens: 0,
         stop: Vec::new(),
-        seed: 0,
+        seed,
     }
 }
 
@@ -68,7 +72,8 @@ impl Guest for Component {
                     role: llm::Role::User,
                     content: param(&query, "q"),
                 };
-                match llm::chat(&[msg], &options()) {
+                let seed = param(&query, "seed").parse().unwrap_or(0);
+                match llm::chat(&[msg], &options(seed)) {
                     Ok(c) => format!(
                         "{{\"text\":\"{}\",\"model\":\"{}\",\"finish\":\"{}\"}}",
                         esc(&c.text),

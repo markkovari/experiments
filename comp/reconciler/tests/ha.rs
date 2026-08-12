@@ -22,7 +22,18 @@ fn a_second_ingress_serves_the_same_fleet_and_outlives_the_first() {
     let (via_b, fail_b) = fleet.who_answers(b, 30);
     println!("    ingress A -> {via_a:?} ({fail_a} failed)");
     println!("    ingress B -> {via_b:?} ({fail_b} failed)");
-    assert_eq!(fail_a + fail_b, 0, "both ingresses should serve while both are up");
+    // The logs, not just the counts: this assertion has failed under a loaded
+    // parallel run while passing every time in isolation, and a bare number
+    // cannot distinguish an ingress that lost its lattice connection from one
+    // that never read inventory from a machine that ran out of something.
+    assert_eq!(
+        fail_a + fail_b,
+        0,
+        "both ingresses should serve while both are up\n\
+         --- ingress A ---\n{}\n--- ingress B ---\n{}",
+        fleet.ingress_log(""),
+        fleet.ingress_log("-b")
+    );
     assert!(!via_b.is_empty(), "the second ingress served nothing");
     // They are looking at one lattice, so they should reach the same nodes — not
     // necessarily in the same proportion, since each balances independently.

@@ -133,8 +133,13 @@ impl Probe {
             .request(method, format!("http://127.0.0.1:{}{path}", self.port))
             .header("host", "graph.acme.test")
             .body(body)
-            .send()
-            .expect("the probe should answer");
+            .send();
+        // Reported, not panicked on: the readiness loop polls before anything is
+        // listening, and a panic there hides "not up yet" behind "broken".
+        let r = match r {
+            Ok(r) => r,
+            Err(e) => return Value::String(format!("transport: {e}")),
+        };
         let (status, text) = (r.status(), r.text().unwrap_or_default());
         // An unparseable answer is nearly always the ingress or the host talking,
         // not the probe — and a bare `null` in the assertion hides which.
@@ -143,29 +148,36 @@ impl Probe {
     }
 }
 
-/// Wait for the app to be serving. Composition, distribution and start are all a
-/// reconcile interval away, and none of their timings are this test's business.
+/// Wait until the app can reach its DATABASE, not merely answer.
+///
+/// The root route touches no capability, so it answers as soon as the gate is
+/// instantiated — before the link, the egress and SurrealDB are all usable.
+/// Polling it proves the wrong thing and the next request loses the race under a
+/// loaded parallel run, which is exactly how this test failed in the full suite
+/// while passing alone.
+///
+/// Reading a node of a kind nobody has written crosses the whole chain and comes
+/// back `found: false`. The answer we want is also the proof the path exists —
+/// and it warms the namespace creation, so the first real write is not also the
+/// first schema change.
 fn wait_for_probe(fleet: &Fleet) -> Probe {
     let probe = Probe {
         port: fleet.ingress_port,
         http: reqwest::blocking::Client::builder().timeout(Duration::from_secs(20)).build().unwrap(),
     };
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    let mut last = Value::Null;
     while std::time::Instant::now() < deadline {
-        let r = probe
-            .http
-            .get(format!("http://127.0.0.1:{}/", probe.port))
-            .header("host", "graph.acme.test")
-            .send();
-        if let Ok(r) = r {
-            if r.status().is_success() {
-                return probe;
-            }
+        let r = probe.get("/get?kind=readiness&id=nothing-here");
+        if r["found"] == Value::Bool(false) {
+            return probe;
         }
+        last = r;
         std::thread::sleep(Duration::from_millis(500));
     }
     panic!(
-        "the graph app never served\n--- node ---\n{}\n--- reconciler ---\n{}",
+        "the graph app never reached its database — last answer {last}\n--- node ---\n{}\n\
+         --- reconciler ---\n{}",
         fleet.node_log("n1"),
         fleet.reconciler_log()
     );

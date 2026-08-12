@@ -485,6 +485,16 @@ impl Fleet {
         port
     }
 
+    /// What an ingress said. `""` is the first one, any other name is a suffix —
+    /// `"-b"` for the second.
+    ///
+    /// Exists because a test that asserts an ingress served nothing, and then
+    /// prints only the count, has thrown away the one thing that explains it.
+    pub fn ingress_log(&self, which: &str) -> String {
+        std::fs::read_to_string(self.dir.path().join(format!("ingress{which}.log")))
+            .unwrap_or_else(|e| format!("(no ingress{which}.log: {e})"))
+    }
+
     /// A SECOND reconciler against the same lattice and control plane.
     ///
     /// It should stand by rather than reconcile: exactly one holds the lease
