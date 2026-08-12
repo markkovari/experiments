@@ -76,6 +76,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "artifact-cache"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+ "wit-bindgen-rt",
+]
+
+[[package]]
+name = "artifact-probe"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wit-bindgen-rt",
+]
+
+[[package]]
 name = "audit-log"
 version = "0.1.0"
 dependencies = [
