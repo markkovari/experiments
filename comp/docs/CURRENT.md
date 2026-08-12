@@ -121,7 +121,7 @@ fast a dead machine is noticed), `max_inflight` (where the ingress starts sheddi
 
 ## Tests
 
-170 across four crates, `cargo nextest`. No Python anywhere in `bench/` or `e2e/`.
+169 across four crates, `cargo nextest`. No Python anywhere in `bench/` or `e2e/`.
 
 ```
 cargo build --release --manifest-path host/Cargo.toml   # tests spawn this

@@ -120,7 +120,6 @@ impl Guest for Component {
 
 enum Outcome {
     Json(u16, String),
-    Text(u16, String, String),
     /// A body that is not text — the staged `.wasm` the pusher fetches.
     Bytes(u16, String, Vec<u8>),
     Err(u16, String),
@@ -2215,7 +2214,6 @@ fn read_body(request: &IncomingRequest) -> Result<Vec<u8>, ()> {
 fn emit(response_out: ResponseOutparam, result: Outcome) {
     let (code, ctype, body) = match result {
         Outcome::Json(c, b) => (c, "application/json".to_string(), b.into_bytes()),
-        Outcome::Text(c, ct, b) => (c, ct, b.into_bytes()),
         Outcome::Bytes(c, ct, b) => (c, ct, b),
         Outcome::Err(c, m) => (
             c,

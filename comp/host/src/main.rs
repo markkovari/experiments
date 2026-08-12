@@ -113,7 +113,7 @@ pub struct Instance {
     /// requests arrive at. Before cross-node serving existed a plug could not start
     /// at all; now it starts, serves its exports over the bus, and simply never
     /// appears in the route table.
-    pub pre: Option<ProxyPre<Host>>,
+    pub(crate) pre: Option<ProxyPre<Host>>,
     /// Clients for this instance's REMOTE imports, keyed by interface. Built once
     /// at start, because resolving a target per request would put a lookup on the
     /// hot path for something that only changes when placement does.
@@ -781,7 +781,7 @@ fn parse_config_file(text: &str) -> std::result::Result<Vec<(String, String)>, S
 /// an import with no entry here and no link-table entry means the instance refuses
 /// to start. `agent::HOST_IFACES` is the advertised form of the same list; the two
 /// must agree, and a test asserts the shape of it.
-pub fn build_linker(engine: &Engine) -> Result<Linker<Host>> {
+pub(crate) fn build_linker(engine: &Engine) -> Result<Linker<Host>> {
     let mut linker: Linker<Host> = Linker::new(engine);
     wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
     wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
@@ -923,7 +923,6 @@ async fn main() -> Result<()> {
     let limits = Limits {
         mem_cap: args.mem_cap_mb << 20,
         slice_ms: args.slice_ms,
-        pool_size: 1,
         allow_private_egress: args.allow_private_egress,
         // This host's own listener is never a legitimate egress target: reaching it
         // would let a component call back in as though it were a client.
@@ -1272,7 +1271,7 @@ fn content_type(p: &std::path::Path) -> &'static str {
 /// HTTP request gets — same tenant boundary, same memory cap, same CPU slice, same
 /// allow-list. A second construction path would be a second place for one of those
 /// to be forgotten, and they are the ones ADR-0023 is about.
-pub fn store_for(
+pub(crate) fn store_for(
     engine: &Engine,
     scope: SharedScope,
     kv: Kv,
