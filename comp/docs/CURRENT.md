@@ -1,9 +1,9 @@
 # The platform as it stands
 
 What runs today, what is measured, and what is honestly missing. The reasoning lives
-in [76 ADRs](adr/); this page is the map.
+in [77 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0076.
+Last revised after ADR-0077.
 
 ## Shape
 
@@ -184,9 +184,11 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   escaped. Making it reversible renames every key already written (ADR-0068).
   wasmCloud's provider does no encoding at all and lets NATS reject what it will
   not take — a different trade, checked rather than assumed (ADR-0069).
-- **Conduit's `feed` is an application-level N+1** — per-article author and
-  favorite enrichment, 3 940 rps against `tags`'s 14 342 before caching. Removing
-  a round trip beats caching one, and this one has not been removed.
+- **Conduit's `feed` still does one favorites lookup per article.** The author and
+  follow lookups are gone (ADR-0077: 12 fewer store reads per request, 35% fewer
+  over a run), but favorites genuinely differ per article, so removing them needs
+  either a `find-by` over many values or a denormalised counter — a second source
+  of truth, which is the class of bug this repo keeps removing.
 - **Cross-machine benchmarks now have one real run** (`bench/FLEET-BENCH.md`:
   three Macs, R3, a machine killed under load). What is still unproven is the
   malna/bobocat *scripts* — they target a Linux aarch64 Pi build and were not

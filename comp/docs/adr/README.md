@@ -98,6 +98,7 @@ single-component app should be a container, not a wasm workload.
 | [0074](0074-the-split-graph-still-works.md) | The split graph still works — restoring the test [0032](0032-cross-node-invocation-and-what-the-hop-costs.md) lost | accepted, as a test |
 | [0075](0075-silence-is-not-health.md) | Silence is not health — drift on the read path, and a `verify` that only reports | accepted, and built |
 | [0076](0076-revocation-without-versions.md) | Revocation without versions — and why per-version keys stay unbuilt | accepted, and built |
+| [0077](0077-asking-the-same-question-twenty-times.md) | Asking the same question twenty times — the `feed` N+1, removed | accepted, and built |
 
 ## The shape these add up to
 
