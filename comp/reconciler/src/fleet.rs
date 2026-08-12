@@ -233,7 +233,7 @@ impl Fleet {
         // Tests run what production runs: pooling on (ADR-0054), read cache off
         // (ADR-0063 — it trades cross-node freshness, so a test asserting shared
         // state must not get it by accident).
-        Self::start_full(lattice, specs, &[], &[], nodes, max_inflight, kv, true, 0, &[])
+        Self::start_full(lattice, specs, &[], &[], nodes, max_inflight, kv, true, 0, &[], false)
     }
 
     /// A fleet whose control plane holds a vault: `vault://<org>/<name>=value`.
@@ -246,7 +246,19 @@ impl Fleet {
         artifacts: &[String],
         secrets: &[String],
     ) -> Self {
-        Self::start_full(lattice, specs, artifacts, secrets, 1, None, None, true, 0, &[])
+        Self::start_full(lattice, specs, artifacts, secrets, 1, None, None, true, 0, &[], false)
+    }
+
+    /// A fleet driven by the REAL control plane, for tests that exercise the
+    /// platform's own API rather than a fixture — deploying, then spawning an
+    /// environment and watching the loop converge on it (ADR-0078).
+    pub fn start_with_platform(lattice: &str, nodes: u16) -> Self {
+        Self::start_full(lattice, &[], &[], &[], nodes, None, None, true, 0, &[], true)
+    }
+
+    /// Where the control plane is listening.
+    pub fn platform_url(&self) -> String {
+        format!("http://127.0.0.1:{}", self.platform_port)
     }
 
     /// A fleet whose nodes carry LABELS, so placement constraints have something
@@ -286,6 +298,7 @@ impl Fleet {
             true,
             0,
             labels,
+            false,
         )
     }
 
@@ -293,7 +306,7 @@ impl Fleet {
     /// two or more: on one node the cache invalidates its own writes and cannot be
     /// caught being stale.
     pub fn start_with_cache(lattice: &str, specs: &[&str], nodes: u16, cache_ms: u64) -> Self {
-        Self::start_full(lattice, specs, &[], &[], nodes, None, None, true, cache_ms, &[])
+        Self::start_full(lattice, specs, &[], &[], nodes, None, None, true, cache_ms, &[], false)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -311,6 +324,8 @@ impl Fleet {
         // `labels[i]` goes to node i+1, as `--label k=v`. Empty means unlabelled,
         // which is what every entry point but `start_with_labels` wants.
         labels: &[&str],
+        // Run `platform-domain` as the control plane instead of `comp-stub`.
+        real_platform: bool,
     ) -> Self {
         let root = repo_root();
         let host_bin = std::env::var("COMP_HOST_BIN")
@@ -330,6 +345,27 @@ impl Fleet {
         children.push(spawn_logged("nats-server", &mut nats, &sp.join("nats.log")));
         std::thread::sleep(Duration::from_secs(2));
 
+        // The REAL control plane instead of the stub, when asked. `comp-stub` serves
+        // fixtures and nothing else, which is right for a placement test and
+        // useless for anything that exercises the platform's own API — spawning an
+        // environment, for instance, is a `platform-domain` feature the stub has
+        // never heard of.
+        if real_platform {
+            let component = root.join("components/target/platform_domain.composed.wasm");
+            assert!(component.exists(), "missing {} — just compose-platform", component.display());
+            let mut cp = Command::new(&host_bin);
+            cp.current_dir(&root)
+                .arg("--component")
+                .arg(&component)
+                .args(["--addr", &format!("127.0.0.1:{platform_port}"), "--kv", "sqlite"])
+                .arg("--sqlite-path")
+                .arg(sp.join("platform.db"))
+                .args(["--tenant", "platform", "--app", "control-plane"])
+                .args(["--config", "applier-secret=test-secret"])
+                .args(["--config", "ingress-suffix=test"]);
+            children.push(spawn_logged("control-plane", &mut cp, &sp.join("platform.log")));
+            std::thread::sleep(Duration::from_secs(2));
+        }
         let mut stub = Command::new(bin_path("comp-stub"));
         stub.current_dir(&root).args(["--port", &platform_port.to_string()]);
         for s in specs {
@@ -345,7 +381,9 @@ impl Fleet {
         for s in secrets {
             stub.args(["--secret", s]);
         }
-        children.push(spawn_logged("comp-stub", &mut stub, &sp.join("stub.log")));
+        if !real_platform {
+            children.push(spawn_logged("comp-stub", &mut stub, &sp.join("stub.log")));
+        }
 
         let nats_url = format!("nats://127.0.0.1:{nats_port}");
         let mut host_pids = Vec::new();
@@ -521,7 +559,7 @@ impl Fleet {
         // request pays two JetStream round trips and the number measures the bus.
         kv: Option<&str>,
     ) -> Self {
-        Self::start_full(lattice, &[spec_dir], artifacts, &[], nodes, None, kv, pool, 0, &[])
+        Self::start_full(lattice, &[spec_dir], artifacts, &[], nodes, None, kv, pool, 0, &[], false)
     }
 
     /// The host process for node `n`, so a caller can read its RSS.
