@@ -24,7 +24,7 @@
 //! private to this module, so `kv.rs` cannot be handed anything a guest said.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -120,13 +120,20 @@ pub struct EgressPolicy {
     /// Dev escape hatch. Off means a tenant cannot reach any private network,
     /// which on a Tailscale node includes every other node in the lattice.
     allow_private: bool,
-    /// Addresses this node knows are dangerous regardless of range — its own
+    /// Sockets this node knows are dangerous regardless of range — its own
     /// listener and the NATS it is joined to, which may be public.
-    denied: BTreeSet<IpAddr>,
+    ///
+    /// A SOCKET, not an address: the danger is the port this host serves on, and
+    /// denying the whole IP would also deny every unrelated service that happens
+    /// to share it. On a lattice node that distinction is invisible, because the
+    /// IP is private and denied by range anyway — it only shows up under
+    /// `--allow-private-egress`, where it made a database on loopback
+    /// unreachable while claiming to protect the listener.
+    denied: BTreeSet<SocketAddr>,
 }
 
 impl EgressPolicy {
-    pub fn new(allow: &[String], allow_private: bool, denied: &[IpAddr]) -> Self {
+    pub fn new(allow: &[String], allow_private: bool, denied: &[SocketAddr]) -> Self {
         Self {
             unrestricted: allow.iter().any(|a| a.trim() == "*"),
             allowed: expand_egress(allow).into_iter().collect(),
@@ -157,14 +164,14 @@ impl EgressPolicy {
     /// knob, and this is the backstop under it. An operator who genuinely needs an
     /// internal target puts a reverse proxy on an allow-listed public name, or runs
     /// the host with `--allow-private-egress` and accepts what that means.
-    pub fn permits_addr(&self, ip: IpAddr) -> bool {
-        if self.denied.contains(&ip) {
+    pub fn permits_addr(&self, addr: SocketAddr) -> bool {
+        if self.denied.contains(&addr) {
             return false;
         }
         if self.allow_private {
             return true;
         }
-        !is_private(ip)
+        !is_private(addr.ip())
     }
 }
 
@@ -346,7 +353,7 @@ pub struct Limits {
     pub mem_cap: usize,
     pub slice_ms: u64,
     pub allow_private_egress: bool,
-    pub denied_addrs: Vec<IpAddr>,
+    pub denied_addrs: Vec<SocketAddr>,
 }
 
 impl StartCommand {
@@ -512,7 +519,7 @@ mod tests {
         assert!(p.permits_authority("anything.at.all:9999"));
         // ...but it does not unlock the address deny-list. Unrestricted names are
         // still not unrestricted networks.
-        assert!(!p.permits_addr("169.254.169.254".parse().unwrap()));
+        assert!(!p.permits_addr("169.254.169.254:80".parse().unwrap()));
     }
 
     /// The lateral-movement list. Every one of these is reachable from a node and
@@ -534,21 +541,31 @@ mod tests {
             "fc00::1",
             "::ffff:169.254.169.254", // v4-mapped, the obvious way around the above
         ] {
-            assert!(!p.permits_addr(bad.parse().unwrap()), "{bad} must be prohibited");
+            assert!(!p.permits_addr(sock(bad)), "{bad} must be prohibited");
         }
         // Ordinary public addresses are fine, including ones adjacent to the ranges.
         for ok in ["93.184.216.34", "100.63.255.255", "100.128.0.1", "2606:2800:220:1::"] {
-            assert!(p.permits_addr(ok.parse().unwrap()), "{ok} must be allowed");
+            assert!(p.permits_addr(sock(ok)), "{ok} must be allowed");
         }
     }
 
+    /// A bare address, at the port a plain HTTP dial would use.
+    fn sock(ip: &str) -> SocketAddr {
+        SocketAddr::new(ip.parse().unwrap(), 80)
+    }
+
     #[test]
-    fn an_explicitly_denied_address_survives_allow_private() {
+    fn an_explicitly_denied_socket_survives_allow_private() {
         // The dev escape hatch must not re-open the bus this host is joined to.
-        let nats: IpAddr = "10.1.2.3".parse().unwrap();
+        let nats: SocketAddr = "10.1.2.3:4222".parse().unwrap();
         let p = EgressPolicy::new(&["*".into()], true, &[nats]);
         assert!(!p.permits_addr(nats));
-        assert!(p.permits_addr("10.1.2.4".parse().unwrap()), "allow_private otherwise applies");
+        assert!(p.permits_addr("10.1.2.4:4222".parse().unwrap()), "allow_private otherwise applies");
+        // The DENY is the socket, not the machine. Under `--allow-private-egress`
+        // a database sharing an address with the bus stays reachable — denying the
+        // whole IP was what made a loopback SurrealDB undialable while the thing
+        // actually being protected was one port.
+        assert!(p.permits_addr("10.1.2.3:8000".parse().unwrap()), "another port on the same host");
     }
 
 

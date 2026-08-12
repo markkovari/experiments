@@ -1,9 +1,9 @@
 # The platform as it stands
 
 What runs today, what is measured, and what is honestly missing. The reasoning lives
-in [77 ADRs](adr/); this page is the map.
+in [80 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0077.
+Last revised after ADR-0080.
 
 ## Shape
 
@@ -146,6 +146,14 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 
 ## Honestly missing
 
+- **The graph loop has memory and no shape for it.** `knowledge-graph` stores
+  nodes, edges and traversal against a real SurrealDB (ADR-0080), and nothing
+  decides what an environment should remember: whether a fork inherits its
+  parent's graph or starts blank, what prunes it, and which node kinds an agent
+  is supposed to write. The store is proven; the schema is a question.
+- **The database is not part of the platform.** SurrealDB is an external service
+  on an egress allow-list. Nothing deploys it, backs it up, replicates it, or
+  notices when it is gone — every one of which the KV path already does.
 - **No `@version` in a catalogue key — and this is now a FEATURE request, not a
   gap** (ADR-0076). ADR-0007 rule 1 is held by binding `public` to the signed
   digest, and revocation turned out to need provenance rather than versions. What

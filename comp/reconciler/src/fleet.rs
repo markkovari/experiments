@@ -205,7 +205,7 @@ fn spawn_logged(name: &str, cmd: &mut Command, log: &std::path::Path) -> Kill {
 /// There is a race between closing this listener and the child binding it. It is
 /// small, and the alternative — children reporting a port they chose — needs a
 /// channel out of every process here, including `nats-server`.
-fn free_port() -> u16 {
+pub fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .expect("no free port")
         .local_addr()
@@ -413,6 +413,18 @@ impl Fleet {
             }
             if let Some(l) = labels.get((n - 1) as usize) {
                 c.args(["--label", l]);
+            }
+            // A harness runs everything on loopback, and loopback is a PRIVATE
+            // address the host refuses to dial by default (ADR-0008). So a test
+            // whose subject talks to a real backing service — a database, say —
+            // cannot exist without this, and it is opt-in rather than always-on
+            // so that no OTHER test gets the allowance it never asked for.
+            //
+            // It widens the address check only. The per-instance allow-list still
+            // decides which authority an instance may name, which is the half a
+            // fixture is asserting when it writes `egress:` out by hand.
+            if std::env::var_os("COMP_FLEET_ALLOW_PRIVATE_EGRESS").is_some() {
+                c.arg("--allow-private-egress");
             }
             let child = spawn_logged("comp-host", &mut c, &sp.join(format!("n{n}.log")));
             host_pids.push(child.0.id());
