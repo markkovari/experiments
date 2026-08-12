@@ -359,6 +359,10 @@ async fn main() -> Result<()> {
         let (inventory, table, every) = (inventory.clone(), table.clone(), refresh_secs);
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(every.max(1)));
+            // How many consecutive empty reads it takes to believe the fleet is
+            // really gone. See below.
+            const EMPTY_READS_BEFORE_BELIEVING: u32 = 3;
+            let mut empty_streak: u32 = 0;
             loop {
                 tick.tick().await;
                 match inventory.read_all().await {
@@ -368,6 +372,52 @@ async fn main() -> Result<()> {
                             .filter_map(|e| serde_json::from_slice(&e.value).ok())
                             .collect();
                         let next = table_of(&nodes);
+
+                        // A read that SUCCEEDS with nothing is the same blink as a
+                        // read that fails, wearing different clothes — and the
+                        // `Err` arm below already refuses to let a blink empty the
+                        // table. Applying the rule to only one of them left the
+                        // hole this closes: under load an ingress that had been
+                        // serving happily read zero nodes once, wiped a good
+                        // table, and 503'd every request with `no app answers`
+                        // while a sibling ingress on the same bucket saw all three
+                        // nodes at the same moment.
+                        //
+                        // Going empty is therefore only believed after several
+                        // consecutive empty reads. A fleet that really has stopped
+                        // is still noticed, a few seconds later; a blink costs
+                        // nothing at all.
+                        let cur_is_empty = table.read().unwrap().routes.is_empty();
+                        // An ingress with no routes that reads no nodes prints
+                        // nothing otherwise, which makes "the read happened and
+                        // came back empty" indistinguishable from "the refresh
+                        // task is not running at all". Those want opposite
+                        // investigations, and `ha.rs` has failed under load with
+                        // exactly this ambiguity in the log.
+                        if nodes.is_empty() && cur_is_empty {
+                            eprintln!(
+                                "comp-ingress: inventory read returned {} entr(ies), 0 usable \
+                                 node(s), and the table is empty — nothing to route to",
+                                entries.len()
+                            );
+                        }
+                        if nodes.is_empty() && !cur_is_empty {
+                            empty_streak += 1;
+                            if empty_streak < EMPTY_READS_BEFORE_BELIEVING {
+                                eprintln!(
+                                    "comp-ingress: inventory read came back empty ({empty_streak}/\
+                                     {EMPTY_READS_BEFORE_BELIEVING}) — keeping the table it had"
+                                );
+                                continue;
+                            }
+                            eprintln!(
+                                "comp-ingress: inventory empty {EMPTY_READS_BEFORE_BELIEVING} times \
+                                 running — the fleet really is gone"
+                            );
+                        } else {
+                            empty_streak = 0;
+                        }
+
                         let mut cur = table.write().unwrap();
                         if *cur != next {
                             eprintln!(

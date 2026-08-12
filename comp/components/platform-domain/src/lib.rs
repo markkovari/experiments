@@ -1539,13 +1539,22 @@ fn env_spawn(request: &IncomingRequest, _query: &Map<String, Value>) -> Outcome 
                 .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok().map(|d| (e.id, d)))
                 .find(|(_, d)| str_of(d, "name") == app)
         });
-    let Some((parent_id, parent)) = parent else {
-        return Outcome::Err(404, format!("no deployment `{app}`"));
+    // A parent may also be an ENVIRONMENT, which is how a search explores from a
+    // promising branch rather than only fanning out from the root. An environment
+    // has no deployment record — it is a revision — so its owner comes from that.
+    // Missing this second case is what capped depth at one.
+    let (app, owner) = match parent {
+        Some((_, doc)) => {
+            // Everything downstream keys on the deployment's NAME, because that
+            // is what the manifest's `app` is and therefore what the store is
+            // named after.
+            (str_of(&doc, "name"), str_of(&doc, "org"))
+        }
+        None => match newest_revision(&app).filter(|r| !r["environment"].is_null()) {
+            Some(rev) => (app.clone(), str_of(&rev, "org")),
+            None => return Outcome::Err(404, format!("no deployment or environment `{app}`")),
+        },
     };
-    // Everything downstream keys on the deployment's NAME, because that is what
-    // the manifest's `app` is and therefore what the store is named after.
-    let app = str_of(&parent, "name");
-    let owner = str_of(&parent, "org");
     if let Err((code, msg)) =
         orgs::acting(&p.subject, &personal_org(&p), &Map::from_iter([("org".into(), json!(owner))]), orgs::Role::Member)
     {
@@ -1553,7 +1562,6 @@ fn env_spawn(request: &IncomingRequest, _query: &Map<String, Value>) -> Outcome 
     }
     // Whether there IS a revision to copy is `spawn_environment`'s business; this
     // route only has to establish that the caller may act for the owning org.
-    let _ = parent_id;
     spawn_environment(&app, &env)
 }
 
@@ -1561,19 +1569,38 @@ fn env_spawn(request: &IncomingRequest, _query: &Map<String, Value>) -> Outcome 
 /// derived name. Shared by the user-facing route and the instance one, because a
 /// fork requested by an agent and a fork requested by a person must produce the
 /// same thing.
-fn spawn_environment(app: &str, env: &str) -> Outcome {
-    let parent = records::list_records(DEPLOYMENTS, 1000, "")
+/// The newest revision of `app`, whether it is a deployment or an environment,
+/// plus the org that owns it.
+///
+/// Two lookups because revisions are keyed two ways: a real deployment's
+/// revisions carry its RECORD ID in `deployment`, while an environment's carry
+/// its derived NAME. That asymmetry is why environments could not nest — the
+/// parent lookup only ever searched deployments, so the second level came back
+/// `404 no deployment` and a tree search stopped at one.
+fn parent_of(app: &str) -> Option<(Value, String)> {
+    let deployment = records::list_records(DEPLOYMENTS, 1000, "")
         .map(|p| p.entries)
         .unwrap_or_default()
         .into_iter()
         .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok().map(|d| (e.id, d)))
         .find(|(_, d)| str_of(d, "name") == app);
-    let Some((parent_id, parent)) = parent else {
-        return Outcome::Err(404, format!("no deployment `{app}`"));
-    };
-    let owner = str_of(&parent, "org");
-    let Some(latest) = newest_revision(&parent_id) else {
-        return Outcome::Err(409, format!("`{app}` has no saved revision to copy"));
+    if let Some((id, doc)) = deployment {
+        return newest_revision(&id).map(|rev| (rev, str_of(&doc, "org")));
+    }
+    // Not a deployment. It may be an environment, which is a legitimate parent:
+    // exploring FROM a promising branch is what makes a search a search rather
+    // than a single fan-out.
+    let rev = newest_revision(app)?;
+    if rev["environment"].is_null() {
+        return None;
+    }
+    let owner = str_of(&rev, "org");
+    Some((rev, owner))
+}
+
+fn spawn_environment(app: &str, env: &str) -> Outcome {
+    let Some((latest, owner)) = parent_of(app) else {
+        return Outcome::Err(404, format!("no deployment or environment `{app}`"));
     };
     let derived = env_app(app, env);
     // A derived name that collides with a real deployment would put two apps in
@@ -1663,25 +1690,56 @@ fn env_despawn(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome
         return Outcome::Err(422, "?app=&env= required".into());
     }
     let derived = env_app(&app, &env);
-    let mut removed = 0;
-    for e in records::find_by(REVISIONS, "deployment", &json!(derived).to_string()).unwrap_or_default() {
+    let _ = p;
+
+    // Environments nest, so closing one has to close what grew out of it. A
+    // descendant left behind is an app still running that nobody can name: its
+    // parent is gone, so nothing lists it and no despawn reaches it. It would
+    // simply consume a node until someone read a ledger by hand.
+    //
+    // The naming makes the subtree findable without a graph walk — every
+    // descendant of `x` is named `x-env-…` (ADR-0078).
+    let prefix = format!("{derived}-env-");
+    let mut doomed: Vec<(String, String)> = Vec::new();
+    for e in records::list_records(REVISIONS, 1000, "").map(|p| p.entries).unwrap_or_default() {
         let Ok(row) = serde_json::from_str::<Value>(&e.data) else { continue };
+        let name = str_of(&row, "deployment");
+        if name != derived && !name.starts_with(&prefix) {
+            continue;
+        }
         if row["environment"].is_null() {
-            // Not an environment: a real deployment that happens to be named this.
-            // Refusing beats deleting somebody's app because the names rhyme.
-            return Outcome::Err(409, format!("`{derived}` is a deployment, not an environment"));
+            // Not an environment: a real deployment that happens to be named
+            // this. Refusing beats deleting somebody's app because the names
+            // rhyme.
+            return Outcome::Err(409, format!("`{name}` is a deployment, not an environment"));
         }
-        let _ = p;
-        if records::delete(REVISIONS, &e.id).is_ok() {
-            removed += 1;
-        }
+        doomed.push((e.id, name));
     }
-    if removed == 0 {
+    if doomed.is_empty() {
         return Outcome::Err(404, format!("no environment `{env}` of `{app}`"));
     }
+
+    let mut removed = 0;
+    let mut closed: Vec<String> = Vec::new();
+    for (id, name) in doomed {
+        if records::delete(REVISIONS, &id).is_ok() {
+            removed += 1;
+            if !closed.contains(&name) {
+                closed.push(name);
+            }
+        }
+    }
+    closed.sort();
     Outcome::Json(
         200,
-        json!({ "environment": env, "of": app, "app": derived, "removed": removed }).to_string(),
+        json!({
+            "environment": env, "of": app, "app": derived,
+            "removed": removed,
+            // Named rather than counted: a caller that spawned a subtree wants to
+            // know exactly what went with it.
+            "closed": closed,
+        })
+        .to_string(),
     )
 }
 

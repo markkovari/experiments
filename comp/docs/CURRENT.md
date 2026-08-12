@@ -146,17 +146,17 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 
 ## Honestly missing
 
-- **Environments do not nest — depth is capped at one.** `spawn_environment`
-  writes a REVISIONS record for the derived app and never a DEPLOYMENTS one,
-  while the parent lookup searches deployments, so a second level comes back
-  `404 no deployment`. Found by `stress_env.rs`, which measures the ceiling
-  rather than asserting it. A tree search wants to explore FROM a promising
-  branch, so this is the gap between "parallel environments" and "a graph loop".
-  Fixing it is a design decision, not a patch: whether a nested branch inherits
-  its grandparent's store, and whether a despawn cascades.
+- **`ha.rs` fails under the full parallel suite and passes in isolation.** The
+  ingress that was started FIRST reads zero nodes forever and serves only via the
+  activation path, while a second ingress on the same bucket sees all three at the
+  same moment. An empty inventory read no longer wipes a good routing table (that
+  much is fixed), but the first ingress never had one to wipe — it has never had a
+  successful non-empty read at all, and why is not yet known. Both ingress logs and
+  the read result are now printed, so the next occurrence should say.
 - **Breadth is fine and unmeasured beyond 8.** Eight branches spawned
   concurrently converge in ~3s on one node. Nobody has looked for the width at
-  which the reconcile pass, the ports, or the memory give out.
+  which the reconcile pass, the ports, or the memory give out. Depth is now
+  unbounded in principle and measured to 4.
 - **No automated cover for the interactive secret prompt.** `comp secret set`
   reads a value with the echo off and asks twice; the pipe and `--from` paths are
   tested, the terminal path was verified under a pty by hand. A test for it needs

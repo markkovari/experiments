@@ -75,6 +75,13 @@ impl Api {
         }
     }
 
+    fn delete(&self, path: &str) -> (u16, Value) {
+        match self.http.delete(format!("{}{path}", self.base)).bearer_auth(&self.token).send() {
+            Ok(r) => (r.status().as_u16(), r.json().unwrap_or(Value::Null)),
+            Err(e) => (0, Value::String(format!("transport: {e}"))),
+        }
+    }
+
     fn upload(&self, id: &str, wasm: Vec<u8>) -> u16 {
         self.http
             .post(format!("{}/api/components?id={id}", self.base))
@@ -246,11 +253,15 @@ fn a_generation_of_branches_spins_up_together() {
 /// nicety. This measures how far it currently goes and asserts only what must
 /// hold at whatever depth is reached.
 ///
-/// It found the ceiling on its first run: **an environment cannot be a parent.**
-/// `spawn_environment` writes a REVISIONS record for the derived app and never a
-/// DEPLOYMENTS one, while the parent lookup searches deployments — so the second
-/// level comes back `404 no deployment`. Depth is capped at one, and ADR-0078
-/// never said so because nothing had ever asked for two.
+/// It found the ceiling on its first run: an environment could not be a parent,
+/// because `spawn_environment` writes a REVISIONS record for the derived app and
+/// never a DEPLOYMENTS one, while the parent lookup only searched deployments —
+/// so the second level came back `404 no deployment`. ADR-0078 never said so
+/// because nothing had ever asked for two.
+///
+/// Fixed: the lookup now falls back to the newest revision of that NAME when it
+/// carries an `environment`, so a branch can be explored from. This test is what
+/// says whether it stayed fixed.
 ///
 /// The naming hazard that would have bitten at depth six or seven is fixed
 /// regardless (`host/src/tenant.rs`): sibling environments used to truncate to
@@ -312,6 +323,42 @@ fn branches_of_branches_find_the_depth_ceiling() {
         );
     }
     println!("    {} generations running side by side", chain.len());
+
+    // --- closing a branch closes what grew out of it ------------------------
+    // Nesting creates this obligation. A descendant left behind is an app still
+    // running that nobody can name: its parent is gone, so nothing lists it and
+    // no despawn reaches it — it just consumes a node until somebody reads a
+    // ledger by hand.
+    if chain.len() >= 3 {
+        // Close the FIRST environment; everything below it must go too.
+        let (code, body) = api.delete("/api/environments?app=deep&env=n");
+        assert_eq!(code, 200, "despawn failed: {body}");
+        let closed = body["closed"].as_array().cloned().unwrap_or_default();
+        println!("    despawned deep-env-n, closing {} generations", closed.len());
+        assert_eq!(
+            closed.len(),
+            chain.len() - 1,
+            "closing a branch must close its descendants — {} of {} went: {body}",
+            closed.len(),
+            chain.len() - 1
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(180);
+        let mut left = Vec::new();
+        while Instant::now() < deadline {
+            left = running_apps(&fleet).into_iter().filter(|a| a.starts_with("deep-env-")).collect();
+            if left.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        assert!(left.is_empty(), "descendants are still running after their ancestor closed: {left:?}");
+        assert!(
+            running_apps(&fleet).iter().any(|a| a == "deep"),
+            "the cascade took the root deployment with it"
+        );
+        println!("    the whole subtree is gone, the root is untouched");
+    }
 
     // The ceiling is REPORTED, not asserted, on purpose: baking the current depth
     // limit into an assertion would turn fixing it into a test failure. What is
