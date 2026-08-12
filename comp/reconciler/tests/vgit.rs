@@ -66,13 +66,19 @@ impl Probe {
     }
 
     fn call(&self, method: reqwest::Method, path: &str, body: String) -> Value {
-        let r = self
+        // A transport failure is REPORTED rather than panicked on: the readiness
+        // loop polls before anything is listening, and a panic there would make
+        // "not up yet" indistinguishable from "broken".
+        let r = match self
             .http
             .request(method, format!("http://127.0.0.1:{}{path}", self.port))
             .header("host", "vgit.acme.test")
             .body(body)
             .send()
-            .expect("the probe should answer");
+        {
+            Ok(r) => r,
+            Err(e) => return Value::String(format!("transport: {e}")),
+        };
         let (status, text) = (r.status(), r.text().unwrap_or_default());
         serde_json::from_str(&text).unwrap_or_else(|_| Value::String(format!("HTTP {status}: {text}")))
     }
@@ -87,27 +93,36 @@ impl Probe {
     }
 }
 
+/// Wait until the app is ready to do WORK, not merely to answer.
+///
+/// The root route touches no capability at all, so it answers as soon as the
+/// gate is instantiated — before the `vgit -> blobs` link is usable. Polling it
+/// therefore proves the wrong thing, and under a loaded parallel run the very
+/// next request loses that race and comes back 502. This test did exactly that:
+/// green alone, red in the full suite.
+///
+/// So readiness is a real capability call. Reading an absent ref crosses the
+/// link, opens the app's bucket and does a CAS read, so `found: false` means the
+/// whole chain works and the ref simply is not there — the answer we want is
+/// also the proof that the path exists.
 fn wait_for_probe(fleet: &Fleet) -> Probe {
     let probe = Probe {
         port: fleet.ingress_port,
         http: reqwest::blocking::Client::builder().timeout(Duration::from_secs(30)).build().unwrap(),
     };
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    let mut last = Value::Null;
     while std::time::Instant::now() < deadline {
-        if let Ok(r) = probe
-            .http
-            .get(format!("http://127.0.0.1:{}/", probe.port))
-            .header("host", "vgit.acme.test")
-            .send()
-        {
-            if r.status().is_success() {
-                return probe;
-            }
+        let r = probe.get("/ref?name=probe%2Fready");
+        if r["found"] == json!(false) {
+            return probe;
         }
+        last = r;
         std::thread::sleep(Duration::from_millis(500));
     }
     panic!(
-        "the vgit app never served\n--- node ---\n{}\n--- reconciler ---\n{}",
+        "the vgit app never became able to reach its store - last answer {last}\n\
+         --- node ---\n{}\n--- reconciler ---\n{}",
         fleet.node_log("n1"),
         fleet.reconciler_log()
     );
