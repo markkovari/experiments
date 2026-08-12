@@ -479,6 +479,62 @@ loop's state machine to somebody's issue schema before knowing what it needs to
 ask.** A contract with a CLI behind it costs an afternoon and can be pointed at
 Jira later. A Jira integration cannot be pointed back.
 
+### How anyone finds out there is a question
+
+The rule that decides this is not about transports:
+
+> **The notification is never the question.** State is authoritative and durable;
+> a notification is a lossy hint that state changed. A dropped hint costs
+> latency; a dropped *question* loses a run.
+
+Anything that inverts this — subscribing to a stream and treating the message as
+the work item — turns every missed message into a branch waiting forever for an
+answer nobody knows to give. This is the same failure as the earlier webhook
+point, and it has the same fix: **list, then watch, then re-list on every hint,
+and re-list on a timer regardless.** A client that has just started and a client
+that has been connected for a week must reach the same answer.
+
+**State lives in the platform.** `GET /api/interventions?pending` over the
+control plane, which is already durable, already replicated, already the thing
+the reconciler trusts, and already behind the session the CLI holds. This is
+control-plane state, not swarm memory, and putting it anywhere else means a
+second auth path and a second thing that can be stale.
+
+Specifically **not SurrealDB**: live queries would need a websocket, the
+knowledge-graph component speaks HTTP `/sql`, and a client subscribing to the
+graph needs egress to the database plus credentials for it. That is the wrong
+layer — the graph is what the swarm remembers, not what the platform is waiting
+on.
+
+**NATS is a nudge, and an optional one.** The lattice already carries
+`comp.v1.<lattice>.…`, so a `…​.human.pending` subject is nearly free — but the
+CLI is HTTP-only today, and a laptop is on the tailnet or it is not. So NATS can
+never be the only path: it turns a two-second poll into an instant one for people
+who can reach it, and nothing more.
+
+### Three clients, in the order they are worth building
+
+1. **`comp runs`** — one shot: what is waiting, oldest first. Works from
+   anywhere the platform is reachable, needs no new dependency, and is the
+   backstop every richer client falls back to.
+2. **`comp watch`** — list, then poll (or subscribe when NATS is reachable), and
+   print each question as it appears. This is most of a TUI's value for almost
+   none of its code, and it composes: it is a thing you leave in a terminal
+   split.
+3. **A TUI** — panes, navigation, approve-in-place. Worth building only if the
+   measured interruption rate says a person is answering often enough to want
+   navigation. And by then it is a different *renderer* over the same two calls,
+   not a different design.
+
+Starting at 3 is the trap. A TUI written before the rate is known is a bet that
+the rate is high — and if it is high, the right response was to reduce it.
+
+**Away from the keyboard** is a separate problem with an existing answer:
+`notify:dispatch` already sends a webhook, an email or an SMS through a
+configured gateway with no vendor in the contract. "You are blocking run X" is
+one call to a component that is already written. Push notification is not a
+reason to build a UI.
+
 ### Suspension is not blocking, and it is not death
 
 Whatever the surface, a human takes hours or days. That has one consequence worth
@@ -656,6 +712,10 @@ Not a wish-list. This is the ADR's own rule applied to itself.
 - **Re-embedding cost on a provider model change.** The canary detects the drift;
   nothing here budgets for the re-index it triggers, which for a large corpus is
   the single largest bill this system can generate.
+- **Is `comp watch` polling or subscribing?** Both, ideally, but the CLI has no
+  NATS client and adding one assumes the operator is on the tailnet. Polling
+  works everywhere and is the honest default; the subscription is an optimisation
+  that must never become a requirement.
 - **What IS the interruption rate?** The whole human-interface question reduces
   to it and it is unmeasured. Nothing should be built for a human until a run has
   been watched and counted.
