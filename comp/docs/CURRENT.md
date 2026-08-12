@@ -1,9 +1,9 @@
 # The platform as it stands
 
 What runs today, what is measured, and what is honestly missing. The reasoning lives
-in [71 ADRs](adr/); this page is the map.
+in [72 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0071.
+Last revised after ADR-0072.
 
 ## Shape
 
@@ -121,7 +121,7 @@ fast a dead machine is noticed), `max_inflight` (where the ingress starts sheddi
 
 ## Tests
 
-167 across four crates, `cargo nextest`. No Python anywhere in `bench/` or `e2e/`.
+170 across four crates, `cargo nextest`. No Python anywhere in `bench/` or `e2e/`.
 
 ```
 cargo build --release --manifest-path host/Cargo.toml   # tests spawn this
@@ -138,6 +138,7 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 | `reconciler/tests/reveal.rs` | a guest reveals the key it was granted, and only that one |
 | `reconciler/tests/staleness.rs` | cross-node staleness, and the lost update it causes |
 | `reconciler/tests/ha.rs` | two ingresses, then one dies |
+| `reconciler/tests/leader.rs` | two reconcilers: one acts, and the standby takes over |
 | `bench/` | only what drives *other machines* — malna, bobocat, a k8s wasmCloud |
 
 ## Honestly missing
@@ -152,9 +153,12 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   nonces yet; they are keyed by window so a sweeper can drop one by prefix.
 - **No UI.** `POST /api/components/satisfies` answers "would this plug fit" with wac's
   real subtype check, and nothing calls it: a facility, not yet a feature.
-- **The loop does not shard.** One reconciler, no leader election. A steady pass
-  at 1000 nodes × 10 000 apps is 46 ms, but the pass after any fleet change is
-  1.23 s and that one is `apps × nodes` (ADR-0056).
+- **The loop does not shard**, on purpose (ADR-0072). It now elects a leader, so
+  a standby takes over within the lease TTL plus one interval — the reconciler was
+  the only control component without one. Sharding stays unbuilt: the pass after a
+  fleet change is 1.23 s at 1000 nodes × 10 000 apps, which is 12% of one 10 s
+  interval. The number to watch is `comp-planscale`'s cold column against
+  `--interval`.
 - **The read cache is off by default because reads go stale, not because writes
   are lost.** ADR-0065 measured a lost update — `record-store::update` enforced its
   revision guard as a read-compare-write over the very `wasi:keyvalue` the cache

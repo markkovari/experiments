@@ -20,6 +20,14 @@ impl Drop for Kill {
 
 pub struct Fleet {
     dir: tempfile::TempDir,
+    /// The stub control plane's port, so a second reconciler can be pointed at
+    /// the same one the first is using.
+    platform_port: u16,
+    /// Every reconciler started, in order, so a test can kill the leader.
+    reconcilers: Vec<Kill>,
+    /// The first reconciler's pid. Killed by pid rather than by pattern, because
+    /// every reconciler on this lattice shares a command line.
+    first_reconciler_pid: u32,
     /// One per node, in order, so a benchmark can read a host's memory.
     host_pids: Vec<u32>,
     /// The port each host serves HTTP on, so load can bypass the ingress.
@@ -332,8 +340,12 @@ impl Fleet {
         rec.current_dir(&root)
             .args(["--platform-url", &format!("http://127.0.0.1:{platform_port}")])
             .args(["--secret", "test-secret", "--nats-url", &nats_url, "--lattice", lattice])
-            .args(["--interval", "3"]);
-        children.push(spawn_logged("comp-reconciler", &mut rec, &sp.join("rec.log")));
+            // A lease TTL near the interval, so a failover test does not spend a
+            // minute waiting for what production would tune to 30s.
+            .args(["--interval", "3", "--lease-ttl", "6"]);
+        let rec_child = spawn_logged("comp-reconciler", &mut rec, &sp.join("rec.log"));
+        let first_reconciler_pid = rec_child.0.id();
+        children.push(rec_child);
 
         let mut ing = Command::new(bin_path("comp-ingress"));
         ing.current_dir(&root)
@@ -346,6 +358,9 @@ impl Fleet {
 
         Self {
             dir,
+            platform_port,
+            reconcilers: Vec::new(),
+            first_reconciler_pid,
             host_pids,
             host_ports,
             _children: children,
@@ -367,6 +382,42 @@ impl Fleet {
             .args(["--nats-url", &self.nats_url, "--lattice", &self.lattice, "--refresh-secs", "2"]);
         self._children.push(spawn_logged("comp-ingress-b", &mut ing, &self.dir.path().join("ingress-b.log")));
         port
+    }
+
+    /// A SECOND reconciler against the same lattice and control plane.
+    ///
+    /// It should stand by rather than reconcile: exactly one holds the lease
+    /// (ADR-0072). `n` names its log so a test can read which one did what.
+    pub fn second_reconciler(&mut self, n: &str) -> &Kill {
+        let mut rec = Command::new(bin_path("comp-reconciler"));
+        rec.current_dir(repo_root())
+            .args(["--platform-url", &format!("http://127.0.0.1:{}", self.platform_port)])
+            .args(["--secret", "test-secret", "--nats-url", &self.nats_url])
+            .args(["--lattice", &self.lattice, "--interval", "3", "--lease-ttl", "6"]);
+        let k = spawn_logged(
+            &format!("comp-reconciler-{n}"),
+            &mut rec,
+            &self.dir.path().join(format!("rec-{n}.log")),
+        );
+        self.reconcilers.push(k);
+        self.reconcilers.last().unwrap()
+    }
+
+    /// What a named second reconciler said.
+    pub fn reconciler_log_named(&self, n: &str) -> String {
+        std::fs::read_to_string(self.dir.path().join(format!("rec-{n}.log"))).unwrap_or_default()
+    }
+
+    /// Kill the reconciler started with `start`, leaving any standby running.
+    ///
+    /// By pid. A pattern match on the command line kills every reconciler on this
+    /// lattice, because a standby is started with the same arguments by design —
+    /// which is how the first version of this quietly killed both and made the
+    /// takeover look broken.
+    pub fn kill_first_reconciler(&mut self) {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &self.first_reconciler_pid.to_string()])
+            .status();
     }
 
     /// Stop whichever process was started last — used to kill an ingress and watch
