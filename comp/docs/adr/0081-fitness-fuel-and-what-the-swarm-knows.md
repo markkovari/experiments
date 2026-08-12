@@ -75,77 +75,94 @@ two different stopping points, and "why did it stop here" has no answer that
 survives a re-run. Worse, selecting on a model's judgement is a closed loop — the
 population evolves toward what the judge likes, which is not the goal.
 
-### The decision: a hard gate, a soft score, and a veto
+### A static gate is not enough, and dynamic does not have to mean unreliable
 
-alpha-swarm2 gets this right and it is worth stating exactly how, because the
-shape is not obvious:
+`cargo check && cargo test` is a fine *floor* and a poor *gate*. It knows nothing
+about the goal: a run whose goal was "add rate limiting" passes exactly the same
+checks as one whose goal was "fix a typo". It cannot express "the endpoint answers
+200 for this input" or "p99 stays under 50ms". And it cannot tighten as the graph
+discovers what actually matters.
 
-- **The gate is code.** `run_quality_gate` materialises the changed files into a
-  throwaway git worktree and runs `cargo check -p <pkg>`, then `cargo test -p
-  <pkg>`, then a security scan over added lines. `Passed` iff that returns `Ok`.
-  A model is not consulted.
-- **The LLM judge is a veto, not a gate.** `adversarial_verify` returns
-  `Accept | Reject(reason)`, and it can only **downgrade** Passed → Failed. It
-  can never promote a failing candidate. An inference error defaults to `Accept`
-  — the judge being unavailable must not become a source of rejections.
-- **The evidence bar is "something changed".** A run counts only if
-  `modified_files` is non-empty; `tasks_passed > 0` is explicitly rejected as
-  evidence of work, and Cargo.lock churn without a Cargo.toml change is stripped.
+The reproducibility argument against a model-authored gate is still right, but it
+was aimed at the wrong target. The property that matters is not *static*, it is:
 
-That third point is the one most likely to be skipped and the one that catches
-the most embarrassing failure: an agent that reports success having done nothing.
+> **A model may AUTHOR the gate. A model may never BE the gate.**
 
-So, three tiers rather than two:
+A gate can be generated per goal, as long as it is then **frozen, content-addressed
+and re-runnable** — the same artefact judging every branch, and judging them the
+same way on a re-run six weeks later. That is test-driven development with the
+order preserved: write the acceptance criteria first, freeze them, then let the
+swarm try to pass them. Dynamic per goal, static per run.
 
-1. **Gate** — deterministic, reproducible, binary. The only thing that may end a
-   branch *successfully*.
-2. **Veto** — may reject what the gate passed. May be a model. Fails open.
-3. **Score** — ranks candidates that already passed both, to decide where the
-   next fuel goes. May be fuzzy; being wrong costs efficiency, not correctness.
+### Three tiers of check, and only one of them is static
 
-### What comp adds: selection
+1. **Invariants** — repo-wide, always on, never authored per run: it compiles,
+   the pre-existing tests still pass, no secret was committed, lints did not
+   regress. The do-no-harm floor. This is alpha-swarm2's whole gate, and as a
+   floor it is exactly right.
+2. **The goal spec** — authored once per run (by a person, or by a model and then
+   frozen and hashed), naming what *this* goal means: a test that must exist and
+   pass, a response that must have a shape, a benchmark that must not regress.
+   This is the tier that answers "not dynamic enough".
+3. **Discovered constraints** — checks added *mid-run* because a branch learned
+   something the spec did not anticipate ("this deadlocks under concurrency").
+   Genuinely dynamic, and the reason the gate is a living artefact.
 
-alpha-swarm2 has **no tournament, no best-of-N, and no numeric fitness at all** —
-`quality_gate_passed` is an `Option<bool>`. Its parallel tasks are different
-sub-tasks of one DAG that get *merged*, not competing candidates that get
-*selected between*. Its only "which is better" mechanism is a UCB1 bandit
-choosing a planner tier, attributed on the real gate verdict.
+Tier 3 needs one rule or it eats the other two:
 
-That is the gap comp's environments exist to fill: a fork is a competing
-candidate. Which means comp needs the thing alpha-swarm2 does not have — a score,
-so that two branches that both pass the gate can be ordered.
+> **The check set is append-only within a run. A gate may tighten; it may never
+> loosen.**
 
-    package graph:fitness@0.1.0;
+A gate that can loosen lets the swarm win by lowering the bar, and it will,
+because that is the cheapest available gradient. Append-only is mechanically
+enforceable and needs no judgement.
 
-    interface evaluator {
-        record verdict {
-            /// The GATE. Deterministic. The only thing that may end a branch
-            /// successfully.
-            accepted: bool,
-            /// The SCORE, 0..=1000 milli-units. Meaningful only AMONG accepted
-            /// candidates; orders where to spend next.
-            score: u32,
-            /// Why — for the graph, and for a person reading it later.
-            reason: string,
-            /// What was measured: tests-passed, diff-lines, wall-ms. Named, so a
-            /// later generation can compare like with like.
-            measures: list<tuple<string, string>>,
-        }
+### The gate and the fitness function are the same artefact
 
-        /// This evaluator's identity and version. A score from evaluator A is not
-        /// comparable to one from B, and a graph that mixes them silently has
-        /// selection pressure made of noise.
-        describe: func() -> tuple<string, bool>;
+The draft of this ADR had them as two things and that was wrong. They are one
+check list with a flag:
 
-        evaluate: func(candidate: string, context: string) -> result<verdict, string>;
+    record check {
+        id: string,               // stable; the same check across generations
+        required: bool,           // required => gate. desirable => fitness only.
+        weight: u32,              // contribution to the score
+        held-out: bool,           // see below
     }
 
-An evaluator is a **component**: swappable per graph, sandboxed, and grantable
-egress to a CI endpoint without being granted anything else.
+- **accepted** = every `required` check passed.
+- **score** = weighted fraction of *all* checks that passed, plus cheap
+  deterministic measures (diff size, wall time, allocation count).
 
-Every verdict is a node in the knowledge graph, related to the attempt that
-produced it, stamped with the evaluator's id and version. That is what makes "did
-generation 4 actually beat generation 3" answerable rather than remembered.
+That collapses "how do I make the gate dynamic" and "where does fitness come
+from" into one question — *what do we check, and which of those are
+non-negotiable* — and it fixes a real problem the two-artefact design had:
+
+**A binary gate gives no gradient at generation 1.** Nothing passes, every branch
+scores identically "failed", and there is nothing to select on. That is the
+sparse-reward problem and it is fatal to a search. Deriving the score from the
+check *vector* rather than from the accepted *bool* gives a gradient from the
+first generation — 3 of 11 checks passing beats 1 of 11 — and it is entirely
+deterministic. No model is consulted for the primary selection signal.
+
+The LLM keeps exactly two jobs, both of them optional and neither on the
+critical path: **authoring** proposed checks (frozen before use), and the
+**downgrade-only veto** from alpha-swarm2, which fails open.
+
+### Held-out checks, because the agents can read the gate
+
+An agent that can see the checks will write code that passes the checks rather
+than code that solves the problem. That is Goodhart's law and it is not a risk,
+it is a certainty given enough fuel.
+
+So: **a subset of checks is held out.** The swarm sees the public set and
+optimises against it; the held-out set runs only at promotion, on the candidate
+about to be accepted. A branch that passes the public checks and fails the
+held-out ones did not solve the problem — it fitted the gate, and that is a
+distinct outcome worth recording, because it is evidence the public set is
+gameable and needs a check adding.
+
+This is a train/test split. The same reason applies and the same discipline: a
+held-out check that has been used for selection is no longer held out.
 
 ### Completion: five endings, because the parent's next move differs
 
@@ -190,27 +207,112 @@ principle:
 Raw model output never reaches the trusted pool. Everything in `patterns` is
 downstream of a `cargo test` that actually passed.
 
-### Scope: shared by project, not by agent
+### Scope: shared pool. The decision, and what it costs
 
-Knowledge is keyed by `(namespace, project)` — **not** per-agent and **not**
-per-run. Every agent on a project reads and writes one pool. This is the right
-default: isolation per branch would defeat the entire purpose, which is that
-sibling 7 does not repeat sibling 3's mistake.
+**Decided: one shared pool per project**, matching alpha-swarm2. Copy-on-fork was
+the first instinct here and it is wrong — it buys isolation nobody asked for and
+loses the one property that makes a swarm better than one agent run N times.
 
-The exception is instructive: **error entries are keyed per-run on purpose**, so
-that the UPSERT does not collapse failure history into one row. Successes should
-converge; failures should accumulate.
+But the cost is real and under-discussed, so it is written down rather than
+discovered later:
 
-For comp this maps onto environments cleanly:
+**For a shared pool**
 
-- one SurrealDB **database per project**, shared — matching alpha-swarm2;
-- writes carry the environment and attempt that produced them as provenance;
-- promotion to the trusted namespace happens only on a gate pass, performed by
-  the platform rather than by the branch.
+- Sibling 7 does not repeat sibling 3's mistake. This is the entire thesis.
+- **Corroboration becomes possible.** Two branches independently finding the same
+  thing is evidence; one branch finding it twice is not. Effectiveness weighting
+  needs `n > 1` and a per-fork pool never gets there.
+- One index to build and keep warm; each chunk is embedded once, not N times.
+  Embedding is the largest recurring cost in this design.
+- Dedup works: the same lesson from two branches reinforces one row.
+- Knowledge outlives the run that produced it.
 
-Copy-on-fork was my first instinct and it is wrong. It gets isolation nobody
-asked for and loses the only property that makes a swarm better than one agent
-run N times.
+**Against a shared pool** — the honest list
+
+- **Herding is the big one.** Every branch reads the same top-k and converges on
+  the same approach. Parallel search whose branches all read the same advice is
+  an expensive way to run one branch. *This is the failure mode that quietly
+  destroys the value of the swarm, and it does not announce itself — the run
+  looks healthy and the diversity is gone.*
+- **Poisoning.** One branch writes a wrong lesson; everyone reads it. Mitigated by
+  the promotion rule above, not eliminated.
+- **Premature pruning.** A branch records "approach X fails" one step before it
+  would have worked. Siblings now avoid X.
+- **Confounded attribution.** Did branch 3 succeed because it was good, or because
+  it read branch 1's pattern? Fitness comparison across branches gets muddier the
+  more they share.
+- Write contention on hot keys — real, and already solved by `comp:store/cas`.
+
+**The mitigations, which are cheap and mostly missing from alpha-swarm2**
+
+1. **Asymmetric visibility by trust.** Negative knowledge (`errors`, `refuted`)
+   is visible to siblings *immediately*: its worst case is that you avoid
+   something that would have worked, which costs a little diversity. Positive,
+   prescriptive knowledge (`patterns`) is visible only *after a gate pass*, which
+   is the anti-poisoning rule. The risk profiles are not symmetric so the
+   visibility rules should not be either.
+2. **A diversity budget.** Cap how much retrieved knowledge may enter any one
+   branch's prompt — alpha-swarm2 already does this with a 1200-character budget,
+   though for cost rather than for diversity. Deliberately vary retrieval across
+   siblings: different `k`, different namespace mixes, and at least one branch
+   that reads *nothing* and starts cold. A control arm is worth its cost: without
+   one there is no way to tell whether the shared pool is helping.
+3. **Provenance on every write** — which environment, which attempt, at what
+   score. That is what keeps attribution recoverable when it matters.
+
+### Our own embedder and chunker
+
+**Decided: own both.** Four reasons, in order of how much they matter:
+
+1. **A remote embedder means the codebase leaves the building.** Embedding a
+   repository means sending every chunk of it to a third party. That is a
+   different decision from sending one prompt, and it should not be made
+   implicitly by picking the convenient provider.
+2. **A remote model changes under you.** When a hosted embedding model is updated,
+   vectors stored last month are from a different space than vectors computed
+   today, and nothing errors — cosine similarity between them is simply
+   meaningless. The index silently rots. A pinned local model cannot do that.
+3. **Cost.** Re-embedding a repository is the largest recurring token cost here,
+   and the one that scales with the number of branches.
+4. **Latency.** Local is milliseconds; a hosted call is a network round trip per
+   chunk.
+
+The shape, matching what is already proven:
+
+- **`embed:vectors`** — a contract, mirroring `llm:inference`, with a provider
+  component pointed at a **local** embedding server over `wasi:http`, reached
+  through the egress allow-list exactly as `knowledge-graph` reaches SurrealDB.
+  The dimension and the model id are config, and the model id is **stored beside
+  every vector**: a vector whose model is unknown cannot be safely compared to
+  anything, and an index that mixes two models is worse than no index.
+- **Chunking is a pure component.** No model, no network, no host capability —
+  which makes it the easy half and the half worth owning outright.
+
+Chunking is where owning it actually pays, because a generic chunker is bad at
+code:
+
+- **Split on syntax, not on token count.** A function, a struct, an `impl`, a doc
+  section. Fixed windows cut declarations in half and produce chunks that retrieve
+  well and read uselessly.
+- **Prepend a context header** to every chunk — file path, parent symbol,
+  language. A chunk that says only `fn new(...)` is unfindable; the same chunk
+  headed `components/knowledge-graph/src/lib.rs · impl Conn · fn open` is
+  findable by three different queries. This one trick is worth more than the
+  choice of embedding model.
+- **Overlap for prose, none for code.** Code has natural boundaries; prose does
+  not.
+- **A chunk is a NODE in the knowledge graph**, with an edge to the entity it came
+  from. This is the payoff for owning the chunker *and* having a graph: a
+  retrieval hit expands to its structural neighbours by traversal, which is
+  alpha-swarm2's third retrieval layer arriving for free rather than as separate
+  machinery. An external embedding service returns a flat list and can never do
+  this.
+
+And the half that is already built: **`search:index`** is a TF-IDF inverted index
+over the KV store, pure WASI, no network. That is the sparse side of hybrid
+retrieval, done. What is missing is the dense side and the fusion —
+reciprocal-rank fusion over the two, with the reported similarity kept as the
+dense cosine so a `min_similarity` threshold keeps meaning what it says.
 
 ### Confidence is derived from outcomes, never asserted
 
@@ -380,13 +482,18 @@ Not a wish-list. This is the ADR's own rule applied to itself.
 
 ## Open questions this does not answer
 
-- **Does a fork inherit its parent's knowledge, or start blank?** ADR-0080 left
-  this open and it is still open. alpha-swarm2's answer — one shared pool per
-  project — is the recommendation, but comp's environments make per-branch
-  isolation *possible*, which means the choice has to be made deliberately.
-- **Embeddings are unwired.** Semantic retrieval is the largest of the three
-  retrieval layers and `llm:inference/embed` has never been called. Nothing else
-  here matters much until that works.
+- **How is herding actually detected?** The shared pool is decided and its
+  worst failure mode is a silent collapse of diversity. Measuring it — pairwise
+  distance between sibling diffs, or how much of each branch's prompt came from
+  retrieval — is unsolved here, and a swarm that cannot see its own diversity
+  cannot notice it losing it.
+- **Which local embedding model, and who runs it?** A container beside SurrealDB
+  is the obvious answer and has not been tried. Whether a wasm-native embedder is
+  fast enough to avoid the sidecar entirely is unmeasured.
+- **What authors the goal spec?** The gate is per-goal and frozen; nothing here
+  says who writes it. A person writing acceptance criteria is the reliable
+  answer and does not scale; a model proposing them needs the held-out set to
+  mean anything.
 - **Who runs the loop?** This ADR describes the mechanisms, not the driver. A
   component that spawns, evaluates, selects and refuels is a separate decision,
   and ADR-0079 only established that a component *can* fork its own app.
