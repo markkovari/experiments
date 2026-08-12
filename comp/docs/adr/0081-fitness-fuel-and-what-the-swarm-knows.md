@@ -580,6 +580,83 @@ A swarm that asks about everything is a swarm someone stops reading. Three:
 Everything else — a plateau, a refutation, an exhausted branch — is a *report*,
 not a *question*. The test is whether the loop is blocked on the answer.
 
+## 2c. Where the files live
+
+A candidate change has to exist somewhere between the agent that wrote it and the
+gate that judges it. The answer is forced rather than chosen:
+
+> **Blob storage is authoritative. Disk is a materialisation, created to run a
+> check and thrown away.**
+
+Three reasons, and the first one alone decides it:
+
+1. **A component has no filesystem.** Agents are components; that is the whole
+   isolation model (ADR-0023). An agent *cannot* write to disk. The only place it
+   can put a candidate is `blob:store`, so the authoritative copy is there whether
+   or not that is convenient.
+2. **`cargo` needs real files.** Nothing in wasm runs a compiler, so the check
+   runner is native and materialises what it is given. That direction is
+   one-way: disk is downstream of blobs, never the reverse.
+3. **comp is a lattice.** A candidate on node 1's disk is invisible to a check
+   runner on node 3. `blob:store` sits on `wasi:keyvalue`, which on NATS is
+   JetStream KV — already replicated (ADR-0064, proven across three machines by
+   killing one). Disk pins a candidate to a node; blobs let the swarm spread.
+
+### A candidate is an overlay, not a copy
+
+Storing a copy of the repository per candidate per generation would be absurd —
+and it is also unnecessary, because a candidate is:
+
+    base commit sha  +  { path → blob }   for the files it actually changed
+
+Nothing else. The unchanged tree is not stored anywhere in comp; the check runner
+keeps a **warm clone per node**, checks out the base sha, and lays the overlay on
+top — which is alpha-swarm2's throwaway-worktree approach with the tree coming
+from blobs rather than from a working copy.
+
+This is the same shape the forge already takes: `base_tree` plus changed blobs.
+So one representation runs the length of the pipeline —
+
+    agent writes overlay → gate materialises base+overlay → forge submits base+overlay
+
+— with no translation step anywhere, which is why `git:forge/repo` takes whole
+files rather than a patch. A patch has to apply to something; an overlay is
+already the answer.
+
+### What content-addressing buys
+
+Name each blob by the hash of its bytes and two things follow for free:
+
+- **Dedup, and it is a fuel saving rather than a tidiness one.** Two branches that
+  independently produce the identical change are the *same candidate*. Gate it
+  once. In a swarm exploring near each other, that collision is common.
+- **A candidate's identity is its hash.** Comparing two candidates is comparing
+  two strings, and "did generation 4 actually differ from generation 3" stops
+  being a judgement call.
+
+It is also git's own model, which is why the last step maps across without
+thinking about it.
+
+### The container is owned by the run, not by the branch
+
+One wrinkle worth naming, because the isolation model creates it. Every app gets
+its own store, named after it, and an environment is a derived app — so a
+candidate written into an environment's own container is a candidate its parent
+cannot read. The selector would have nothing to select from.
+
+So candidates go in **the run's container**, owned by the orchestrating app, which
+each branch is granted access to. The branch's isolation is still real — it cannot
+reach another *run* — but siblings share the surface their parent has to compare
+them on, deliberately.
+
+### Retention
+
+Overlays accumulate: branches × generations × changed files, most of them
+discarded within minutes. They are scoped to the run and deleted when it ends,
+with the winner's overlay outliving it only as far as the pull request, which is
+where it becomes git's problem instead. Nothing here is durable storage and
+nothing should treat it as such.
+
 ## 3. Fuel: budgeting with propagation
 
 alpha-swarm2 has fuel in three dimensions — time, tokens, iterations — checked in
