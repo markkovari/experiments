@@ -602,17 +602,58 @@ Three reasons, and the first one alone decides it:
    JetStream KV — already replicated (ADR-0064, proven across three machines by
    killing one). Disk pins a candidate to a node; blobs let the swarm spread.
 
-### A candidate is an overlay, not a copy
+### The repository itself lives there — `vgit:store`
 
-Storing a copy of the repository per candidate per generation would be absurd —
-and it is also unnecessary, because a candidate is:
+The first draft of this section kept a **warm clone on each node** and stored only
+an overlay. That was a compromise dressed as a design: it puts the repository back
+on a disk, which pins work to a node, needs `git` installed, and leaves the one
+thing agents actually operate on in the one place they cannot reach.
 
-    base commit sha  +  { path → blob }   for the files it actually changed
+The repository is in blob storage. All of it.
 
-Nothing else. The unchanged tree is not stored anywhere in comp; the check runner
-keeps a **warm clone per node**, checks out the base sha, and lays the overlay on
-top — which is alpha-swarm2's throwaway-worktree approach with the tree coming
-from blobs rather than from a working copy.
+This is less exotic than it sounds, because **git is already a content-addressed
+object store with a tree over it**: a blob is bytes, a tree is a listing, a commit
+points at a tree and its parents, and each is named by the SHA-1 of its own
+serialisation. `blob:store` is a content-addressed object store. The mapping is
+the identity function, not an emulation.
+
+    objects → blob:store      immutable, named by content, so a plain put is safe
+    refs    → comp:store/cas  the only mutable thing in git, so the only guarded write
+
+That split is the clearest illustration in the repo of why both primitives exist.
+
+What it buys:
+
+- **A branch costs one ref.** Forking an environment is a small write rather than
+  a copy, and twenty branches share every object none of them changed.
+- **A candidate is a commit id.** Forty characters, meaningful on any node,
+  comparable by equality. Identity stops being a judgement call.
+- **A change costs its depth, not the repository's size.** Writing a file rewrites
+  the trees along its path and reuses every sibling subtree by id.
+- **Agents can do git at all.** They have no filesystem; this they can reach.
+
+**The object ids are real git ids** — SHA-1 over `<type> <len>\0<payload>`, byte
+for byte what `git hash-object` produces. That is checked against the actual `git`
+binary rather than against our own expectations, because "we hash consistently"
+and "we hash the way git does" are different claims and only the second is worth
+anything. It makes provenance verifiable end to end: an id here is the id
+everywhere.
+
+The trap that check caught the value of is tree ordering: entries sort by name
+*except* that a subtree sorts as if its name ended in `/`, so `foo` the directory
+comes after `foo.txt` while `foo` the file comes before it. Get it wrong and the
+tree still serialises, still hashes, and hashes to something git disagrees with —
+silently. Same for the subtree mode, which git writes as `40000` and everyone
+writes as `040000`.
+
+Deliberately **not** built: packfiles, delta compression, smart-HTTP, merges. None
+are needed, because `git:forge` submits content over a hosting API and nothing
+here ever speaks git over the wire. Building them because "a git implementation
+should have them" would be building a second git.
+
+Materialising to disk is still required for the gate — `cargo` needs real files —
+but it is now "write out this tree", with no clone and no `git` binary in the
+path.
 
 This is the same shape the forge already takes: `base_tree` plus changed blobs.
 So one representation runs the length of the pipeline —

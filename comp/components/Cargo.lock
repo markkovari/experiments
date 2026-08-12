@@ -1682,6 +1682,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "virt-git"
+version = "0.1.0"
+dependencies = [
+ "sha1",
+ "wit-bindgen-rt",
+]
+
+[[package]]
 name = "wac-graph"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
