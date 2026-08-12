@@ -1,9 +1,9 @@
 # The platform as it stands
 
 What runs today, what is measured, and what is honestly missing. The reasoning lives
-in [75 ADRs](adr/); this page is the map.
+in [76 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0075.
+Last revised after ADR-0076.
 
 ## Shape
 
@@ -122,7 +122,7 @@ fast a dead machine is noticed), `max_inflight` (where the ingress starts sheddi
 
 ## Tests
 
-172 across four crates, `cargo nextest`. No Python anywhere in `bench/` or `e2e/`.
+173 across four crates, `cargo nextest`. No Python anywhere in `bench/` or `e2e/`.
 
 ```
 cargo build --release --manifest-path host/Cargo.toml   # tests spawn this
@@ -146,12 +146,12 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 
 ## Honestly missing
 
-- **No `@version` in a catalogue key**, so visibility is per component rather than
-  per version, which ADR-0007 says it should be. `public` is now bound to the
-  digest it was signed for and a new push demotes the row (ADR-0073), which holds
-  the rule in the data — but per-version keys are still the better answer.
-- **No key revocation.** Removing a publisher's key does not un-publish what it
-  signed, and "distrust everything this key signed" has no answer (ADR-0073).
+- **No `@version` in a catalogue key — and this is now a FEATURE request, not a
+  gap** (ADR-0076). ADR-0007 rule 1 is held by binding `public` to the signed
+  digest, and revocation turned out to need provenance rather than versions. What
+  is missing is several live versions of one component (rollback, a beta beside a
+  stable), and the key is also the blob key, the push-queue key and the deployment
+  handle, so it is a migration through the deployment path.
 - **No in-transit wrapping** on the secret fetch — TLS only. Replay is closed
   (ADR-0071: a nonce claimed exactly once, inside a 60s window), but an attacker
   who can read the transport still reads the plaintext. Nothing sweeps spent

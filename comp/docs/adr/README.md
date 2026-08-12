@@ -97,6 +97,7 @@ single-component app should be a container, not a wasm workload.
 | [0073](0073-public-costs-a-signature.md) | Public costs a signature — ADR-0007 rule 3, eleven ADRs later | accepted, and built |
 | [0074](0074-the-split-graph-still-works.md) | The split graph still works — restoring the test [0032](0032-cross-node-invocation-and-what-the-hop-costs.md) lost | accepted, as a test |
 | [0075](0075-silence-is-not-health.md) | Silence is not health — drift on the read path, and a `verify` that only reports | accepted, and built |
+| [0076](0076-revocation-without-versions.md) | Revocation without versions — and why per-version keys stay unbuilt | accepted, and built |
 
 ## The shape these add up to
 
