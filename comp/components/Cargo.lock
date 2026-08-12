@@ -1682,6 +1682,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vgit-probe"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wit-bindgen-rt",
+]
+
+[[package]]
 name = "virt-git"
 version = "0.1.0"
 dependencies = [

@@ -154,7 +154,10 @@ impl ObjectsGuest for Component {
 /// choose it (ADR-0012, ADR-0023). Opened per call rather than cached: the handle
 /// is cheap and a cached one outlives the reasons it was valid.
 fn ref_bucket() -> Result<kv::Bucket, GitError> {
-    kv::open("").map_err(|e| GitError::Unavailable(format!("opening the ref store: {e:?}")))
+    // "default" is the name the host maps to this app's own bucket. A guest
+    // cannot choose a bucket — it names one from the host's allow-list and the
+    // host decides what that resolves to (ADR-0012).
+    kv::open("default").map_err(|e| GitError::Unavailable(format!("opening the ref store: {e:?}")))
 }
 
 fn ref_key(name: &str) -> Result<String, GitError> {
