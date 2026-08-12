@@ -531,6 +531,26 @@ impl Fleet {
             .status();
     }
 
+    /// Kill node `n` outright — SIGKILL, no chance to tidy up.
+    ///
+    /// The point is that it does NOT get to say goodbye. A host that deregisters
+    /// on its way out exercises the polite path, which is not the one that
+    /// happens when a machine loses power or the OOM killer arrives. What has to
+    /// hold is that the lattice notices by itself: inventory expires, the
+    /// reconciler sees a gap, and the work is placed somewhere else.
+    ///
+    /// Returns the pid, so a caller can say which one it took.
+    pub fn kill_host(&self, n: u16) -> Option<u32> {
+        let pid = *self.host_pids.get((n as usize).saturating_sub(1))?;
+        let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).status();
+        Some(pid)
+    }
+
+    /// How many nodes this fleet started with.
+    pub fn node_count(&self) -> usize {
+        self.host_pids.len()
+    }
+
     /// Stop whichever process was started last — used to kill an ingress and watch
     /// the other one carry on.
     pub fn kill_last(&mut self) {

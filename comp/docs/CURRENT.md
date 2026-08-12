@@ -146,13 +146,15 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 
 ## Honestly missing
 
-- **`ha.rs` fails under the full parallel suite and passes in isolation.** The
-  ingress that was started FIRST reads zero nodes forever and serves only via the
-  activation path, while a second ingress on the same bucket sees all three at the
-  same moment. An empty inventory read no longer wipes a good routing table (that
-  much is fixed), but the first ingress never had one to wipe — it has never had a
-  successful non-empty read at all, and why is not yet known. Both ingress logs and
-  the read result are now printed, so the next occurrence should say.
+- **The inventory TTL is declared by three processes on one shared bucket.** A
+  host asks for `heartbeat_secs * 3`, the reconciler for `inventory_ttl`, the
+  ingress for its own — and whoever calls `create_key_value` first wins, silently.
+  They agree today only because three defaults coincide at 15s. The ingress now
+  takes `--inventory-ttl` explicitly and refreshes at a third of it (it used to
+  refresh on an interval unrelated to the TTL it was reading against, which is
+  what made `ha.rs` fail under load and report `no app answers`). What remains
+  missing is anything that NOTICES the mismatch: the bucket's real `max_age` is
+  never compared with the one asked for.
 - **Breadth is fine and unmeasured beyond 8.** Eight branches spawned
   concurrently converge in ~3s on one node. Nobody has looked for the width at
   which the reconcile pass, the ports, or the memory give out. Depth is now

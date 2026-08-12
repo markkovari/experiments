@@ -61,6 +61,17 @@ struct Args {
     #[arg(long, env = "COMP_REFRESH_SECS")]
     refresh_secs: Option<u64>,
 
+    /// How long an inventory entry lives before it expires.
+    ///
+    /// Shared with the hosts and the reconciler, which each declare it on the
+    /// SAME bucket — so this must match them, or whoever creates the bucket first
+    /// silently decides for everyone. Defaults to 15, as they do. When
+    /// `--refresh-secs` is absent the refresh is a third of this, because a table
+    /// re-read no faster than its entries expire is a table that is usually
+    /// empty.
+    #[arg(long, env = "COMP_INVENTORY_TTL")]
+    inventory_ttl: Option<u64>,
+
     /// Seconds to wait on a backend before trying another replica.
     #[arg(long, env = "COMP_BACKEND_TIMEOUT")]
     backend_timeout: Option<u64>,
@@ -318,14 +329,41 @@ async fn main() -> Result<()> {
     // Resolve every tunable once, here, so no call site has to know where a value
     // came from.
     let file = comp_reconciler::settings::File::load(args.config.as_deref())?.ingress;
-    let refresh_secs = settings::pick(args.refresh_secs, file.refresh_secs, 3);
     let backend_timeout = settings::pick(args.backend_timeout, file.backend_timeout, 30);
     let max_inflight = settings::pick(args.max_inflight, file.max_inflight, 64);
     let slow_budget = settings::pick(args.slow_budget, file.slow_budget, 2);
     let activation_timeout = settings::pick(args.activation_timeout, file.activation_timeout, 10);
 
+    // The inventory TTL is NOT this process's to choose, and pretending otherwise
+    // is a bug that took a while to find.
+    //
+    // Three processes call `create_key_value` on the SAME bucket with their own
+    // `max_age`: a host asks for `heartbeat_secs * 3`, the reconciler for
+    // `inventory_ttl`, and this used to ask for a hardcoded 15. Whoever creates
+    // the bucket first wins and the others silently get a TTL they did not ask
+    // for. They agree today only because three defaults coincide at 15s — change
+    // `--heartbeat-secs` on a host and they stop agreeing, with nothing said.
+    //
+    // Worse, the refresh interval was unrelated to it. Entries that live `T`
+    // seconds must be re-read well inside `T`, and a 3s poll against a bucket
+    // whose real TTL is short enough is a poll that mostly sees an empty bucket —
+    // which is what `no app answers` looked like from the outside.
+    let inventory_ttl = settings::pick(args.inventory_ttl, file.inventory_ttl, 15).max(1);
+    // A third of the TTL, so two reads may be lost before anything is noticed.
+    // An explicit `--refresh-secs` still wins, because an operator who sets it
+    // means it.
+    let refresh_secs = match args.refresh_secs.or(file.refresh_secs) {
+        Some(v) => v.max(1),
+        None => (inventory_ttl / 3).max(1),
+    };
+    eprintln!(
+        "comp-ingress: inventory ttl {inventory_ttl}s, refreshing every {refresh_secs}s \
+         (the ttl is shared with the hosts and the reconciler — a mismatch there is silent)"
+    );
+
     let fabric = Arc::new(
-        NatsLattice::connect(&args.nats_url, &args.lattice, Duration::from_secs(15)).await?,
+        NatsLattice::connect(&args.nats_url, &args.lattice, Duration::from_secs(inventory_ttl))
+            .await?,
     );
     let inventory: Arc<dyn Inventory> = fabric.clone();
     // Used only when a host has NO replica placed: ask the reconciler to start one
