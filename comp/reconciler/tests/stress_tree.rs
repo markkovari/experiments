@@ -30,11 +30,19 @@ use std::time::{Duration, Instant};
 use comp_reconciler::fleet::{repo_root, Fleet};
 use serde_json::{json, Value};
 
-/// Branches per generation. The tree is `WIDTH^DEPTH` leaves, so this grows fast
-/// on purpose — the point is to find where it stops working.
-const WIDTH: usize = 4;
-/// Generations below the root. 4 levels of 4 is 341 apps.
-const DEPTH: usize = 4;
+/// Branches per generation, and how many generations. The tree is `WIDTH^DEPTH`
+/// leaves, so this grows fast on purpose — the point is to find where it stops
+/// working, and "no ceiling found" is an invitation to turn it up.
+///
+/// Overridable so the ceiling can be hunted without editing code:
+///   COMP_STRESS_WIDTH=5 COMP_STRESS_DEPTH=5 cargo test ... -- --ignored
+fn width() -> usize {
+    std::env::var("COMP_STRESS_WIDTH").ok().and_then(|v| v.parse().ok()).unwrap_or(4)
+}
+
+fn depth() -> usize {
+    std::env::var("COMP_STRESS_DEPTH").ok().and_then(|v| v.parse().ok()).unwrap_or(4)
+}
 /// Nodes killed, and after which generation. Two, so the fleet has to survive a
 /// second failure while still carrying the first one's work.
 const KILLS: &[(u16, usize)] = &[(2, 1), (3, 2)];
@@ -222,7 +230,7 @@ fn a_search_tree_survives_a_machine_dying_under_it() {
     let mut generation = vec![root.clone()];
     let mut everything = vec![root.clone()];
 
-    for level in 0..DEPTH {
+    for level in 0..depth() {
         let gen_started = Instant::now();
         // Every branch of a generation at once — a loop that let each settle
         // would test nothing about contention, which is the whole point.
@@ -230,7 +238,7 @@ fn a_search_tree_survives_a_machine_dying_under_it() {
         // closure trying to move it once per parent.
         let jobs: Vec<(String, usize)> = generation
             .iter()
-            .flat_map(|parent| (0..WIDTH).map(move |w| (parent.clone(), w)))
+            .flat_map(|parent| (0..width()).map(move |w| (parent.clone(), w)))
             .collect();
         let api_ref = &api;
         let spawned: Vec<Result<String, String>> = std::thread::scope(|s| {
@@ -246,7 +254,7 @@ fn a_search_tree_survives_a_machine_dying_under_it() {
         println!(
             "  level {}: asked for {}, accepted {}, refused {} in {:.1}s",
             level + 1,
-            generation.len() * WIDTH,
+            generation.len() * width(),
             next.len(),
             refused.len(),
             gen_started.elapsed().as_secs_f64()

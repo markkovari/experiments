@@ -163,6 +163,18 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 - **Placement can lag past ten seconds under load**, which is what exposed the
   above. Nothing has measured how long convergence takes as a function of load,
   and the reconcile interval is the obvious suspect.
+- **Desired state was silently truncated at 1000 records** — fixed, and worth
+  recording because of how it presented. `internal_revisions` read revisions with
+  a flat limit; deduplicated to the newest per deployment that is roughly 500
+  apps, and a stress run that grew 3906 environments watched the fleet flatline
+  at exactly 500 running. Every environment past the cap was accepted, reported
+  as created, and never placed, with nothing anywhere saying so. Whole-collection
+  reads now page, and the backstop reports when it is reached instead of
+  quietly dropping the tail. 781/781 converges where 500 was the ceiling.
+- **Nothing refuses work the fleet cannot do.** The platform accepted 3125
+  environment spawns in 1.4 seconds while the fleet was already thousands
+  behind. `quota:meter` exists and meters none of this, and ADR-0081's budget is
+  a field nothing enforces. This is the next real gap.
 - **Breadth is fine and unmeasured beyond 8.** Eight branches spawned
   concurrently converge in ~3s on one node. Nobody has looked for the width at
   which the reconcile pass, the ports, or the memory give out. Depth is now

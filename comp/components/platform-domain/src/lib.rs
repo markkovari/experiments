@@ -1543,9 +1543,7 @@ fn env_spawn(request: &IncomingRequest, _query: &Map<String, Value>) -> Outcome 
         .ok()
         .and_then(|e| serde_json::from_str::<Value>(&e.data).ok().map(|d| (e.id, d)))
         .or_else(|| {
-            records::list_records(DEPLOYMENTS, 1000, "")
-                .map(|p| p.entries)
-                .unwrap_or_default()
+            all_records(DEPLOYMENTS, 100_000)
                 .into_iter()
                 .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok().map(|d| (e.id, d)))
                 .find(|(_, d)| str_of(d, "name") == app)
@@ -1589,9 +1587,7 @@ fn env_spawn(request: &IncomingRequest, _query: &Map<String, Value>) -> Outcome 
 /// parent lookup only ever searched deployments, so the second level came back
 /// `404 no deployment` and a tree search stopped at one.
 fn parent_of(app: &str) -> Option<(Value, String)> {
-    let deployment = records::list_records(DEPLOYMENTS, 1000, "")
-        .map(|p| p.entries)
-        .unwrap_or_default()
+    let deployment = all_records(DEPLOYMENTS, 100_000)
         .into_iter()
         .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok().map(|d| (e.id, d)))
         .find(|(_, d)| str_of(d, "name") == app);
@@ -1617,9 +1613,7 @@ fn spawn_environment(app: &str, env: &str) -> Outcome {
     // A derived name that collides with a real deployment would put two apps in
     // one store. Refused rather than resolved: `shop` + env `x` and an app called
     // `shop-env-x` are indistinguishable once the name is a DNS label.
-    let name_taken = records::list_records(DEPLOYMENTS, 1000, "")
-        .map(|p| p.entries)
-        .unwrap_or_default()
+    let name_taken = all_records(DEPLOYMENTS, 100_000)
         .into_iter()
         .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok())
         .any(|d| str_of(&d, "name") == derived);
@@ -1669,9 +1663,7 @@ fn env_list(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome {
         return Outcome::Err(401, "no session".into());
     };
     let of = query.get("app").and_then(|v| v.as_str()).unwrap_or_default();
-    let envs: Vec<Value> = records::list_records(REVISIONS, 1000, "")
-        .map(|p| p.entries)
-        .unwrap_or_default()
+    let envs: Vec<Value> = all_records(REVISIONS, 100_000)
         .into_iter()
         .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok())
         .filter(|r| !r["environment"].is_null() && (of.is_empty() || r["environment"]["of"] == json!(of)))
@@ -1712,7 +1704,10 @@ fn env_despawn(request: &IncomingRequest, query: &Map<String, Value>) -> Outcome
     // descendant of `x` is named `x-env-…` (ADR-0078).
     let prefix = format!("{derived}-env-");
     let mut doomed: Vec<(String, String)> = Vec::new();
-    for e in records::list_records(REVISIONS, 1000, "").map(|p| p.entries).unwrap_or_default() {
+    // Paged, not capped at 1000. See `all_records`: the flat limit silently hid
+    // every deployment past roughly the five-hundredth, which is how a fleet
+    // asked for 3906 apps sat at 500 forever.
+    for e in all_records(REVISIONS, 100_000) {
         let Ok(row) = serde_json::from_str::<Value>(&e.data) else { continue };
         let name = str_of(&row, "deployment");
         if name != derived && !name.starts_with(&prefix) {
@@ -2613,12 +2608,55 @@ fn manifests(request: &IncomingRequest, id: &str) -> Outcome {
 }
 
 /// What the applier re-applies on its interval (ADR-0004's drift correction).
+
+/// Every record in a collection, following the cursor.
+///
+/// `list_records` takes a limit and returns a cursor, and a single call with a
+/// big-looking number is a SILENT truncation: the caller gets a plausible answer
+/// with the tail missing and no indication that anything was dropped.
+///
+/// That is not hypothetical. Desired state was read with a flat limit of 1000,
+/// and a stress run that grew 3906 environments watched the fleet flatline at
+/// exactly 500 running — 1000 revision records, deduplicated to the newest per
+/// deployment, is about 500 apps. Every environment past the cap was created,
+/// reported as created, and never placed, with nothing anywhere saying so.
+///
+/// `cap` is a real backstop rather than a silent one: reaching it is reported.
+fn all_records(collection: &str, cap: usize) -> Vec<records::Entry> {
+    const PAGE: u32 = 500;
+    let mut out = Vec::new();
+    let mut after = String::new();
+    loop {
+        let Ok(page) = records::list_records(collection, PAGE, &after) else { break };
+        let empty = page.entries.is_empty();
+        out.extend(page.entries);
+        if out.len() >= cap {
+            eprintln!(
+                "platform: {collection} has at least {} records and this read stops at {cap} — \
+                 the tail is NOT being served, which for desired state means apps that were \
+                 accepted and will never start",
+                out.len()
+            );
+            out.truncate(cap);
+            break;
+        }
+        if page.next.is_empty() || empty {
+            break;
+        }
+        after = page.next;
+    }
+    out
+}
+
 fn internal_revisions(request: &IncomingRequest) -> Outcome {
     if !internal_ok(request) {
         return Outcome::Err(401, "internal endpoint".into());
     }
     let mut current: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
-    for e in records::list_records(REVISIONS, 1000, "").map(|p| p.entries).unwrap_or_default() {
+    // Paged, not capped at 1000. See `all_records`: the flat limit silently hid
+    // every deployment past roughly the five-hundredth, which is how a fleet
+    // asked for 3906 apps sat at 500 forever.
+    for e in all_records(REVISIONS, 100_000) {
         if let Ok(v) = serde_json::from_str::<Value>(&e.data) {
             let key = v["deployment"].as_str().unwrap_or_default().to_string();
             let better = current
@@ -2675,7 +2713,7 @@ fn deployment_delete(
         doc["org"].as_str().or_else(|| doc["tenant"].as_str()).unwrap_or(&p.tenant).to_string();
     let env = manifest::env_for(&owner_org, &name);
 
-    for e in records::list_records(REVISIONS, 1000, "").map(|pg| pg.entries).unwrap_or_default() {
+    for e in all_records(REVISIONS, 100_000) {
         if let Ok(v) = serde_json::from_str::<Value>(&e.data) {
             if v["deployment"] == json!(id) {
                 let _ = records::delete(REVISIONS, &e.id);
