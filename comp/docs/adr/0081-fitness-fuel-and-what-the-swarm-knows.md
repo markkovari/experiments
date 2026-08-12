@@ -405,90 +405,124 @@ without retrieval, a knowledge store is a write-only log.
 
 ---
 
-## 2b. The human: the ticket is the spec, and the pauses are real
+## 2b. The human: no new interface, and the rate decides everything
 
-**Decided: the user authors the goal spec, and human intervention points are
-ticket transitions.** The ticket system is the interface — Jira specifically.
+The user authors the goal spec and reacts at intervention points. Jira was the
+first candidate; on inspection it is the wrong first move, and so is building a
+goal-and-notification system of our own. Both are answers to a question nobody
+has measured yet.
 
-That answers the question this ADR left open ("what authors the goal spec") in
-the best available way. A person writing acceptance criteria in a ticket is doing
-something they already do, in a tool their team already reads, with an audit
-trail that already exists. Nothing here has to invent a review surface.
+### The number that decides this, and we do not have it
 
-### The mapping
+> **How many times does one run block on a human?**
 
-| the swarm | the ticket |
-|---|---|
-| a run | an issue |
-| the goal spec (tier 2 of the gate) | the acceptance criteria field, frozen and hashed at run start |
-| a human intervention point | a status transition, or a comment command |
-| the verdict, the diff, what it cost | comments |
-| `refuted`, `plateaued`, `exhausted` | a transition back to the human, with the reason |
+If the answer is two or three, a command-line prompt is sufficient forever and
+any UI built for it is waste. If the answer is fifty, no interface saves anyone —
+a human is the bottleneck and the fix is *fewer questions*, not better
+notifications.
 
-The pieces to build this on are already here: **`webhook:ingest`** (HMAC verify
-plus replay dedup, and Jira webhooks are signed), **`fsm:workflow`** (legal
-transitions — a run's lifecycle is a state machine and this is a component that
-already refuses illegal jumps), **`sched:timer`** (durable timers, for the
-poll-fallback and for reminding a human they are the blocker), and the secret
-path for the API token.
+Every argument for Jira, for a dashboard, for a notification pipeline, is really
+an argument about that number. Committing to any of them now is deciding before
+the number exists. The interruption rate is cheap to measure — record every
+intervention as a node in the graph, which the design already does — and it
+should be measured before anything is built for it.
 
-The spec must be **frozen at run start and content-addressed**, exactly as the
-gate section requires — a human editing the acceptance criteria mid-run must
-produce a *new* spec version and an explicit decision about whether the in-flight
-branches are still comparable. Silently judging generation 5 against different
-criteria than generation 1 makes every fitness comparison in the run a lie.
+### The two surfaces that already exist
+
+**Git, for "before landing".** This is the highest-volume intervention and it
+already has a mature interface: a branch and a pull request. The diff, the
+discussion, the approval semantics, the audit trail, the mobile app, the
+notifications — all of it already exists, is already in the workflow, and is
+already read by the people who would be reading it. Approve is merge; reject is
+close with a comment. alpha-swarm2 lands exactly this way (`swarm/auto` or
+`swarm/issue-N`, plus a PR) and it is the part of its design that needs no
+defending.
+
+**The CLI, for "before spending".** This one happens once per run — the plan and
+its estimated cost, at the only moment where stopping is free. `comp runs` to
+list what is waiting, `comp approve <id>` to release it. There is already a
+session, an auth path, and a tool people run.
+
+Between them they cover the three interventions that earn a human's attention.
+Neither needs anything built beyond a route and a command.
+
+### The spec is a file in the repo
+
+The gate section requires the goal spec to be **frozen and content-addressed**.
+A file in the repository gets that for free, because git *is* content addressing:
+the spec's identity is its blob hash, and the frozen-at-run-start requirement is
+satisfied by recording a commit.
+
+    .comp/goals/<name>.md
+
+It is versioned, diffable, reviewable in the same PR as the work it governs, and
+editable by the person who owns the goal without an API token. A ticket field is
+none of those things, and reconciling a ticket edited mid-run against branches
+already judged is a problem this simply does not have.
+
+### So: a contract, with a trivial default
+
+The loop needs two operations, and they are small enough that arguing about tools
+is disproportionate to them:
+
+    ask(question, options, context) -> pending-id
+    resolve(pending-id) -> option<answer>
+
+Everything else is an **adapter** behind that: the CLI and a PR to begin with;
+Jira, Linear, Slack or a dashboard later, if the measured interruption rate ever
+justifies one. `notify:dispatch` already exists for delivery — webhook, email or
+SMS to a configured gateway, no vendor in the contract — so notification is a
+component that is already written.
+
+**The expensive mistake here is not choosing the wrong tool. It is coupling the
+loop's state machine to somebody's issue schema before knowing what it needs to
+ask.** A contract with a CLI behind it costs an afternoon and can be pointed at
+Jira later. A Jira integration cannot be pointed back.
 
 ### Suspension is not blocking, and it is not death
 
-A human takes hours or days to answer. This has one consequence that is easy to
-miss and expensive to get wrong:
+Whatever the surface, a human takes hours or days. That has one consequence worth
+writing down because it would otherwise be found the hard way.
 
-> **A node waiting on a human must release its resources without losing its
-> place.**
+A node at an intervention point **checkpoints to the graph, releases its
+environment, and resumes on the answer**. Blocking is wrong: an environment held
+open across a weekend costs money to wait. Environments derive from a revision,
+so re-deriving one is cheap and the checkpoint is what matters.
 
-Blocking is wrong: an environment held open for two days over a weekend is an
-environment costing money to wait. So a node at an intervention point
-**checkpoints to the graph, releases its environment, and resumes on the
-webhook** — the environment is derived from a revision, so re-deriving it is
-cheap and the checkpoint is the thing that matters.
+And where this meets the fuel design:
 
-And here is the trap where this meets the fuel design, worth writing down because
-it would be found the hard way otherwise:
-
-> **Fuel is refunded on lease expiry, so that a crashed branch cannot strand it.
-> A suspended branch looks exactly like a crashed one.**
+> **Fuel is refunded on lease expiry, so a crashed branch cannot strand it. A
+> suspended branch looks exactly like a crashed one.**
 
 Left alone, every human-gated branch has its fuel reclaimed while somebody is at
-lunch, and resumes with nothing. So suspension must be a distinct state, not an
-absence of heartbeat: a suspended node's fuel moves into **escrow held by the
-parent**, earmarked and not redistributable, and is returned on resume. The
-distinction between "stopped answering" and "waiting for you" has to exist in the
-fuel system, not only in the status field.
+lunch, and resumes with nothing. Suspension must therefore be a distinct state
+rather than an absence of heartbeat: a suspended node's fuel moves into **escrow
+held by the parent** — earmarked, not redistributable — and returns on resume.
+"Stopped answering" and "waiting for you" have to be different in the fuel
+system, not only in a status field.
 
-That makes a sixth ending, alongside the five in the fitness section:
+That is a sixth ending, alongside the five in the fitness section:
 
-6. **`awaiting-human`** — checkpointed, environment released, fuel in escrow,
-   resumes on a ticket transition. Not running, not finished, not dead.
+6. **`awaiting-human`** — checkpointed, environment released, fuel in escrow.
+   Not running, not finished, not dead.
 
-An escrow needs an expiry of its own, or a ticket nobody ever answers holds fuel
-forever. A long timer — days, not minutes — that returns escrowed fuel to the
-parent and moves the ticket back to the human with "this expired waiting".
+Escrow needs its own expiry, or a question nobody answers holds fuel forever: a
+long timer — days, not minutes — that returns the fuel and reports the
+abandonment. `sched:timer` already does durable timers.
 
-### What a human is asked, and when
+### What earns an interrupt
 
-Intervention points are worth being stingy with; a swarm that asks about
-everything is a swarm someone stops reading. The three that earn it:
+A swarm that asks about everything is a swarm someone stops reading. Three:
 
-- **Before spending.** The plan and its estimated cost, once, at the start.
-  alpha-swarm2 has exactly this (plan approval) and it is the highest-value
-  interrupt — it is the last moment where stopping is free.
-- **Before landing.** A gate pass is necessary and not sufficient for a merge.
-- **On a held-out failure.** A branch that passed the public checks and failed
+- **Before spending** — the plan and its cost, once, at the start. The last
+  moment where stopping is free.
+- **Before landing** — a gate pass is necessary and not sufficient for a merge.
+- **On a held-out failure** — a branch that passed the public checks and failed
   the held-out ones fitted the gate, which is evidence the spec is gameable and
-  precisely the thing a person needs to see.
+  exactly what a person needs to see.
 
-Everything else — a plateau, a refutation, an exhausted branch — is a comment,
-not a question. The distinction is whether the loop is *blocked* on the answer.
+Everything else — a plateau, a refutation, an exhausted branch — is a *report*,
+not a *question*. The test is whether the loop is blocked on the answer.
 
 ## 3. Fuel: budgeting with propagation
 
@@ -622,10 +656,14 @@ Not a wish-list. This is the ADR's own rule applied to itself.
 - **Re-embedding cost on a provider model change.** The canary detects the drift;
   nothing here budgets for the re-index it triggers, which for a large corpus is
   the single largest bill this system can generate.
-- **Does a Jira transition survive a comp restart?** The checkpoint is in the
-  graph and the webhook is at-least-once, but nothing here says what happens to a
-  transition that arrives while the platform is down. `webhook:ingest` dedups
-  replays; it does not replay what was missed.
+- **What IS the interruption rate?** The whole human-interface question reduces
+  to it and it is unmeasured. Nothing should be built for a human until a run has
+  been watched and counted.
+- **Does an answer survive a comp restart?** The checkpoint is in the graph, but
+  nothing here says what happens to an approval that arrives while the platform
+  is down. `webhook:ingest` dedups replays; it does not replay what was missed.
+  A CLI-first surface dodges this — a poll finds the answer whenever it comes
+  back up — which is one more reason to start there.
 - **Who runs the loop?** This ADR describes the mechanisms, not the driver. A
   component that spawns, evaluates, selects and refuels is a separate decision,
   and ADR-0079 only established that a component *can* fork its own app.
