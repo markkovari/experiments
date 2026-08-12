@@ -773,6 +773,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "llm-probe"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen-rt",
+]
+
+[[package]]
 name = "lms-domain"
 version = "0.1.0"
 dependencies = [

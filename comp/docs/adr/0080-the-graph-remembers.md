@@ -103,13 +103,17 @@ captured live. They cannot cover what is between the two, and that is the half
 this repo has got wrong before — `comp:secrets/reader` shipped unlinked and every
 claim in its ADR was untested until something ran it (ADR-0061).
 
-So `reconciler/tests/graph.rs` starts a real SurrealDB, deploys `graph-probe`
+So `reconciler/tests/graph.rs` starts a real SurrealDB — a **pinned container**,
+`surrealdb/surrealdb:v3.1.3`, so the version is the same everywhere the suite
+runs and nobody has to install a database to run it; `latest` would let a server
+upgrade become a mystery failure in a test that never changed — deploys `graph-probe`
 linked to `knowledge-graph` on a real fleet, and asserts that a node written
 through `wasi:http` comes back with a slash-bearing id intact, that one hop out
 finds the symbol, that one hop back finds the file, and that an edge nobody has
-drawn reads as empty rather than as a failure. It skips loudly when `surreal` is
-not installed; a skipped test that says so is honest, one that passes because it
-did nothing is not.
+drawn reads as empty rather than as a failure. It skips loudly when Docker cannot start
+the database; a skipped test that says so is honest, one that passes because it
+did nothing is not. `docker compose --profile graph up -d` runs the same image
+for development.
 
 ## What this does not do yet
 

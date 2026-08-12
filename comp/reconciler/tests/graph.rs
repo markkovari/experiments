@@ -12,25 +12,39 @@
 //! shipped unlinked and its ADR's every claim was untested — so it gets a test
 //! that starts a database and asks it questions.
 //!
-//! Skipped, loudly, when `surreal` is not installed. A skipped test that says so
-//! is honest; one that passes because it did nothing is not.
+//! Skipped, loudly, when Docker cannot start the database. A skipped test that
+//! says so is honest; one that passes because it did nothing is not.
 
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use comp_reconciler::fleet::{repo_root, Fleet};
 use serde_json::Value;
 
-/// A SurrealDB that dies with the test.
+/// The image, PINNED. The three response shapes this component's tests encode —
+/// backtick-quoted ids, a missing namespace, a missing table reading as an error
+/// — were captured from this version. `latest` would let a server upgrade turn
+/// into a mystery failure in a test that never changed.
+const SURREAL_IMAGE: &str = "surrealdb/surrealdb:v3.1.3";
+
+/// A SurrealDB container that dies with the test.
+///
+/// A container rather than a local binary so the version is the same everywhere
+/// this runs and nobody has to install a database to run the suite.
 struct Surreal {
-    child: Child,
+    name: String,
     port: u16,
 }
 
 impl Drop for Surreal {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // `--rm` handles the ordinary exit; this covers a killed test run, which
+        // is exactly when a leaked container would otherwise sit holding a port.
+        let _ = Command::new("docker")
+            .args(["rm", "-f", &self.name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
 }
 
@@ -39,28 +53,41 @@ impl Surreal {
         // `free_port` is the harness's, so the database is bound the same way the
         // rest of the fleet is and two concurrent runs do not collide.
         let port = comp_reconciler::fleet::free_port();
-        let child = Command::new("surreal")
+        let name = format!("comp-test-surreal-{port}");
+        let status = Command::new("docker")
+            .args(["run", "--rm", "-d", "--name", &name])
+            // Bound to loopback explicitly: the container must not be reachable
+            // from the network just because a test is running.
+            .args(["-p", &format!("127.0.0.1:{port}:8000")])
+            .arg(SURREAL_IMAGE)
             .args(["start", "--no-banner"])
             .args(["--user", "root", "--pass", SURREAL_PASSWORD])
-            .args(["--bind", &format!("127.0.0.1:{port}")])
+            // Inside the container; the port mapping above is what the host sees.
+            .args(["--bind", "0.0.0.0:8000"])
             .arg("memory")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .spawn()
+            .status()
             .ok()?;
-        let me = Self { child, port };
+        if !status.success() {
+            return None;
+        }
+        let me = Self { name, port };
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(2))
             .build()
             .unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        // A container has an image pull and a runtime start in front of it, so
+        // this waits longer than a local process would need.
+        let deadline = std::time::Instant::now() + Duration::from_secs(90);
         while std::time::Instant::now() < deadline {
             if client.get(format!("http://127.0.0.1:{port}/health")).send().is_ok() {
                 return Some(me);
             }
-            std::thread::sleep(Duration::from_millis(200));
+            std::thread::sleep(Duration::from_millis(250));
         }
-        panic!("surreal never became healthy on {port}");
+        // `me` drops here, so the container goes with it.
+        panic!("the {SURREAL_IMAGE} container never became healthy on {port}");
     }
 }
 
@@ -147,7 +174,10 @@ fn wait_for_probe(fleet: &Fleet) -> Probe {
 #[test]
 fn a_component_writes_a_graph_to_a_real_database_and_walks_it() {
     let Some(db) = Surreal::start() else {
-        eprintln!("SKIPPED: `surreal` is not installed — this test needs a real database");
+        eprintln!(
+            "SKIPPED: could not start {SURREAL_IMAGE} — this test needs a real \
+             database and Docker to run it in"
+        );
         return;
     };
 

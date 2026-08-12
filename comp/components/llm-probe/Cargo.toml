@@ -1,6 +1,6 @@
 [package]
-name = "openai-provider"
-description = "Concrete LLM provider implementing llm:inference over an OpenAI-compatible HTTP API (openai:provider)"
+name = "llm-probe"
+description = "Instrument: does llm:inference reach a provider, with the key from the vault? (comp:llmprobe)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,15 +11,13 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wit-bindgen-rt = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 
 [package.metadata.component]
-package = "openai:component"
+package = "comp:llmprobe"
 
 [package.metadata.component.target]
 path = "wit"
-world = "openai-provider"
+world = "llm-probe"
 
 [package.metadata.component.target.dependencies]
 "llm:inference" = { path = "../llm-inference/wit" }
@@ -29,4 +27,3 @@ world = "openai-provider"
 "wasi:random" = { path = "../../wit/deps/wasi-random-0.2.0" }
 "wasi:cli" = { path = "../../wit/deps/wasi-cli-0.2.0" }
 "wasi:config" = { path = "../../wit/deps/wasi-config-0.2.0-rc.1" }
-"comp:secrets" = { path = "../../host/wit/deps/comp-secrets" }
