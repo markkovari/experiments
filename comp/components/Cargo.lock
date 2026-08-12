@@ -524,6 +524,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "forge-probe"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wit-bindgen-rt",
+]
+
+[[package]]
 name = "fsm-workflow"
 version = "0.1.0"
 dependencies = [
@@ -556,6 +564,16 @@ dependencies = [
 name = "geo"
 version = "0.1.0"
 dependencies = [
+ "wit-bindgen-rt",
+]
+
+[[package]]
+name = "github-forge"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
  "wit-bindgen-rt",
 ]
 
