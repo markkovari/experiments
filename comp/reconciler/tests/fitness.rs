@@ -101,24 +101,21 @@ impl Probe {
     }
 }
 
-/// Readiness has to cross the LINK. The root route touches no capability and
-/// would answer before the evaluator is reachable.
+/// The first real evaluation, retried until it works.
+///
+/// NOT a separate readiness probe — see `Fleet::until`. An empty check list is
+/// refused by the evaluator before any HTTP happens, so polling THAT proved the
+/// component was reachable and said nothing about the runner behind it: it went
+/// green while the egress was still unusable and the next call timed out.
+///
+/// A real check against a base nobody has posted comes back `need-base`, which
+/// can only be known by asking the runner.
 fn wait_for_probe(fleet: &Fleet) -> Probe {
     let probe = Probe {
         port: fleet.ingress_port,
         http: reqwest::blocking::Client::builder().timeout(Duration::from_secs(60)).build().unwrap(),
     };
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let mut last = Value::Null;
-    while Instant::now() < deadline {
-        // Readiness has to reach the RUNNER, not just the component. An empty
-        // check list is refused by the evaluator before any HTTP happens, so it
-        // proves only that the link exists — and the first version of this loop
-        // used exactly that, went green, and the next call timed out on an
-        // egress that was not usable yet.
-        //
-        // A real check against a base nobody has posted comes back `need-base`,
-        // which can only be known by asking the runner.
+    fleet.until("an evaluation that reaches the runner", Duration::from_secs(120), || {
         let r = probe.call(
             "/evaluate",
             json!({
@@ -127,17 +124,12 @@ fn wait_for_probe(fleet: &Fleet) -> Probe {
             }),
         );
         if r["error"] == json!("need-base") {
-            return probe;
+            Ok(())
+        } else {
+            Err(r.to_string())
         }
-        last = r;
-        std::thread::sleep(Duration::from_millis(500));
-    }
-    panic!(
-        "the fitness app never reached its evaluator — last answer {last}\n--- node ---\n{}\n\
-         --- reconciler ---\n{}",
-        fleet.node_log("n1"),
-        fleet.reconciler_log()
-    );
+    });
+    probe
 }
 
 fn check(id: &str, required: bool, weight: u32, command: &[&str]) -> Value {
