@@ -375,6 +375,9 @@ impl Fleet {
             }
             // How old a fleet report may be before admission fails closed. Low
             // enough to observe, in the one test that wants to see it.
+            if let Ok(per) = std::env::var("COMP_MAX_PLACEMENT_LAG_PER_NODE") {
+                cp.args(["--config", &format!("max-placement-lag-per-node={per}")]);
+            }
             if let Ok(age) = std::env::var("COMP_STATUS_MAX_AGE") {
                 cp.args(["--config", &format!("status-max-age={age}")]);
             }

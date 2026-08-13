@@ -299,7 +299,8 @@ async fn main() -> Result<()> {
         let running: u64 =
             observed.iter().map(|n| n.instances.iter().map(|i| i.count.max(1) as u64).sum::<u64>()).sum();
         let lag = wanted.saturating_sub(running);
-        report(&args, &http, &outcome, lag, wanted, running).await;
+        let nodes = observed.len() as u64;
+        report(&args, &http, &outcome, lag, wanted, running, nodes).await;
 
         if outcome.commands.is_empty() {
             continue;
@@ -545,7 +546,16 @@ async fn send(
 
 /// Tell the platform what could not be placed. One endpoint, so an app stuck
 /// unschedulable is visible in the UI instead of only in these logs.
-async fn report(args: &Args, http: &reqwest::Client, outcome: &Outcome, lag: u64, desired: u64, placed: u64) {
+#[allow(clippy::too_many_arguments)]
+async fn report(
+    args: &Args,
+    http: &reqwest::Client,
+    outcome: &Outcome,
+    lag: u64,
+    desired: u64,
+    placed: u64,
+    nodes: u64,
+) {
     // Said out loud even though nothing here can fix it: `max` is the operator's
     // limit, so a component pinned against it with demand still arriving is a
     // decision only they can make. Silence would make it indistinguishable from an

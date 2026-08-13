@@ -339,6 +339,36 @@ fn the_platform_refuses_work_the_fleet_cannot_place() {
     );
     println!("    a burst was cut off after {admitted} against a limit of 10");
 
+    // --- the limit scales with the fleet --------------------------------------
+    //
+    // A flat number is wrong everywhere except where it was measured: the same
+    // backlog that is reasonable across ten nodes is absurd on one. So the limit
+    // is per-node, and a bigger fleet is allowed to be further behind.
+    //
+    // This fleet's platform is configured with the flat override, so the scaling
+    // is checked on a second one.
+    {
+        let big = fleet_with("scaling", &[("COMP_MAX_PLACEMENT_LAG_PER_NODE", "5")]);
+        let api = Api::new(big.platform_url());
+        let (code, _) = api.post("/api/projects", json!({ "name": "s", "repo": "a/b" }));
+        assert_eq!(code, 201);
+
+        // One node: a lag of 8 is over a budget of 5.
+        assert_eq!(api.status(json!({ "lag": 8, "nodes": 1 })), 200);
+        let (code, body) = api.post("/api/environments", json!({ "app": "x", "env": "e" }));
+        assert_eq!(code, 429, "8 behind on one node exceeds 5 per node: {body}");
+
+        // The same backlog across four nodes is well within budget.
+        assert_eq!(api.status(json!({ "lag": 8, "nodes": 4 })), 200);
+        let (code, body) = api.post("/api/environments", json!({ "app": "x", "env": "e" }));
+        assert_eq!(
+            code, 404,
+            "8 behind across four nodes is inside a budget of 20, so it must be admitted \
+             — a limit that does not grow with the fleet throttles the fleet it has: {body}"
+        );
+        println!("    the limit scales: 8 behind refused on 1 node, admitted on 4");
+    }
+
     // --- and the REAL reconciler reports it, not just this test ---------------
     //
     // The endpoint did not exist until now and the reconciler posted into a 404
