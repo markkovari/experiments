@@ -1929,3 +1929,27 @@ restore:
       echo "  $s"
     done
     echo "restored $n bucket(s) from $DIR to $URL"
+
+# ---- graph-engineering: run a goal to a pull request -----------------------
+#
+# The one command behind the showcase. Builds the components and the native
+# binaries, then drives a real search (real model, real gate, real forge) over a
+# checked-out repo and opens a PR for the winner.
+#
+#   just goal-run \
+#     checkout=/path/to/repo repo=owner/name \
+#     anthropic_key=~/.secrets/anthropic github_token=~/.secrets/ghpat
+#
+# Secrets are FILE PATHS, never values: nothing sensitive reaches argv. Tune the
+# run with branches=, rounds=, model=, attempts=, or dry_run=1.
+goal-run checkout repo anthropic_key github_token branches="4" rounds="1" model="claude-haiku-4-5-20251001" attempts="2" dry_run="0":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just build
+    cd host && cargo build --release --bin comp-host && cd ..
+    cd reconciler && cargo build --release --bins && cd ..
+    args=(--checkout "{{checkout}}" --repo "{{repo}}" \
+          --anthropic-key "{{anthropic_key}}" --github-token "{{github_token}}" \
+          --branches {{branches}} --rounds {{rounds}} --model "{{model}}" --attempts {{attempts}})
+    [ "{{dry_run}}" = "1" ] && args+=(--dry-run)
+    ./reconciler/target/release/comp-goalrun "${args[@]}"
