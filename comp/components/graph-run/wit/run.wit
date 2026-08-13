@@ -90,6 +90,14 @@ interface driver {
 
     record plan {
         goal: goal,
+        /// What a PREVIOUS generation's best candidate was still failing.
+        ///
+        /// Empty on a first generation. The driver already hands a branch its own
+        /// last verdict; this is the other direction — a search that seeds
+        /// generation two with generation one's best candidate has to send what
+        /// was wrong with it too, or four fresh branches are shown broken code and
+        /// not told why.
+        previous: list<failure>,
         /// The gate. An empty list is refused rather than passed — an empty gate
         /// accepts everything.
         checks: list<check>,

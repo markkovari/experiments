@@ -169,7 +169,13 @@ impl Guest for Component {
 
         let mut attempts: Vec<Attempt> = Vec::new();
         let mut seen: Vec<String> = Vec::new();
-        let mut previous: Vec<agent::Failure> = Vec::new();
+        // Seeded from the plan, so a generation can inherit what the last one
+        // could not fix. Empty on a first generation.
+        let mut previous: Vec<agent::Failure> = p
+            .previous
+            .iter()
+            .map(|f| agent::Failure { id: f.id.clone(), detail: f.detail.clone() })
+            .collect();
         let mut best: Option<(u32, Vec<File>, Vec<Failure>)> = None;
         let mut spent: u32 = 0;
         // Attempts in a row that failed to beat the best score.

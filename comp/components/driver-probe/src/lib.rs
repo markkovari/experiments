@@ -63,6 +63,16 @@ fn plan_of(v: &serde_json::Value) -> run::Plan {
             context: files(v, "context"),
             writable: strings(v, "writable"),
         },
+        previous: v["previous"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|f| run::Failure {
+                id: f["id"].as_str().unwrap_or_default().to_string(),
+                detail: f["detail"].as_str().unwrap_or_default().to_string(),
+            })
+            .collect(),
         checks: v["checks"]
             .as_array()
             .cloned()
