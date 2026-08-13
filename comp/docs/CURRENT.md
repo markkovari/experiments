@@ -146,6 +146,18 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
 
 ## Honestly missing
 
+- **The gate runs checks; nothing calls it yet.** `comp-checks` materialises a
+  candidate over a base tree, runs allow-listed commands in it, and reports the
+  CHECK VECTOR — every required check passing is the gate, the weighted fraction
+  is the score (ADR-0081). It is native because a component cannot spawn a
+  process, and that is the sandbox working rather than a gap. What is missing is
+  a caller: no evaluator component wraps it, and nothing turns a goal into
+  candidates to feed it.
+- **The check runner needs a checkout on disk.** `--base` is a directory, so the
+  runner is pinned to a machine that already has the repository. It should
+  materialise the base from `vgit:store` instead — the objects are already in
+  blob storage and reachable from any node — which would make the runner
+  placeable anywhere rather than only where somebody cloned.
 - **The inventory TTL is declared by three processes on one shared bucket.** A
   host asks for `heartbeat_secs * 3`, the reconciler for `inventory_ttl`, the
   ingress for its own — and whoever calls `create_key_value` first wins, silently.
