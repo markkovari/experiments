@@ -115,7 +115,9 @@ impl Guest for Component {
             (Method::Post, ["api", "deployments"]) => deployment_create(&request, &query),
             (Method::Get, ["api", "deployments"]) => deployments_list(&request),
             (Method::Get, ["api", "deployments", id]) => deployment_get(&request, id),
-            (Method::Post, ["api", "deployments", id, "save"]) => deployment_save(&request, id),
+            (Method::Post, ["api", "deployments", id, "save"]) => {
+                deployment_save(&request, id, &query)
+            }
             (Method::Get, ["api", "deployments", id, "manifests"]) => manifests(&request, id),
             (Method::Delete, ["api", "deployments", id]) => deployment_delete(&request, id, &query),
 
@@ -2420,6 +2422,56 @@ fn compose_detail(e: &composer::ComposeError) -> String {
     }
 }
 
+
+/// What each component in a graph exports, by name.
+///
+/// Recorded on every revision so the NEXT save has something to compare against.
+/// Without it, "did this upgrade break anything" has no answer: the catalogue row
+/// is overwritten by the upload, so by the time a save runs, what the previous
+/// build exported is already gone.
+fn surfaces_of(tenant: &str, parts: &[manifest::Part]) -> Value {
+    let mut out = serde_json::Map::new();
+    for p in parts {
+        let key = format!("{tenant}/{}", p.name);
+        let exports: Vec<Value> = find_one(CATALOG, "key", &key)
+            .map(|(_, _, row)| row["surface"]["exports"].clone())
+            .and_then(|e| e.as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|e| e["raw"].as_str().map(|s| json!(s)))
+            .collect();
+        out.insert(p.name.clone(), Value::Array(exports));
+    }
+    Value::Object(out)
+}
+
+/// Exports that the previous revision had and this one does not.
+///
+/// This is the ONLY thing the WIT surface is used for, and the distinction is the
+/// one that a version test found the hard way. The surface must never decide
+/// whether an artifact CHANGED — two builds differing in a constant have
+/// identical surfaces and different bytes, and treating them as the same shipped
+/// nothing for the entire life of that bug. What the surface is genuinely good
+/// for is whether a change BREAKS something: an export that vanished is an export
+/// somebody was linking to, or serving on.
+fn lost_exports(before: &Value, after: &Value) -> Vec<String> {
+    let mut gone = Vec::new();
+    let Some(old) = before.as_object() else { return gone };
+    for (component, exports) in old {
+        // A component that is no longer in the graph at all is a deliberate
+        // removal, not a broken upgrade — the author took it out.
+        let Some(now) = after.get(component).and_then(|v| v.as_array()) else { continue };
+        for e in exports.as_array().cloned().unwrap_or_default() {
+            let Some(raw) = e.as_str() else { continue };
+            if !now.iter().any(|n| n.as_str() == Some(raw)) {
+                gone.push(format!("{component} no longer exports {raw}"));
+            }
+        }
+    }
+    gone.sort();
+    gone
+}
+
 /// Record the composed artifact as a catalog row, and return its digest once the
 /// distributor has given it one.
 ///
@@ -2491,7 +2543,9 @@ fn stage_fused(
     }
 }
 
-fn deployment_save(request: &IncomingRequest, id: &str) -> Outcome {
+fn deployment_save(request: &IncomingRequest, id: &str, query: &Map<String, Value>) -> Outcome {
+    // Removing an export is sometimes the point. An author who means it says so.
+    let force = query.get("force").and_then(|v| v.as_str()).is_some_and(|v| v == "true");
     // A save is what creates desired state — it is the other way to ask the fleet
     // for work, and admitting only environment spawns would leave the front door
     // open while watching the side one.
@@ -2585,12 +2639,43 @@ fn deployment_save(request: &IncomingRequest, id: &str) -> Outcome {
         Err(e) => return Outcome::Err(422, e.detail()),
     };
 
+    // --- the compatibility gate ---------------------------------------------
+    //
+    // An upgrade that removes an export breaks whatever was linked to it, or the
+    // ingress that was serving on it. Refused here, where the author is standing,
+    // rather than at start time on a node — where it surfaces as a link failure
+    // with no hint that an upload caused it.
+    //
+    // `?force=true` exists because sometimes removing an export IS the change.
+    let surfaces = surfaces_of(&owner_org, &parts);
+    if !force {
+        if let Some(prev) = newest_revision(id) {
+            let gone = lost_exports(&prev["surfaces"], &surfaces);
+            if !gone.is_empty() {
+                return Outcome::Err(
+                    409,
+                    format!(
+                        "this upgrade removes {} export(s) that revision {} had: {}. Anything \
+                         linked to them would fail to start. Re-deploy with `?force=true` if \
+                         that is the intent.",
+                        gone.len(),
+                        prev["revision"].as_u64().unwrap_or(0),
+                        gone.join("; ")
+                    ),
+                );
+            }
+        }
+    }
+
     // A revision is the unit of rollback: the desired state, verbatim (ADR-0004).
     let next = doc["revision"].as_u64().unwrap_or(0) + 1;
     let revision_doc = json!({
         "deployment": id, "tenant": owner_org, "revision": next,
         "strategy": strategy.as_str(), "manifest": doc_manifest,
         "org": owner_org, "saved": now(), "env": manifest::env_for(&owner_org, &name),
+        // What this revision's components export, so the NEXT save can tell an
+        // upgrade from a break.
+        "surfaces": surfaces,
     });
     let _ = records::create(REVISIONS, &revision_doc.to_string(), &["deployment".to_string(), "tenant".to_string()]);
 

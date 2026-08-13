@@ -171,6 +171,14 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   as created, and never placed, with nothing anywhere saying so. Whole-collection
   reads now page, and the backstop reports when it is reached instead of
   quietly dropping the tail. 781/781 converges where 500 was the ceiling.
+- **The WIT surface is a compatibility gate, never an identity check.** A save
+  refuses when it would remove an export the previous revision had, naming each
+  one, with `?force=true` for when that is the intent. The distinction was
+  learned expensively: the composed artifact used to be invalidated by its
+  SURFACE, so two builds differing in a constant were treated as the same
+  artifact and a recompiled component never reached the fleet while every layer
+  reported success. Surfaces decide whether a change BREAKS something; only
+  content decides whether it IS something.
 - **Admission control exists now and is enforced.** The reconciler reports its
   lag every pass to `POST /api/internal/status`; the platform refuses a spawn
   with 429 above `max-placement-lag`, and with 503 when that report goes stale —

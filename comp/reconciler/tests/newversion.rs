@@ -270,4 +270,59 @@ fn a_recompiled_artifact_replaces_the_running_one() {
         "the node never reported starting anything:\n{log}"
     );
     println!("    and it stayed replaced");
+
+    // --- an upgrade that removes an export is refused -------------------------
+    //
+    // The WIT surface is the WRONG question for "did this change" — two builds
+    // differing in a constant have identical surfaces and different bytes, and
+    // treating them as the same is the bug this file was written to catch. It is
+    // the RIGHT question for "does this break anything": an export that vanished
+    // is one something was linking to, or serving on.
+    //
+    // Uploading the wrong artifact under an existing id is the ordinary way this
+    // happens, so that is what is done here — a component that exports a domain
+    // interface rather than an HTTP handler.
+    let wrong = std::fs::read(
+        repo_root().join("components/target/wasm32-wasip2/release/slug.wasm"),
+    )
+    .expect("run `just build`");
+    assert!(matches!(api.upload("ver", wrong), 200 | 201), "uploading the wrong artifact failed");
+
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut refusal = None;
+    while Instant::now() < deadline {
+        let (code, body) = api.post(&format!("/api/deployments/{id}/save"), json!({}));
+        if code == 409 && body["error"].as_str().unwrap_or_default().contains("no longer exports") {
+            refusal = Some(body);
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    let why = refusal.expect(
+        "swapping in an artifact that does not export the handler this app serves on was \
+         accepted — it would have been caught at start time on a node, as a link failure \
+         with no hint that an upload caused it",
+    );
+    println!("    refused: {}", why["error"].as_str().unwrap_or_default());
+
+    // The fleet is untouched by a refused save: it keeps serving what it had.
+    assert_eq!(
+        tag_served(&fleet).as_deref(),
+        Some("beta"),
+        "a refused save changed what was running"
+    );
+
+    // And `force` exists because removing an export is sometimes the change.
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut forced = false;
+    while Instant::now() < deadline {
+        let (code, _) = api.post(&format!("/api/deployments/{id}/save?force=true"), json!({}));
+        if code == 200 {
+            forced = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    assert!(forced, "`force=true` did not get past the gate, so the gate cannot be overridden");
+    println!("    and force=true gets past it");
 }
