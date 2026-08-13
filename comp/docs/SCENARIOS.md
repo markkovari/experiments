@@ -74,7 +74,8 @@ is promoted; the rest are closed.
 |---|---|
 | eight branches spawn concurrently | ✅ `stress_env.rs` — 8/8 accepted, converged in 3.0s |
 | a goal fans out and the branches really run at once | ✅ `generation.rs` — 4 branches, 1948 ms wall against 5849 ms of branch time. Asserted on TIME, because the first version compared attempt counts and a deliberately sequential fan-out passed it |
-| each has its own store, none shares | ✅ asserted by name; the bucket-name collision at depth six is fixed and unit-tested |
+| each has its own store, none shares | ✅ asserted by name; the bucket-name collision at depth six is fixed and unit-tested. And now asserted by BEHAVIOUR — `envbranch.rs` has three environments write the same key and each read back its own, with the parent finding nothing |
+| a branch can be driven in its own environment | ✅ ADR-0083 — an environment had its own store and no address, so nothing could hand it work. The host is derived from the parent's now |
 | candidates are ranked when none is acceptable | ✅ `fitness.rs` — 1000 / 500 / 333, with the last two both failing the gate |
 | derived work is computed once for the generation | ✅ `artifacts.rs` — twelve concurrent lookups, exactly one producer |
 | closing a branch closes what grew from it | ✅ `stress_env.rs` |
@@ -168,11 +169,13 @@ succeed" today is:
 
 The honest gap list, in the order it bites:
 
-1. **No branch gets its own environment.** Every branch is a concurrent call
-   carrying its own base tree, which is enough only because a run is stateless.
-   The moment a branch needs to KEEP something — a compiled artifact, a partial
-   index — it needs the environments that already exist, are measured to depth 4,
-   and are not wired to this.
+1. **The loop is not yet deployed into environments.** A branch can now have an
+   addressable store of its own (`envbranch.rs`, ADR-0083) and the fan-out can
+   target it, but the driver graph is still put up from a fixture and driven on
+   one host. Joining them means deploying that graph through the platform API and
+   spawning an environment per branch — no new mechanism, just the wiring.
+   Related: an environment is a COPY of its parent, so no branch can run a
+   different MODEL from its siblings; diversity stays prompt-deep.
 2. **Tokens are not money.** Both budgets count tokens; a project's budget is a
    number in a different unit that nothing converts to. And an unusable answer's
    cost is invisible at both levels, because cost travels with a candidate.

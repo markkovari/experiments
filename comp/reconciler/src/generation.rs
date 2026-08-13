@@ -174,6 +174,12 @@ pub struct Strategy {
     pub lens: String,
     /// Whether this branch is shown the previous generation's best candidate.
     ///
+    /// Which door this branch answers on. Empty means the caller's default.
+    ///
+    /// Per branch because a branch may be its own ENVIRONMENT — a derived app
+    /// with its own store (ADR-0078) and its own derived hostname (ADR-0083) —
+    /// and then "which branch" and "which address" are the same question.
+    pub host: String,
     /// `false` for exactly one branch per generation. Every branch that reads the
     /// last winner inherits its mistakes along with its progress, so a search in
     /// which they all do cannot leave a local optimum — the one branch that starts
@@ -211,7 +217,27 @@ pub fn default_strategies(n: u16) -> Vec<Strategy> {
             // distinct lens and better than nothing.
             lens: LENSES[i % LENSES.len()].to_string(),
             reads_prior: !(n > 1 && i == n as usize - 1),
+            host: String::new(),
         })
+        .collect()
+}
+
+/// Point each branch at its own environment.
+///
+/// `hosts[i]` is where branch `i` runs. Shorter than the strategy list is an
+/// error rather than a fallback to the shared host: a branch that silently ran in
+/// the wrong environment would write another branch's store, and the whole reason
+/// for environments is that it cannot.
+pub fn on_hosts(strategies: &[Strategy], hosts: &[String]) -> Vec<Strategy> {
+    assert_eq!(
+        strategies.len(),
+        hosts.len(),
+        "every branch needs its own environment, or one of them writes another's store"
+    );
+    strategies
+        .iter()
+        .zip(hosts)
+        .map(|(s, h)| Strategy { host: h.clone(), ..s.clone() })
         .collect()
 }
 
@@ -272,7 +298,10 @@ pub fn fan_out_from(
         .iter()
         .enumerate()
         .map(|(i, s)| {
-            let (url, host) = (driver_url.to_string(), host.to_string());
+            let url = driver_url.to_string();
+            // The branch's own environment when it has one, the shared door
+            // otherwise.
+            let host = if s.host.is_empty() { host.to_string() } else { s.host.clone() };
             let plan = plan_for(plan, prior, s);
             let name = format!("branch-{i}");
             let seed = base_seed + (i as u64) * STRIDE;

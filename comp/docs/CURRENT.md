@@ -3,7 +3,7 @@
 What runs today, what is measured, and what is honestly missing. The reasoning lives
 in [80 ADRs](adr/); this page is the map.
 
-Last revised after ADR-0080.
+Last revised after ADR-0083.
 
 ## Shape
 
@@ -215,11 +215,28 @@ three of them — and both are now enforced by a helper rather than by rememberi
   token budget ACROSS the search when they are not, and patience for a search that
   is neither expensive nor going anywhere.
 
-  What is missing is no longer the loop. No branch gets its own environment — each
-  is a concurrent call carrying its own base tree, which holds only while a run is
-  stateless. Tokens are not money. And nothing picks a started goal off the queue:
-  `comp goal start` records that one started, and a person is still the wire
-  between that and a search.
+  **A branch can now have its own environment.** ADR-0078 gave an environment its
+  own store by deriving the app name and then gave it no ingress at all, which is
+  right about the hazard — the parent's hostname on two apps routes to whichever
+  the ingress saw last — and leaves an app that cannot be driven from outside. A
+  swarm branch is precisely something that must be driven. ADR-0083 derives the
+  host instead: `branch-0.swarm.ada.test`, a strict suffix of the parent's, so it
+  cannot collide with it and collides with a sibling only if the names do — which
+  spawning already refuses. `generation::Strategy` carries the host, so a branch
+  and its address are one thing.
+
+  Proven by three environments writing THE SAME KEY, each reading back its own,
+  the parent finding nothing. The same key on purpose: different keys per branch
+  pass just as happily against one shared bucket.
+
+  What is left: the loop is not yet DEPLOYED into environments. `envbranch.rs`
+  proves a branch has an addressable store of its own; the driver graph is still
+  put up from a fixture and driven on one host, so wiring the two means deploying
+  that graph through the platform API and spawning an environment per branch.
+  Also open: an environment is a COPY, so no branch can run a different model from
+  its siblings — diversity is prompt-deep. Tokens are not money. And nothing picks
+  a started goal off the queue; `comp goal start` records that one started, and a
+  person is still the wire between that and a search.
   A branch now spends against a token budget; a PROJECT still does not, and
   nothing converts tokens to money or refunds a branch that died. Branches differ only by seed — same prompt, same context — so herding is
   unmitigated and does not announce itself. And the agent NAMES ITS FILES rather
