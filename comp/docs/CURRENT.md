@@ -171,16 +171,22 @@ three of them — and both are now enforced by a helper rather than by rememberi
   writer to the gate: attempt, judge, repair from what the checks actually said,
   stop. It stops for a stated reason — `accepted`, `plateau` when an attempt
   reproduces a candidate already on record, `exhausted` when the attempt budget
-  runs out — and keeps the best candidate by score rather than the last, because
-  a repair can be worse than what it repaired. Every attempt is recorded with a
-  content digest, which is the raw material fuel and stopping rules will need and
-  cannot be reconstructed afterwards.
+  runs out, `no-progress` when `patience` attempts in a row fail to beat the best
+  score, `over-budget` when the token budget is spent — and keeps the best
+  candidate by score rather than the last, because a repair can be worse than what
+  it repaired. Each repair is shown the best candidate rather than the untouched
+  tree, which is what makes it a repair and not a re-roll with hints attached.
+
+  The budget is in TOKENS, reported by the writer with each candidate, because a
+  budget in tries is not a budget. It under-reports by whatever the unusable
+  answers cost — cost travels with a candidate and an unusable answer produces
+  none — which is why `max-attempts` still exists as the hard bound.
 
   What is missing is the layer above one branch: no rule picks which of N runs
   wins, no tie-break, and nothing opens the pull request — deliberately, since a
   driver that proposed its own result would open N pull requests for N branches.
-  Nothing spends against a budget: `max-attempts` is a count of tries, not a cost.
-  Branches differ only by seed — same prompt, same context — so herding is
+  A branch now spends against a token budget; a PROJECT still does not, and
+  nothing converts tokens to money or refunds a branch that died. Branches differ only by seed — same prompt, same context — so herding is
   unmitigated and does not announce itself. And the agent NAMES ITS FILES rather
   than retrieving them, because no embedding provider is wired.
 - **The gate runs checks; nothing calls it yet.** `comp-checks` materialises a

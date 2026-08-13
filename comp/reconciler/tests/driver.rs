@@ -116,7 +116,9 @@ fn check(id: &str, command: &[&str]) -> Value {
     json!({ "id": id, "required": true, "weight": 1, "command": command })
 }
 
-/// A plan with everything but the parts each case varies.
+/// A plan with everything but the parts each case varies. `max_tokens` and
+/// `patience` default off, so a case that does not name them is bounded only by
+/// `max_attempts` — which is what every case here relied on before they existed.
 fn plan(text: &str, checks: Value, seed: u64, max_attempts: u32) -> Value {
     json!({
         "text": text,
@@ -199,6 +201,29 @@ fn the_loop_repairs_from_a_real_verdict_and_stops_for_a_reason() {
         "an accepted run has nothing left failing: {run}"
     );
 
+    // --- THE REPAIR BUILDS ON THE CANDIDATE, NOT THE BASE -------------------
+    // Here the scripted model matches on the CONTENT of what it wrote last time,
+    // not on a check id. `step_one` can only be in the second prompt if the
+    // driver laid the best candidate over the goal's files — so a driver that
+    // showed the untouched tree every attempt falls off the script and comes back
+    // provider-down rather than quietly re-rolling.
+    let built = probe.run(plan(
+        "build on it",
+        json!([check("needs-step-two", &["grep", "-q", "step_two", "src/lib.rs"])]),
+        20,
+        3,
+    ));
+    assert_eq!(
+        built["stopped"],
+        json!("accepted"),
+        "the second attempt could not see the first one's work: {built}"
+    );
+    assert!(
+        body_of(&built).contains("step_one") && body_of(&built).contains("step_two"),
+        "the repair replaced the candidate instead of extending it, which is a re-roll \
+         with extra steps: {built}"
+    );
+
     // --- STOPPING WITHOUT WINNING: the ideas ran out -------------------------
     // The model answers the same thing however many times it is asked. The
     // budget says five; the run stops at two, because a third would pay full
@@ -249,6 +274,71 @@ fn the_loop_repairs_from_a_real_verdict_and_stops_for_a_reason() {
          not the newest thing that tied it: {spent}"
     );
 
+    // --- THE BUDGET IS IN TOKENS, NOT TRIES ---------------------------------
+    // `max-attempts` bounds how many times, which is not what anything costs.
+    // The limit is calibrated from what the run above actually spent, so this
+    // asserts the rule rather than a guess about prompt length.
+    let one_attempt = spent["attempts"][0]["prompt_tokens"].as_u64().unwrap()
+        + spent["attempts"][0]["completion_tokens"].as_u64().unwrap();
+    assert!(one_attempt > 0, "the cost never reached the driver: {spent}");
+    assert_eq!(
+        spent["spent_tokens"].as_u64().unwrap(),
+        spent["attempts"].as_array().unwrap().iter()
+            .map(|a| a["prompt_tokens"].as_u64().unwrap() + a["completion_tokens"].as_u64().unwrap())
+            .sum::<u64>(),
+        "the run's total is not what its attempts cost: {spent}"
+    );
+    assert_eq!(spent["attempts"][0]["model"], json!("mock-agent"), "which model answered: {spent}");
+
+    let mut broke = plan(
+        "wander",
+        json!([
+            check("mention-answer", &["grep", "-q", "answer", "src/lib.rs"]),
+            check("be-42", &["grep", "-q", "42", "src/lib.rs"]),
+        ]),
+        10,
+        5,
+    );
+    broke["max_tokens"] = json!(one_attempt);
+    let broke = probe.run(broke);
+    assert_eq!(broke["stopped"], json!("over-budget"), "{broke}");
+    assert_eq!(
+        broke["attempts"].as_array().map(|a| a.len()),
+        Some(1),
+        "a budget of one attempt's worth must stop after one, having overshot by none: {broke}"
+    );
+
+    // --- PATIENCE: different candidates that are no better -------------------
+    // The commoner way a run wastes money. `plateau` needs the model to repeat
+    // itself EXACTLY; this needs only that it stop improving. Attempt three ties
+    // attempt two, and a budget of five stops at three.
+    let mut stubborn = plan(
+        "wander",
+        json!([
+            check("mention-answer", &["grep", "-q", "answer", "src/lib.rs"]),
+            check("be-42", &["grep", "-q", "42", "src/lib.rs"]),
+        ]),
+        10,
+        5,
+    );
+    stubborn["patience"] = json!(1);
+    let stubborn = probe.run(stubborn);
+    assert_eq!(stubborn["stopped"], json!("no-progress"), "{stubborn}");
+    assert_eq!(
+        stubborn["attempts"].as_array().map(|a| a.len()),
+        Some(3),
+        "one attempt that failed to improve must end it, and none of the three repeated \
+         itself — so `plateau` would never have fired: {stubborn}"
+    );
+    let digests: Vec<_> = stubborn["attempts"].as_array().unwrap().iter()
+        .map(|a| a["digest"].clone()).collect();
+    assert_eq!(
+        digests.iter().collect::<std::collections::HashSet<_>>().len(),
+        3,
+        "all three candidates must be DIFFERENT, or this is testing plateau twice: {stubborn}"
+    );
+    assert_eq!(stubborn["score"], json!(500), "and the best is still kept: {stubborn}");
+
     // --- a run with no gate is refused before anything is paid for -----------
     // The evaluator refuses this too. Refused here as well so the caller learns
     // before spending on inference rather than after.
@@ -256,6 +346,7 @@ fn the_loop_repairs_from_a_real_verdict_and_stops_for_a_reason() {
     assert_eq!(ungated["error"], json!("invalid"), "an empty gate must be refused: {ungated}");
 
     println!(
-        "    41 -> 42 in two attempts from a real verdict; plateau at 2 of 5; exhausted at 3, best kept"
+        "    41 -> 42 in two attempts from a real verdict; plateau at 2 of 5; exhausted at 3, \
+         best kept; over-budget at 1; no-progress at 3 of 5"
     );
 }

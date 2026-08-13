@@ -47,6 +47,19 @@ interface driver {
         /// produced. The ideas ran out, and the next attempt would cost money
         /// for an answer that is already on record.
         plateau,
+        /// `patience` attempts in a row failed to beat the best score. Weaker
+        /// than `plateau` and far more common: a model rarely repeats itself
+        /// exactly, and routinely produces a different candidate that is no
+        /// better. Without this, the usual way a run wastes money is exploring
+        /// variations of an idea that does not work.
+        no-progress,
+        /// `max-tokens` was reached.
+        ///
+        /// Enforced AFTER an attempt, because what an attempt costs is not
+        /// knowable until it is made. A run therefore overshoots its budget by
+        /// at most one attempt, which is the honest bound — the alternative is
+        /// guessing a cost in advance and calling the guess a limit.
+        over-budget,
     }
 
     /// One try, kept whether or not it produced anything.
@@ -66,6 +79,13 @@ interface driver {
         accepted: bool,
         /// Why nothing was judged. Empty when something was.
         error: string,
+        /// What this attempt cost, as the provider reported it. Zero on an
+        /// attempt that never reached a provider.
+        prompt-tokens: u32,
+        completion-tokens: u32,
+        /// Which model answered. Varies within one run once a tier router
+        /// exists, which is why it is recorded per attempt and not per run.
+        model: string,
     }
 
     record plan {
@@ -77,9 +97,28 @@ interface driver {
         /// Sent with the first candidate, and again if the runner says it has
         /// forgotten. Empty is legal only if the runner already knows this base.
         base-tree: list<file>,
-        /// The budget, in tries. Not a duration: a wall clock makes a run's
+        /// The hard bound, in tries. Not a duration: a wall clock makes a run's
         /// result depend on how loaded the machine was.
+        ///
+        /// Still needed alongside `max-tokens`, because an unusable answer costs
+        /// tokens this cannot see — cost is reported WITH a candidate, and an
+        /// unusable answer produces no candidate. A run of nothing but unusable
+        /// answers is bounded by THIS and by nothing else.
         max-attempts: u32,
+        /// The budget, in tokens across the whole run. 0 means unbounded.
+        ///
+        /// A budget in attempts is not a budget: three cheap tries and three
+        /// expensive ones are the same number.
+        max-tokens: u32,
+        /// How many attempts in a row may fail to improve on the best score
+        /// before the run stops. 0 disables it.
+        ///
+        /// The knob that decides whether a search is persistent or stubborn,
+        /// and there is no correct default — a goal whose first useful idea
+        /// arrives on the fourth attempt needs a patience of at least three, and
+        /// paying for that on every goal that was never going to work is the
+        /// price of it.
+        patience: u32,
         /// The first seed. Attempt N uses `seed + n`, so two branches given
         /// different starting seeds explore different sequences and either can
         /// be replayed exactly.
@@ -100,6 +139,10 @@ interface driver {
         failures: list<failure>,
         /// Every attempt, in order.
         attempts: list<attempt>,
+        /// What the run cost in total. UNDER-REPORTS by whatever the unusable
+        /// answers cost — a hole bounded by `max-attempts`, and named here
+        /// rather than hidden behind a number that looks exact.
+        spent-tokens: u32,
         stopped: stop-reason,
     }
 

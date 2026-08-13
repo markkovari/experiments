@@ -57,9 +57,12 @@ impl Guest for Component {
             let seed = v["seed"].as_u64().unwrap_or(0);
 
             match agent::attempt(&g, &previous, seed) {
-                Ok(files) => json!({
-                    "files": files.iter().map(|f| json!({ "path": f.path, "content": f.content }))
+                Ok(c) => json!({
+                    "files": c.files.iter().map(|f| json!({ "path": f.path, "content": f.content }))
                         .collect::<Vec<_>>(),
+                    "prompt_tokens": c.prompt_tokens,
+                    "completion_tokens": c.completion_tokens,
+                    "model": c.model,
                 }).to_string(),
                 Err(e) => {
                     let (kind, detail) = match e {

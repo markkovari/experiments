@@ -29,7 +29,7 @@
 #[allow(warnings)]
 mod bindings;
 
-use bindings::exports::graph::agent::writer::{AgentError, File, Goal, Guest, Failure};
+use bindings::exports::graph::agent::writer::{AgentError, Candidate, File, Goal, Guest, Failure};
 use bindings::llm::inference::inference as llm;
 
 struct Component;
@@ -134,7 +134,7 @@ fn writable(g: &Goal, path: &str) -> bool {
 }
 
 impl Guest for Component {
-    fn attempt(g: Goal, previous: Vec<Failure>, seed: u64) -> Result<Vec<File>, AgentError> {
+    fn attempt(g: Goal, previous: Vec<Failure>, seed: u64) -> Result<Candidate, AgentError> {
         if g.text.trim().is_empty() {
             return Err(AgentError::UnderSpecified("the goal says nothing".into()));
         }
@@ -193,7 +193,15 @@ impl Guest for Component {
             )));
         }
 
-        Ok(files)
+        // The cost travels with the answer. A caller that has to ask a second
+        // question to find out what the first one cost will eventually forget
+        // to, and a budget nobody reports against is not a budget.
+        Ok(Candidate {
+            files,
+            prompt_tokens: completion.usage.prompt_tokens,
+            completion_tokens: completion.usage.completion_tokens,
+            model: completion.model,
+        })
     }
 }
 

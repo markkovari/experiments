@@ -11,7 +11,24 @@
 //!   * a candidate identical to one already tried ends the run as a `plateau`,
 //!     because a model that has repeated itself will repeat itself again and the
 //!     next attempt costs the same as the last for an answer already on record
-//!   * otherwise the budget in `max-attempts` runs out, and `exhausted` says so
+//!   * `patience` attempts in a row fail to beat the best score, and the run
+//!     stops as `no-progress` — the common case, since a model rarely repeats
+//!     itself exactly but routinely produces a different candidate that is no
+//!     better
+//!   * the token budget is spent, and the run stops as `over-budget`
+//!   * otherwise the bound in `max-attempts` runs out, and `exhausted` says so
+//!
+//! ## A repair repairs the candidate, not the base
+//!
+//! Each attempt after the first is shown the BEST candidate so far in place of
+//! the original files. Without that, "do not start over" is a request the writer
+//! cannot honour: the model would be looking at the untouched tree every time and
+//! could only rewrite from scratch, which makes a repair loop a re-roll with
+//! hints attached.
+//!
+//! The BEST rather than the LAST, for the same reason the result keeps the best:
+//! a repair can be worse than what it repaired, and building the next attempt on
+//! it walks the search backwards.
 //!
 //! ## The two failures that are not the same failure
 //!
@@ -23,9 +40,18 @@
 //!
 //! ## Failures replace, they do not accumulate
 //!
-//! Each repair is told what failed LAST time, not everything that has ever
-//! failed. An accumulating list grows the prompt without bound and re-reports
-//! things already fixed, which reads to a model as a fix that did not work.
+//! Each repair is told what failed for the candidate it is being shown, not
+//! everything that has ever failed. An accumulating list grows the prompt without
+//! bound and re-reports things already fixed, which reads to a model as a fix
+//! that did not work.
+//!
+//! ## The budget has a hole, and it is bounded
+//!
+//! Cost is reported WITH a candidate, so an answer that was unusable — prose, or
+//! a path outside the allow-list — cost real tokens that `spent-tokens` never
+//! sees. `max-attempts` is what bounds that, which is why a token budget does not
+//! replace it. Said out loud in the contract rather than papered over, because a
+//! budget that silently under-reports is worse than no budget.
 //!
 //! ## What is deliberately NOT here
 //!
@@ -38,7 +64,7 @@
 mod bindings;
 
 use bindings::exports::graph::run::driver::{
-    Attempt, Failure, File, Guest, Plan, RunError, RunResult, StopReason,
+    Attempt, Failure, File, Goal, Guest, Plan, RunError, RunResult, StopReason,
 };
 use bindings::graph::agent::writer as agent;
 use bindings::graph::fitness::evaluator as gate;
@@ -88,16 +114,31 @@ fn as_gate_files(files: &[File]) -> Vec<gate::File> {
     files.iter().map(|f| gate::File { path: f.path.clone(), content: f.content.clone() }).collect()
 }
 
-fn as_agent_goal(g: &bindings::exports::graph::run::driver::Goal) -> agent::Goal {
-    agent::Goal {
-        text: g.text.clone(),
-        context: g
-            .context
-            .iter()
-            .map(|f| agent::File { path: f.path.clone(), content: f.content.clone() })
-            .collect(),
-        writable: g.writable.clone(),
+/// What the model is shown: the goal's files, with the best candidate's version
+/// of each laid over the top.
+///
+/// This is what makes the loop a repair loop. The first attempt sees the base
+/// tree; every one after it sees the best thing the run has produced, so
+/// "fix these specifically, do not start over" refers to something that exists.
+///
+/// A file the candidate created and the goal never mentioned is APPENDED rather
+/// than dropped — the next attempt has to see it or it will create it again,
+/// which is how a loop produces the same new file three times.
+fn goal_for(g: &Goal, best: Option<&Vec<File>>) -> agent::Goal {
+    let mut context: Vec<agent::File> = g
+        .context
+        .iter()
+        .map(|f| agent::File { path: f.path.clone(), content: f.content.clone() })
+        .collect();
+
+    for f in best.map(|b| b.as_slice()).unwrap_or(&[]) {
+        match context.iter_mut().find(|c| c.path == f.path) {
+            Some(existing) => existing.content = f.content.clone(),
+            None => context.push(agent::File { path: f.path.clone(), content: f.content.clone() }),
+        }
     }
+
+    agent::Goal { text: g.text.clone(), context, writable: g.writable.clone() }
 }
 
 impl Guest for Component {
@@ -115,7 +156,6 @@ impl Guest for Component {
             return Err(RunError::Invalid("max-attempts is zero, so this run does nothing".into()));
         }
 
-        let goal = as_agent_goal(&p.goal);
         let checks: Vec<gate::Check> = p
             .checks
             .iter()
@@ -131,6 +171,9 @@ impl Guest for Component {
         let mut seen: Vec<String> = Vec::new();
         let mut previous: Vec<agent::Failure> = Vec::new();
         let mut best: Option<(u32, Vec<File>, Vec<Failure>)> = None;
+        let mut spent: u32 = 0;
+        // Attempts in a row that failed to beat the best score.
+        let mut stale: u32 = 0;
         // The runner caches base trees by commit. It is sent once and only sent
         // again if the runner says it has forgotten — a generation of branches
         // sharing one base should not each ship a repository.
@@ -138,7 +181,8 @@ impl Guest for Component {
 
         let finish = |stopped: StopReason,
                       best: Option<(u32, Vec<File>, Vec<Failure>)>,
-                      attempts: Vec<Attempt>| {
+                      attempts: Vec<Attempt>,
+                      spent: u32| {
             let (score, files, failures) = best.unwrap_or((0, Vec::new(), Vec::new()));
             RunResult {
                 accepted: matches!(stopped, StopReason::Accepted),
@@ -146,6 +190,7 @@ impl Guest for Component {
                 files,
                 failures,
                 attempts,
+                spent_tokens: spent,
                 stopped,
             }
         };
@@ -153,17 +198,27 @@ impl Guest for Component {
         for i in 0..p.max_attempts {
             let seed = p.seed.wrapping_add(i as u64);
 
-            let files = match agent::attempt(&goal, &previous, seed) {
-                Ok(f) => f.into_iter().map(|f| File { path: f.path, content: f.content }).collect::<Vec<_>>(),
+            // Built per attempt, so a repair is shown the best candidate rather
+            // than the untouched tree.
+            let goal = goal_for(&p.goal, best.as_ref().map(|(_, f, _)| f));
+
+            let produced = match agent::attempt(&goal, &previous, seed) {
+                Ok(c) => c,
                 // Reachable, and said something that was not a candidate. Another
                 // sample may well be one, so this costs an attempt and not the run.
                 Err(agent::AgentError::UnusableAnswer(m)) => {
+                    // Cost travels with a candidate, and there is none. What this
+                    // burned is invisible to `spent`; `max-attempts` is what
+                    // bounds it.
                     attempts.push(Attempt {
                         seed,
                         digest: String::new(),
                         score: 0,
                         accepted: false,
                         error: m,
+                        prompt_tokens: 0,
+                        completion_tokens: 0,
+                        model: String::new(),
                     });
                     continue;
                 }
@@ -173,6 +228,14 @@ impl Guest for Component {
                 Err(agent::AgentError::UnderSpecified(m)) => return Err(RunError::Invalid(m)),
             };
 
+            let cost = produced.prompt_tokens.saturating_add(produced.completion_tokens);
+            spent = spent.saturating_add(cost);
+            let files: Vec<File> = produced
+                .files
+                .into_iter()
+                .map(|f| File { path: f.path, content: f.content })
+                .collect();
+
             let digest = digest_of(&files);
             if seen.contains(&digest) {
                 attempts.push(Attempt {
@@ -181,8 +244,11 @@ impl Guest for Component {
                     score: 0,
                     accepted: false,
                     error: "the same candidate an earlier attempt already produced".into(),
+                    prompt_tokens: produced.prompt_tokens,
+                    completion_tokens: produced.completion_tokens,
+                    model: produced.model,
                 });
-                return Ok(finish(StopReason::Plateau, best, attempts));
+                return Ok(finish(StopReason::Plateau, best, attempts, spent));
             }
             seen.push(digest.clone());
 
@@ -231,6 +297,9 @@ impl Guest for Component {
                 score: v.score,
                 accepted: v.accepted,
                 error: String::new(),
+                prompt_tokens: produced.prompt_tokens,
+                completion_tokens: produced.completion_tokens,
+                model: produced.model,
             });
 
             // Strictly better, so the FIRST attempt to reach a score keeps the
@@ -239,18 +308,39 @@ impl Guest for Component {
             // many times it happened to tie.
             if best.as_ref().map_or(true, |(s, _, _)| v.score > *s) {
                 best = Some((v.score, files, failures.clone()));
+                stale = 0;
+            } else {
+                stale += 1;
             }
 
             if v.accepted {
-                return Ok(finish(StopReason::Accepted, best, attempts));
+                return Ok(finish(StopReason::Accepted, best, attempts, spent));
             }
 
-            // Replaced, not appended — see the module comment.
-            previous =
-                failures.iter().map(|f| agent::Failure { id: f.id.clone(), detail: f.detail.clone() }).collect();
+            // Replaced, not appended — see the module comment. Taken from THIS
+            // attempt's verdict even when the attempt was not an improvement,
+            // because the next one is shown the best candidate and must be told
+            // what is wrong with THAT.
+            previous = best
+                .as_ref()
+                .map(|(_, _, f)| f.clone())
+                .unwrap_or(failures)
+                .iter()
+                .map(|f| agent::Failure { id: f.id.clone(), detail: f.detail.clone() })
+                .collect();
+
+            // Both checked AFTER the attempt: what one costs is not knowable
+            // until it is made, so a run overshoots by at most one rather than
+            // guessing a price in advance and calling the guess a limit.
+            if p.max_tokens > 0 && spent >= p.max_tokens {
+                return Ok(finish(StopReason::OverBudget, best, attempts, spent));
+            }
+            if p.patience > 0 && stale >= p.patience {
+                return Ok(finish(StopReason::NoProgress, best, attempts, spent));
+            }
         }
 
-        Ok(finish(StopReason::Exhausted, best, attempts))
+        Ok(finish(StopReason::Exhausted, best, attempts, spent))
     }
 }
 
@@ -314,6 +404,50 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].id, "the-fix");
         assert_eq!(got[0].detail, "expected 42, found 41", "the detail is what makes it actionable");
+    }
+
+    fn goal(context: &[(&str, &str)]) -> Goal {
+        Goal {
+            text: "make it 42".into(),
+            context: context.iter().map(|(p, c)| f(p, c)).collect(),
+            writable: vec!["src/lib.rs".into(), "src/new.rs".into()],
+        }
+    }
+
+    /// THE REPAIR. Without this the model is shown the untouched tree on every
+    /// attempt and can only rewrite from scratch, which makes "do not start over"
+    /// a request it cannot honour.
+    #[test]
+    fn a_repair_is_shown_the_candidate_and_not_the_base() {
+        let g = goal(&[("src/lib.rs", "fn answer() { 41 }")]);
+        let best = vec![f("src/lib.rs", "fn answer() { 43 }")];
+
+        assert_eq!(goal_for(&g, None).context[0].content, "fn answer() { 41 }", "the first attempt sees the base");
+        let repair = goal_for(&g, Some(&best));
+        assert_eq!(repair.context.len(), 1, "the candidate replaces the file, it does not duplicate it");
+        assert_eq!(repair.context[0].content, "fn answer() { 43 }");
+    }
+
+    /// A file the candidate created and the goal never mentioned has to survive
+    /// into the next prompt, or the loop creates it again — the same new file,
+    /// three attempts running.
+    #[test]
+    fn a_file_the_candidate_invented_is_carried_forward() {
+        let g = goal(&[("src/lib.rs", "old")]);
+        let best = vec![f("src/new.rs", "invented")];
+        let repair = goal_for(&g, Some(&best));
+        assert_eq!(repair.context.len(), 2);
+        assert_eq!(repair.context[1].path, "src/new.rs");
+        assert_eq!(repair.context[0].content, "old", "and the untouched file is untouched");
+    }
+
+    /// The allow-list is the goal's, always. A candidate cannot widen what the
+    /// next attempt may write by having written somewhere.
+    #[test]
+    fn the_candidate_cannot_widen_the_allow_list() {
+        let g = goal(&[]);
+        let repair = goal_for(&g, Some(&vec![f("src/lib.rs", "x")]));
+        assert_eq!(repair.writable, g.writable);
     }
 
     #[test]

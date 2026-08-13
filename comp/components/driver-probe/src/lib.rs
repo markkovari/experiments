@@ -78,6 +78,8 @@ fn plan_of(v: &serde_json::Value) -> run::Plan {
         base_commit: v["base_commit"].as_str().unwrap_or_default().to_string(),
         base_tree: files(v, "base_tree"),
         max_attempts: v["max_attempts"].as_u64().unwrap_or(1) as u32,
+        max_tokens: v["max_tokens"].as_u64().unwrap_or(0) as u32,
+        patience: v["patience"].as_u64().unwrap_or(0) as u32,
         seed: v["seed"].as_u64().unwrap_or(0),
     }
 }
@@ -90,7 +92,10 @@ fn report(r: &run::RunResult) -> serde_json::Value {
             run::StopReason::Accepted => "accepted",
             run::StopReason::Exhausted => "exhausted",
             run::StopReason::Plateau => "plateau",
+            run::StopReason::NoProgress => "no-progress",
+            run::StopReason::OverBudget => "over-budget",
         },
+        "spent_tokens": r.spent_tokens,
         "files": r.files.iter()
             .map(|f| json!({ "path": f.path, "content": f.content })).collect::<Vec<_>>(),
         "failures": r.failures.iter()
@@ -101,6 +106,9 @@ fn report(r: &run::RunResult) -> serde_json::Value {
             "score": a.score,
             "accepted": a.accepted,
             "error": a.error,
+            "prompt_tokens": a.prompt_tokens,
+            "completion_tokens": a.completion_tokens,
+            "model": a.model,
         })).collect::<Vec<_>>(),
     })
 }
