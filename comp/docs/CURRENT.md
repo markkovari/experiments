@@ -167,6 +167,11 @@ three of them — and both are now enforced by a helper rather than by rememberi
 
 ## Honestly missing
 
+- **The agent writes; nothing drives it.** `graph:agent/writer` turns a goal and a
+  tree into a candidate and repairs from the gate's failures — end to end and
+  deterministic. Nothing yet runs the loop: no rule for how many attempts, which
+  branch to extend, or when to stop. And it NAMES ITS FILES rather than
+  retrieving them, because no embedding provider is wired.
 - **The gate runs checks; nothing calls it yet.** `comp-checks` materialises a
   candidate over a base tree, runs allow-listed commands in it, and reports the
   CHECK VECTOR — every required check passing is the gate, the weighted fraction

@@ -11,10 +11,11 @@ The distinction this document keeps is between:
 | ⚠️ **runnable** | the pieces exist and nobody has put them together |
 | ❌ **blocked** | something named below does not exist yet |
 
-The single largest ❌ is the **agent**: nothing turns a goal into a candidate. Every
-scenario below that needs one is marked, rather than being written as though the
-loop were closed. `comp-checks` and `graph:fitness` can judge anything handed to
-them; nothing hands them anything yet.
+**The agent now exists.** `graph:agent/writer` turns a goal and a tree into a
+candidate, and a repair attempt is driven by the checks that actually failed —
+proven deterministically, because the scripted provider only answers correctly
+when it *sees* the failure text. What is still ❌ is everything that decides how
+many attempts, which branch to extend, and when to stop.
 
 ---
 

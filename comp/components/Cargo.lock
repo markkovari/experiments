@@ -40,6 +40,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-probe"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wit-bindgen-rt",
+]
+
+[[package]]
+name = "agent-writer"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen-rt",
+]
+
+[[package]]
 name = "ai-inference"
 version = "0.1.0"
 dependencies = [
