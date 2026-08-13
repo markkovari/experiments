@@ -655,6 +655,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "graph-selector"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen-rt",
+]
+
+[[package]]
 name = "group"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1420,6 +1427,14 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "chacha20poly1305",
+ "wit-bindgen-rt",
+]
+
+[[package]]
+name = "select-probe"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
  "wit-bindgen-rt",
 ]
 

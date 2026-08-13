@@ -83,15 +83,16 @@ is promoted; the rest are closed.
 | what goes wrong | what happens now |
 |---|---|
 | every branch fails the gate | ✅ **the score still orders them** — this is the whole reason the runner reports a vector rather than a verdict |
-| two branches produce identical candidates | ⚠️ `artifact:cache` would dedupe the derived work, but nothing dedupes the *candidates*, so both get gated and both get scored |
-| all eight converge on the same idea | ❌ **herding, and it does not announce itself.** ADR-0081 names the mitigations — asymmetric visibility, a diversity budget, one branch that reads nothing — and none is built. The run looks healthy and the parallelism is worthless |
-| scores tie | ❌ **between branches**, nothing breaks the tie. Within one branch the earlier candidate keeps the slot (`driver.rs`), which is a rule for attempts and not for siblings |
+| two branches produce identical candidates | ⚠️ `artifact:cache` would dedupe the derived work, but nothing dedupes the *candidates*, so both get gated and both get scored. They are at least counted once in `distinct` |
+| all eight converge on the same idea | ⚠️ **it now announces itself**: every selection reports `distinct`, and 1 means the parallelism bought nothing (`select.rs`). Detecting it is not fixing it — none of ADR-0081's mitigations is built |
+| scores tie | ✅ `graph:select` — score, then the smaller change, then the cheaper run, then the earlier branch. The last exists to be DETERMINISTIC: a selection that varied between identical runs could not be argued with afterwards |
 | the fleet cannot place eight more branches | ✅ refused with a 429 naming the lag and the limit, rather than accepted and never started |
 | a burst outruns the limit | ✅ counted against the last report, so 625 spawns are cut to 435 |
 | the generation costs more than the budget | ❌ **nothing spends against the budget.** `max-attempts` bounds tries per branch, which is not a cost — a run of three cheap attempts and a run of three expensive ones are the same number. Every attempt is now recorded with a digest and a score, which is the raw material a real budget needs and did not have |
 
-**The honest summary of level 2:** a branch decides when to stop; nothing decides
-how many branches, which to extend, or which one wins.
+**The honest summary of level 2:** a branch decides when to stop and a generation
+decides which branch won. Nothing decides how MANY branches, or extends one into
+the next generation.
 
 ---
 
@@ -112,7 +113,7 @@ human in the loop.
 | 341 apps across four generations | ✅ `stress_tree.rs` |
 | two of three nodes SIGKILLed mid-run | ✅ recovered in 18s and 24s; nothing told the lattice |
 | closing one first-level branch closes 85 descendants | ✅ measured |
-| a human starts, the loop runs, a human lands | ⚠️ both ends exist (`comp goal start`, a PR); nothing joins them |
+| a human starts, the loop runs, a human lands | ✅ every component on the path exists and is tested end to end — `comp goal start`, the driver's loop, the selector, the pull request. What is untested is the whole path in ONE run, because nothing yet fans a goal out into N branches |
 
 ### Failure modes
 
@@ -143,8 +144,10 @@ DECIDES is designed and unbuilt.**
     carrying    environments, vgit, forge, artifact cache, checks, admission
                 → survived 341 apps and two dead machines
 
-    deciding    the agent and its loop  → built, and stops for a stated reason
-                fuel, selection, knowledge promotion
+    deciding    the agent, its loop, and selection
+                → built; stops for a stated reason, and only an accepted
+                  branch can reach a pull request
+                fuel, generation size, knowledge promotion
                 → ADR-0081, marked proposed, none of it running
 
 That is a deliberate order rather than an accident: a wrong decision on a
@@ -152,10 +155,13 @@ substrate that loses work is impossible to debug, and every mechanism above was
 built by breaking it first. But it means the honest answer to "can the graph
 succeed" today is:
 
-> **A single goal can go from a queue to a repaired, scored candidate without a
-> human touching it, and every step of that path is tested. What nothing yet
-> decides is how many branches to run, which one wins, or what any of it cost.**
+> **Every component between a goal and a pull request now exists and is tested,
+> including the rule that picks a winner and the guarantee that a branch which
+> failed its checks cannot reach a repository. What is missing is the thing that
+> RUNS them together: nothing fans one goal out into N branches and collects the
+> results.**
 
-The smallest thing that would change that is selection: a rule that compares the
-results of N runs and hands one to `git:forge`. Every run already reports the two
-things such a rule needs — whether it was accepted, and what it scored.
+The smallest thing that would change that is a generation runner — spawn N
+environments, run the driver in each, hand the results to the selector. Every
+piece it would call is built, and the fan-out itself is measured already:
+`stress_env.rs` puts eight branches up concurrently in three seconds.

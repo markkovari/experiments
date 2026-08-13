@@ -182,9 +182,17 @@ three of them — and both are now enforced by a helper rather than by rememberi
   answers cost — cost travels with a candidate and an unusable answer produces
   none — which is why `max-attempts` still exists as the hard bound.
 
-  What is missing is the layer above one branch: no rule picks which of N runs
-  wins, no tie-break, and nothing opens the pull request — deliberately, since a
-  driver that proposed its own result would open N pull requests for N branches.
+  `graph:select/selector` is the layer above one branch, and the only path from a
+  branch to a pull request. The gate is enforced by the SHAPE of `land`, which
+  takes runs rather than files — so there is no argument by which a caller could
+  land a candidate the checks rejected. Ties break on score, then the smaller
+  change, then the cheaper run, then the earlier branch; the last exists to be
+  deterministic. Every selection reports how many DISTINCT candidates the
+  generation produced, because a herded generation looks exactly like a healthy
+  one and nothing else can see it.
+
+  What is missing is the thing that runs them together: nothing fans one goal out
+  into N branches and collects the results.
   A branch now spends against a token budget; a PROJECT still does not, and
   nothing converts tokens to money or refunds a branch that died. Branches differ only by seed — same prompt, same context — so herding is
   unmitigated and does not announce itself. And the agent NAMES ITS FILES rather
