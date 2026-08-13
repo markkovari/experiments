@@ -20,8 +20,18 @@ use std::time::{Duration, Instant};
 use comp_reconciler::fleet::{repo_root, Fleet};
 use serde_json::{json, Value};
 
+/// Serialises builds.
+///
+/// Every test here compiles the same crate into the same target directory, and
+/// they run on parallel threads — so without this one test replaces the artifact
+/// while another is reading it, and the read fails with "No such file". The build
+/// AND the read have to be inside the lock: the bytes are only this tag's bytes
+/// until somebody else builds.
+static BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Build the probe with a tag, and hand back the bytes.
 fn build(tag: &str) -> Vec<u8> {
+    let _guard = BUILD.lock().unwrap_or_else(|e| e.into_inner());
     let components = repo_root().join("components");
     let out = Command::new("cargo")
         .current_dir(&components)
@@ -122,6 +132,18 @@ impl Api {
             .as_str()
             .unwrap_or("(none)")
             .to_string()
+    }
+
+    /// Upload and read the answer, so the caller can learn the content address.
+    fn post_bytes(&self, path: &str, wasm: Vec<u8>) -> Value {
+        self.http
+            .post(format!("{}{path}", self.base))
+            .bearer_auth(&self.token)
+            .body(wasm)
+            .send()
+            .ok()
+            .and_then(|r| r.json().ok())
+            .unwrap_or(Value::Null)
     }
 
     fn upload(&self, id: &str, wasm: Vec<u8>) -> u16 {
@@ -409,4 +431,86 @@ fn re_uploading_the_same_bytes_changes_nothing_and_two_builds_do_not_collide() {
     );
 
     println!("    identical bytes are a no-op, and two builds coexist under one name");
+}
+
+/// A deployment pinned to a digest does not move when the name does.
+///
+/// This is what the whole identity rework is FOR. A bare name is whatever was
+/// uploaded last, which is fine until somebody uploads while you are deploying —
+/// and then a deployment that looked reproducible quietly is not. Naming the
+/// bytes makes it a fact rather than a hope.
+#[test]
+fn a_deployment_pinned_to_a_digest_ignores_a_later_upload() {
+    let alpha = build("alpha");
+    let beta = build("beta");
+    assert_ne!(alpha, beta);
+
+    let fleet = Fleet::start_with_platform("pinned", 1);
+    let api = Api::new(fleet.platform_url());
+
+    // Upload alpha under a tag, and learn its content address.
+    let v = api.post_bytes("/api/components?id=p&tag=v1", alpha.clone());
+    let sha = v["content"].as_str().unwrap_or_default().to_string();
+    assert!(!sha.is_empty(), "the upload should report the content it staged: {v}");
+
+    // Deploy PINNED to those bytes.
+    let (code, dep) = api.post(
+        "/api/deployments",
+        json!({ "name": "p", "nodes": [{"id": format!("p@sha256:{sha}")}], "edges": [] }),
+    );
+    assert_eq!(code, 201, "a pinned deployment should be accepted: {dep}");
+    let id = dep["id"].as_str().unwrap().to_string();
+
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let mut saved = false;
+    while Instant::now() < deadline && !saved {
+        let (code, _) = api.post(&format!("/api/deployments/{id}/save"), json!({}));
+        saved = code == 200;
+        if !saved {
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+    assert!(saved, "the pinned revision never saved\n{}", fleet.reconciler_log());
+    let pinned_digest = api.manifest_digest(&id);
+
+    // Now move the name. Under a bare reference this is what would change what
+    // the deployment runs.
+    assert!(matches!(api.upload("p", beta.clone()), 200 | 201), "uploading beta failed");
+
+    // Saving again must render the SAME artifact: the deployment named bytes, and
+    // those bytes did not change just because the name did.
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let mut re_saved = false;
+    while Instant::now() < deadline && !re_saved {
+        let (code, _) = api.post(&format!("/api/deployments/{id}/save"), json!({}));
+        re_saved = code == 200;
+        if !re_saved {
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+    assert!(re_saved, "the pinned deployment could not be saved after the name moved");
+    assert_eq!(
+        api.manifest_digest(&id),
+        pinned_digest,
+        "a deployment pinned to a digest followed the NAME instead — pinning that does \
+         not pin is worse than no pinning, because it looks reproducible"
+    );
+
+    // And a digest nobody ever uploaded is refused at SAVE, which is where a
+    // deployment stops being a draft and becomes something a fleet is told to
+    // run. Creating it is not the moment — an author is still editing.
+    let (code, ghost) = api.post(
+        "/api/deployments",
+        json!({ "name": "ghost", "nodes": [{"id": "p@sha256:deadbeef"}], "edges": [] }),
+    );
+    assert_eq!(code, 201, "a draft may name anything: {ghost}");
+    let ghost_id = ghost["id"].as_str().unwrap().to_string();
+    let (code, body) = api.post(&format!("/api/deployments/{ghost_id}/save"), json!({}));
+    assert!(
+        code >= 400 && body["error"].as_str().unwrap_or_default().contains("no staged bytes"),
+        "a reference to bytes nobody has must be refused where the author is standing, \
+         not at start time on a node: {code} {body}"
+    );
+
+    println!("    pinned to {}, and it stayed pinned", &sha[..12.min(sha.len())]);
 }

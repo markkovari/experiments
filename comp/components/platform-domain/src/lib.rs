@@ -617,6 +617,20 @@ fn component_add(request: &IncomingRequest, query: &Map<String, Value>) -> Outco
         Ok((org, _)) => org,
         Err((code, msg)) => return Outcome::Err(code, msg),
     };
+    let existing = find_one(CATALOG, "key", &key);
+
+    // Tags accumulate. A row is a set of pointers, and moving one must not drop
+    // the others — an older tag still names bytes that are still staged, so
+    // forgetting it would strand them behind a name nobody can spell.
+    let mut tag_map = existing
+        .as_ref()
+        .and_then(|(_, _, row)| row["tags"].as_object().cloned())
+        .unwrap_or_default();
+    if let Some(t) = query.get("tag").and_then(|v| v.as_str()).filter(|t| !t.is_empty()) {
+        tag_map.insert(t.to_string(), json!(content));
+    }
+    let tags = Value::Object(tag_map);
+
     let doc = json!({
         "key": key, "id": id, "tenant": p.tenant, "uploader": p.subject,
         "org": org,
@@ -626,13 +640,14 @@ fn component_add(request: &IncomingRequest, query: &Map<String, Value>) -> Outco
         // staged. The row is a pointer; this is what it points at.
         "content": content,
         "blob_key": blob_key,
+        // name -> content, so a tag can be resolved later. Merged rather than
+        // replaced: tagging a new build must not forget where the old tags point.
+        "tags": tags,
         // The OCI reference. Empty until the push step records a digest — and a
         // deployment cannot render without one (ADR-0006).
         "oci_ref": "",
         "surface": surface_json(&surface),
     });
-    let existing = find_one(CATALOG, "key", &key);
-
     // Re-uploading the SAME BYTES is a no-op, not a new version.
     //
     // Without this, an upload always cleared the digest and forced the whole
@@ -657,7 +672,23 @@ fn component_add(request: &IncomingRequest, query: &Map<String, Value>) -> Outco
     }
 
     let ok = match existing {
-        Some((rec, rev, _)) => records::update(CATALOG, &rec, &doc.to_string(), rev).is_ok(),
+        // Guarded on the revision that was read. Two workers moving one name at
+        // the same moment is the case content-addressing does NOT solve — the
+        // bytes are safe either way, the pointer is one value — so the loser is
+        // told rather than silently overwritten.
+        Some((rec, rev, _)) => match records::update(CATALOG, &rec, &doc.to_string(), rev) {
+            Ok(_) => true,
+            Err(records::StoreError::RevisionConflict(_)) => {
+                return Outcome::Err(
+                    409,
+                    format!(
+                        "`{id}` was uploaded by someone else while this upload was in flight — \
+                         the bytes are staged and safe, re-run to move the pointer"
+                    ),
+                )
+            }
+            Err(_) => false,
+        },
         None => records::create(
             CATALOG,
             &doc.to_string(),
@@ -2137,7 +2168,13 @@ fn resolve_parts(
     }
 
     let mut rows = Vec::new();
-    for id in &node_ids {
+    for raw in &node_ids {
+        // A node may name a bare component, a tag, or a digest (see
+        // `parse_component_ref`). The NAME is what finds the row; the tag or
+        // digest then decides which bytes that row should be read as.
+        let r = parse_component_ref(raw);
+        let id = &r.name;
+
         // Own row first, then any row this principal may use (public/org).
         let row = find_one(CATALOG, "key", &format!("{}/{}", p.tenant, id))
             .map(|(_, _, v)| v)
@@ -2149,9 +2186,48 @@ fn resolve_parts(
                     .filter_map(|e| serde_json::from_str::<Value>(&e.data).ok())
                     .find(|r| r["id"] == json!(id) && may_use(p, r))
             });
-        let Some(row) = row else {
+        let Some(mut row) = row else {
             return Err(Outcome::Err(422, format!("component `{id}` is unknown or not visible to you")));
         };
+
+        // Resolve a tag to the content it names. A tag that was never recorded is
+        // an error rather than a silent fall-through to `latest` — deploying
+        // something other than what was asked for is worse than refusing.
+        if let Some(tag) = &r.tag {
+            let tagged = row["tags"][tag].as_str().map(str::to_string);
+            match tagged {
+                Some(sha) => {
+                    row["blob_key"] = json!(format!("sha256/{sha}"));
+                    row["content"] = json!(sha);
+                    row["digest"] = json!("");
+                }
+                None => {
+                    return Err(Outcome::Err(
+                        422,
+                        format!("component `{id}` has no tag `{tag}`"),
+                    ))
+                }
+            }
+        }
+
+        // A digest overrides everything, and is checked against what is actually
+        // staged: a reference to bytes nobody has is a typo, and finding that out
+        // at compose time is far better than at start time on a node.
+        if let Some(sha) = &r.digest {
+            let key = format!("sha256/{sha}");
+            if blob::get(BIN, &key).is_err() {
+                return Err(Outcome::Err(
+                    422,
+                    format!("no staged bytes for `{id}@sha256:{sha}` — nothing was ever uploaded with that content"),
+                ));
+            }
+            row["content"] = json!(sha);
+            row["blob_key"] = json!(key);
+            // The digest on the row describes the CURRENT pointer's distributed
+            // artifact, which is not what was asked for. Cleared so the
+            // distribution step re-derives it for these bytes.
+            row["digest"] = json!("");
+        }
         rows.push(row);
     }
 

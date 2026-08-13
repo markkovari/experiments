@@ -186,10 +186,7 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   component raced and the loser's bytes were gone. Staged under `sha256/<hex>`
   neither writer can lose: identical bytes land in the same place, different bytes
   land elsewhere, and no lock is needed for either. Re-uploading identical bytes
-  is now a no-op rather than a full redistribution. What is NOT done: the row is
-  still keyed by name and moved by a last-writer-wins update, so two workers
-  racing the POINTER still resolve arbitrarily rather than by CAS — the bytes are
-  safe, the pointer is not.
+  is now a no-op rather than a full redistribution.
 - **The WIT surface is a compatibility gate, never an identity check.** A save
   refuses when it would remove an export the previous revision had, naming each
   one, with `?force=true` for when that is the intent. The distinction was
