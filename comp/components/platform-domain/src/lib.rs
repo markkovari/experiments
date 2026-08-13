@@ -514,8 +514,7 @@ fn components_satisfies(request: &IncomingRequest) -> Outcome {
         let Some(row) = find(id) else {
             return Err(Outcome::Err(422, format!("component `{id}` is unknown or not visible to you")));
         };
-        let key = format!("{}/{}", row["tenant"].as_str().unwrap_or_default(), id);
-        blob::get(BIN, &key)
+        blob::get(BIN, &staged_key(&row))
             .map_err(|_| Outcome::Err(409, format!("component `{id}` has no staged bytes — re-upload it")))
     };
 
@@ -589,7 +588,20 @@ fn component_add(request: &IncomingRequest, query: &Map<String, Value>) -> Outco
         .unwrap_or_else(|| format!("component-{}", surface.sha256));
     let key = format!("{}/{}", p.tenant, id);
 
-    if blob::put(BIN, &key, &bytes, "application/wasm").is_err() {
+    // STAGED BY CONTENT, not by name.
+    //
+    // `tenant/id` is a mutable pointer, and staging under it made an upload
+    // destructive: a second build overwrote the first, so two workers pushing
+    // different builds of one component raced and the loser's bytes were simply
+    // gone. Under a content key that cannot happen — identical bytes write
+    // identical bytes to the same place, and different bytes go somewhere else,
+    // so neither writer can lose.
+    //
+    // The row stays keyed by `tenant/id`, because that is the name a person and a
+    // deployment use. It now POINTS at the content rather than being it.
+    let content = surface.sha256.clone();
+    let blob_key = format!("sha256/{content}");
+    if blob::put(BIN, &blob_key, &bytes, "application/wasm").is_err() {
         return Outcome::Err(500, "could not stage the component bytes".into());
     }
     // What config this component reads, declared by whoever uploaded it:
@@ -610,12 +622,40 @@ fn component_add(request: &IncomingRequest, query: &Map<String, Value>) -> Outco
         "org": org,
         "visibility": "private", "uploaded": now(),
         "config_keys": config_keys,
+        // The content address of what was uploaded, and where those bytes are
+        // staged. The row is a pointer; this is what it points at.
+        "content": content,
+        "blob_key": blob_key,
         // The OCI reference. Empty until the push step records a digest — and a
         // deployment cannot render without one (ADR-0006).
         "oci_ref": "",
         "surface": surface_json(&surface),
     });
     let existing = find_one(CATALOG, "key", &key);
+
+    // Re-uploading the SAME BYTES is a no-op, not a new version.
+    //
+    // Without this, an upload always cleared the digest and forced the whole
+    // distribution round again — for bytes the fleet already has, byte for byte.
+    // A retry, a re-run of a build script, or two workers landing on the same
+    // output all did that. Content-addressing makes "is this actually different"
+    // answerable, so it is answered.
+    if let Some((_, _, row)) = &existing {
+        if row["content"].as_str() == Some(content.as_str())
+            && row["digest"].as_str().unwrap_or_default().starts_with("sha256:")
+        {
+            return Outcome::Json(
+                200,
+                json!({
+                    "key": key, "id": id, "content": content,
+                    "digest": row["digest"],
+                    "unchanged": true,
+                })
+                .to_string(),
+            );
+        }
+    }
+
     let ok = match existing {
         Some((rec, rev, _)) => records::update(CATALOG, &rec, &doc.to_string(), rev).is_ok(),
         None => records::create(
@@ -1094,7 +1134,14 @@ fn internal_pending(request: &IncomingRequest) -> Outcome {
             continue;
         }
         out.push(json!({
-            "key": row["key"],
+            // The CONTENT key when there is one, so the distributor fetches the
+            // bytes this row was created from rather than whatever is staged
+            // under the name now — which a concurrent upload may already have
+            // replaced. Composed artifacts are staged by name and fall back to
+            // it, which is why this goes through `staged_key` instead of reading
+            // the field: reading it directly handed the distributor an empty key
+            // for every fused row.
+            "key": staged_key(&row),
             "repo": row["key"],
             "sha256": row["surface"]["sha256"],
             "size_bytes": row["surface"]["size_bytes"],
@@ -1116,7 +1163,7 @@ fn internal_artifact(request: &IncomingRequest, query: &Map<String, Value>) -> O
     }
     let key = query.get("key").and_then(|v| v.as_str()).unwrap_or_default();
     if key.is_empty() {
-        return Outcome::Err(422, "?key=<tenant>/<id> required".into());
+        return Outcome::Err(422, "?key= required (a content key, `sha256/<hex>`)".into());
     }
     match blob::get(BIN, key) {
         Ok(bytes) => Outcome::Bytes(200, "application/wasm".into(), bytes),
@@ -2291,8 +2338,7 @@ fn resolve_parts(
             let mut cparts = Vec::new();
             for row in &rows {
                 let id = row["id"].as_str().unwrap_or_default().to_string();
-                let key = format!("{}/{}", row["tenant"].as_str().unwrap_or_default(), id);
-                let Ok(bytes) = blob::get(BIN, &key) else {
+                let Ok(bytes) = blob::get(BIN, &staged_key(row)) else {
                     return Err(Outcome::Err(
                         409,
                         format!("component `{id}` has no staged bytes to compose from — re-upload it"),
@@ -2422,6 +2468,27 @@ fn compose_detail(e: &composer::ComposeError) -> String {
     }
 }
 
+
+
+/// Where a catalogue row's bytes are staged.
+///
+/// ASK THE ROW; do not rebuild the key. A row is a pointer at content, so
+/// reconstructing `tenant/id` and reading that is assuming the name still holds
+/// the bytes this row describes — which stopped being true the moment staging
+/// became content-addressed, and was never safe under a concurrent upload even
+/// before that.
+///
+/// The fallback covers rows written before content keys existed.
+fn staged_key(row: &Value) -> String {
+    match row["blob_key"].as_str().filter(|s| !s.is_empty()) {
+        Some(k) => k.to_string(),
+        None => format!(
+            "{}/{}",
+            row["tenant"].as_str().unwrap_or_default(),
+            row["id"].as_str().unwrap_or_default()
+        ),
+    }
+}
 
 /// What each component in a graph exports, by name.
 ///

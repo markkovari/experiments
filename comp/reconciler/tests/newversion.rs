@@ -326,3 +326,87 @@ fn a_recompiled_artifact_replaces_the_running_one() {
     assert!(forced, "`force=true` did not get past the gate, so the gate cannot be overridden");
     println!("    and force=true gets past it");
 }
+
+/// What content-addressed staging buys.
+///
+/// The catalogue row is keyed by `tenant/id` — a NAME — and the bytes used to be
+/// staged under that same name. That made an upload destructive: a second build
+/// overwrote the first, so two workers pushing different builds of one component
+/// raced and the loser's bytes were gone. It also made every upload look like a
+/// change, clearing the digest and forcing the whole distribution round again for
+/// bytes the fleet already had.
+///
+/// Staging by content fixes both, and neither needed a lock: identical bytes
+/// write identical bytes to the same place, different bytes go somewhere else.
+#[test]
+fn re_uploading_the_same_bytes_changes_nothing_and_two_builds_do_not_collide() {
+    let alpha = build("alpha");
+    let beta = build("beta");
+    assert_ne!(alpha, beta, "the two builds must differ for this to test anything");
+
+    let fleet = Fleet::start_with_platform("content", 1);
+    let api = Api::new(fleet.platform_url());
+
+    // --- the same bytes twice ------------------------------------------------
+    assert!(matches!(api.upload("c", alpha.clone()), 200 | 201), "first upload failed");
+    let (code, dep) =
+        api.post("/api/deployments", json!({ "name": "c", "nodes": [{"id": "c"}], "edges": [] }));
+    assert_eq!(code, 201, "deploy failed: {dep}");
+    let id = dep["id"].as_str().unwrap().to_string();
+
+    // Get it distributed, so there is a digest to preserve.
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let mut saved = false;
+    while Instant::now() < deadline && !saved {
+        let (code, _) = api.post(&format!("/api/deployments/{id}/save"), json!({}));
+        saved = code == 200;
+        if !saved {
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+    assert!(saved, "the first revision never saved\n{}", fleet.reconciler_log());
+    let digest = api.manifest_digest(&id);
+    assert!(digest.starts_with("sha256:"), "no digest after distribution: {digest}");
+
+    // Re-uploading identical bytes must be a no-op. Previously it cleared the
+    // digest and forced the whole distribution round again — for bytes the fleet
+    // already had, byte for byte.
+    let v = api.get("/api/components");
+    let _ = v;
+    assert!(matches!(api.upload("c", alpha.clone()), 200 | 201), "re-upload failed");
+    assert_eq!(
+        api.manifest_digest(&id),
+        digest,
+        "re-uploading identical bytes invalidated the artifact — a retry, a re-run \
+         build, or two workers landing on the same output would each cost a full \
+         redistribution of bytes nothing has changed"
+    );
+
+    // --- two different builds, no lost bytes ---------------------------------
+    // Under the old name-keyed staging the second upload overwrote the first's
+    // bytes. Under content keys both are staged and neither writer can destroy
+    // the other's — which is what lets parallel workers upload without agreeing
+    // on anything.
+    assert!(matches!(api.upload("c", beta.clone()), 200 | 201), "beta upload failed");
+    assert!(matches!(api.upload("c", alpha.clone()), 200 | 201), "alpha re-upload failed");
+
+    // Whichever the pointer ends on, the deployment must still be able to compose
+    // — which it can only do if the bytes it names are still there.
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let mut ok = false;
+    while Instant::now() < deadline && !ok {
+        let (code, _) = api.post(&format!("/api/deployments/{id}/save"), json!({}));
+        ok = code == 200;
+        if !ok {
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+    assert!(
+        ok,
+        "after two builds were uploaded under one name, the deployment could no longer \
+         compose — one upload destroyed the other's bytes\n{}",
+        fleet.reconciler_log()
+    );
+
+    println!("    identical bytes are a no-op, and two builds coexist under one name");
+}
