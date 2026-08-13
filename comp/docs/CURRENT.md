@@ -176,9 +176,13 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   with 429 above `max-placement-lag`, and with 503 when that report goes stale —
   fail CLOSED, because a dead loop is exactly when accepting more is pointless.
   Tested against a number rather than against the weather, plus an assertion that
-  the real reconciler's own report lands. What is NOT covered: the staleness path
-  has no test (forcing it needs a clock the platform stamps itself), and nothing
-  admits against anything other than environment spawns.
+  the real reconciler's own report lands. Admission counts what it has let through
+  since the last report, so a burst faster than the reporting interval cannot
+  outrun it — without that, 625 spawns in 0.2s all sailed past a limit of 200.
+  Covers environment spawns and deployment saves. Measured: a 625-spawn burst is
+  cut to 435, and all 591 resulting apps converge.
+  Still uncovered: nothing admits against component pushes, and the limit is a
+  flat number rather than anything derived from fleet size.
 - **Breadth is fine and unmeasured beyond 8.** Eight branches spawned
   concurrently converge in ~3s on one node. Nobody has looked for the width at
   which the reconcile pass, the ports, or the memory give out. Depth is now

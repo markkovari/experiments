@@ -2477,6 +2477,12 @@ fn stage_fused(
 }
 
 fn deployment_save(request: &IncomingRequest, id: &str) -> Outcome {
+    // A save is what creates desired state — it is the other way to ask the fleet
+    // for work, and admitting only environment spawns would leave the front door
+    // open while watching the side one.
+    if let Err(refusal) = admit_one_more() {
+        return refusal;
+    }
     let Some(p) = caller(request) else {
         return Outcome::Err(401, "no session".into());
     };
@@ -3269,6 +3275,9 @@ fn internal_status_put(request: &IncomingRequest) -> Outcome {
         return Outcome::Err(400, "status must be JSON".into());
     };
     body["at"] = json!(now());
+    // A new report accounts for everything admitted before it, so the running
+    // count starts again from zero.
+    body["admitted"] = json!(0);
 
     // One row, replaced. History would be a metrics system's job, and keeping it
     // here would grow without bound in the collection the admission check reads
@@ -3286,6 +3295,43 @@ fn internal_status_put(request: &IncomingRequest) -> Outcome {
         Ok(()) => Outcome::Json(200, json!({ "recorded": true }).to_string()),
         Err(e) => Outcome::Err(500, format!("recording fleet status: {e:?}")),
     }
+}
+
+/// How many spawns have been admitted since the last fleet report.
+///
+/// Without this, admission is only as fresh as the last report — and a burst
+/// faster than the reporting interval sails straight through. A stress run fired
+/// 625 spawns in 0.2 seconds against a limit of 200 and every one was admitted,
+/// because the newest lag the platform had was seconds old and said the fleet was
+/// nearly caught up.
+///
+/// Counting what has been let through since that number arrived turns a stale
+/// figure into a usable estimate: the fleet is at least this far behind, because
+/// this much was added after it last spoke.
+fn admitted_since_report() -> u64 {
+    records::find_by(FLEET, "row", &json!(FLEET_ROW).to_string())
+        .unwrap_or_default()
+        .into_iter()
+        .next()
+        .and_then(|e| serde_json::from_str::<Value>(&e.data).ok())
+        .and_then(|v| v["admitted"].as_u64())
+        .unwrap_or(0)
+}
+
+/// Record one more admission against the current report.
+fn note_admission() {
+    let Some(e) = records::find_by(FLEET, "row", &json!(FLEET_ROW).to_string())
+        .unwrap_or_default()
+        .into_iter()
+        .next()
+    else {
+        return;
+    };
+    let Ok(mut doc) = serde_json::from_str::<Value>(&e.data) else { return };
+    doc["admitted"] = json!(doc["admitted"].as_u64().unwrap_or(0) + 1);
+    // Guarded on the revision, so a burst of concurrent admissions cannot lose
+    // counts — which is the case this exists for.
+    let _ = records::update(FLEET, &e.id, &doc.to_string(), e.revision);
 }
 
 /// How far behind the fleet is, and how old that number is.
@@ -3340,14 +3386,19 @@ fn admit_one_more() -> Result<(), Outcome> {
             ),
         ));
     }
-    if lag > limit {
+    // Everything let through since that number arrived counts against it too.
+    let pending = admitted_since_report();
+    let effective = lag + pending;
+    if effective > limit {
         return Err(Outcome::Err(
             429,
             format!(
-                "the fleet is {lag} instance(s) behind and the limit is {limit} — this would \
-                 be accepted and never placed. Try again once it has caught up."
+                "the fleet is {lag} instance(s) behind, {pending} more were accepted since it \
+                 last reported, and the limit is {limit} — this would be accepted and never \
+                 placed. Try again once it has caught up."
             ),
         ));
     }
+    note_admission();
     Ok(())
 }

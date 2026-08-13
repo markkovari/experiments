@@ -17,6 +17,30 @@ use std::time::Duration;
 use comp_reconciler::fleet::Fleet;
 use serde_json::{json, Value};
 
+/// Guards the window between setting the fleet's env-var config and the fleet
+/// having read it.
+///
+/// Those vars are PROCESS-global and tests in one binary run on parallel
+/// threads, so without this a test that sets `max-placement-lag` low leaks it
+/// into a fleet another test is starting at that moment — and the other test
+/// fails for a reason that is nowhere in its own source. That happened
+/// immediately: three tests passing alone and one failing when run together.
+static FLEET_CONFIG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Start a fleet with extra platform config, without leaking it to anyone else.
+fn fleet_with(lattice: &str, vars: &[(&str, &str)]) -> Fleet {
+    let guard = FLEET_CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+    for (k, v) in vars {
+        std::env::set_var(k, v);
+    }
+    let fleet = Fleet::start_with_platform(lattice, 1);
+    for (k, _) in vars {
+        std::env::remove_var(k);
+    }
+    drop(guard);
+    fleet
+}
+
 struct Api {
     base: String,
     http: reqwest::blocking::Client,
@@ -247,10 +271,8 @@ fn a_queue_that_only_a_person_can_start_and_that_refuses_illegal_moves() {
 /// admission, given a number.
 #[test]
 fn the_platform_refuses_work_the_fleet_cannot_place() {
-    std::env::set_var("COMP_MAX_PLACEMENT_LAG", "10");
-    let fleet = Fleet::start_with_platform("admission", 1);
+    let fleet = fleet_with("admission", &[("COMP_MAX_PLACEMENT_LAG", "10")]);
     let api = Api::new(fleet.platform_url());
-    std::env::remove_var("COMP_MAX_PLACEMENT_LAG");
 
     let (code, p) = api.post("/api/projects", json!({ "name": "load", "repo": "acme/load" }));
     assert_eq!(code, 201, "creating a project failed: {p}");
@@ -280,6 +302,42 @@ fn the_platform_refuses_work_the_fleet_cannot_place() {
     assert_eq!(api.status(json!({ "lag": 1, "desired": 5000, "placed": 4999 })), 200);
     let (code, body) = api.post("/api/environments", json!({ "app": "anything", "env": "x" }));
     assert_eq!(code, 404, "a caught-up fleet must be admitted again: {body}");
+
+    // --- a BURST cannot outrun the report -------------------------------------
+    //
+    // Admission is only as fresh as the last report, so without counting what has
+    // been let through since, a burst faster than the reporting interval sails
+    // straight past the limit. That is not hypothetical: a stress run fired 625
+    // spawns in 0.2 seconds against a limit of 200 and every single one was
+    // admitted, because the newest number the platform had was seconds old and
+    // said the fleet was nearly caught up.
+    assert_eq!(api.status(json!({ "lag": 0, "desired": 0, "placed": 0 })), 200);
+    let mut admitted = 0;
+    let mut refused_at = None;
+    for i in 0..40 {
+        let (code, body) = api.post("/api/environments", json!({ "app": "anything", "env": "x" }));
+        match code {
+            404 => admitted += 1,
+            429 => {
+                refused_at = Some((i, body));
+                break;
+            }
+            other => panic!("unexpected {other}: {body}"),
+        }
+    }
+    let (at, why) = refused_at.expect(
+        "forty spawns went through on one stale report saying the fleet was caught up — \
+         admission that only counts what the reconciler last said cannot see a burst",
+    );
+    assert!(
+        at <= 12,
+        "the limit is 10 and {admitted} were admitted before the first refusal at {at}"
+    );
+    assert!(
+        why["error"].as_str().unwrap_or_default().contains("since it last reported"),
+        "the refusal should say how much was accepted since the report: {why}"
+    );
+    println!("    a burst was cut off after {admitted} against a limit of 10");
 
     // --- and the REAL reconciler reports it, not just this test ---------------
     //
@@ -320,4 +378,57 @@ fn the_platform_refuses_work_the_fleet_cannot_place() {
     );
 
     println!("    refused at lag 5000, admitted at lag 1, and the loop reports its own");
+}
+
+/// A stale fleet report fails CLOSED.
+///
+/// If the reconciler has stopped, accepting more work is pointless — nothing will
+/// place it — and failing open would mean unbounded acceptance at exactly the
+/// moment nothing is being done. That reasoning was written down when admission
+/// was built and nothing checked it, which by this repo's own rule (ADR-0081)
+/// makes it documentation.
+///
+/// `status-max-age` is set below the reconcile interval, so the report spends
+/// most of each cycle stale and the refusal can be observed without stopping
+/// anything.
+#[test]
+fn a_stale_fleet_report_stops_new_work() {
+    let fleet = fleet_with(
+        "stale",
+        &[("COMP_MAX_PLACEMENT_LAG", "10000"), ("COMP_STATUS_MAX_AGE", "1")],
+    );
+    let api = Api::new(fleet.platform_url());
+
+    // A fresh report is admitted: the limit is enormous, so only age can refuse.
+    assert_eq!(api.status(json!({ "lag": 0, "desired": 0, "placed": 0 })), 200);
+    let (code, body) = api.post("/api/environments", json!({ "app": "anything", "env": "x" }));
+    assert_eq!(code, 404, "a fresh report must be admitted: {body}");
+
+    // Let it go stale. The reconciler refreshes every few seconds, so this polls
+    // for the window rather than assuming one.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let mut refused = Value::Null;
+    let mut saw = false;
+    while std::time::Instant::now() < deadline {
+        let (code, body) = api.post("/api/environments", json!({ "app": "anything", "env": "x" }));
+        if code == 503 {
+            refused = body;
+            saw = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    assert!(
+        saw,
+        "a stale report was never refused — admission fails OPEN, which means unbounded \
+         acceptance exactly when nothing is placing work\n--- reconciler ---\n{}",
+        fleet.reconciler_log()
+    );
+    let detail = refused["error"].as_str().unwrap_or_default().to_string();
+    assert!(
+        detail.contains("reported") && detail.contains("stale"),
+        "a refusal must say the loop has gone quiet, or it reads as the fleet being \
+         full: {refused}"
+    );
+    println!("    stale report refused: {detail}");
 }

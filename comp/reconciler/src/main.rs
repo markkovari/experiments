@@ -556,9 +556,12 @@ async fn report(args: &Args, http: &reqwest::Client, outcome: &Outcome, lag: u64
             c.tenant, c.app, c.component, c.max, c.wanted
         );
     }
-    if outcome.unschedulable.is_empty() && outcome.at_ceiling.is_empty() {
-        return;
-    }
+    // NO early return when nothing is stuck. This function used to bail out here,
+    // which was right when its only job was surfacing problems and wrong the
+    // moment the platform started admitting work against the lag: a fleet with
+    // nothing wrong reported nothing at all, so admission saw a report that never
+    // arrived and, after the grace period, failed closed on a perfectly healthy
+    // fleet. The lag is most useful precisely when it is small.
     for u in &outcome.unschedulable {
         eprintln!("comp-reconciler: {}/{} unschedulable: {}", u.tenant, u.app, u.reason);
     }

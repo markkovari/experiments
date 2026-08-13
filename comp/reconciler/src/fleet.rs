@@ -373,6 +373,11 @@ impl Fleet {
             if let Ok(lag) = std::env::var("COMP_MAX_PLACEMENT_LAG") {
                 cp.args(["--config", &format!("max-placement-lag={lag}")]);
             }
+            // How old a fleet report may be before admission fails closed. Low
+            // enough to observe, in the one test that wants to see it.
+            if let Ok(age) = std::env::var("COMP_STATUS_MAX_AGE") {
+                cp.args(["--config", &format!("status-max-age={age}")]);
+            }
             children.push(spawn_logged("control-plane", &mut cp, &sp.join("platform.log")));
             std::thread::sleep(Duration::from_secs(2));
         }
