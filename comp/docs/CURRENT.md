@@ -171,6 +171,15 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   as created, and never placed, with nothing anywhere saying so. Whole-collection
   reads now page, and the backstop reports when it is reached instead of
   quietly dropping the tail. 781/781 converges where 500 was the ceiling.
+- **Component references follow the registry idiom** — `shop` is the moving
+  pointer, `shop:v2` a named one an author may move, `shop@sha256:<hex>` exact
+  bytes nothing can move, and a digest beats a tag in the same reference. Parsed
+  and tested; NOT yet resolved anywhere — a deployment still names a bare id, so
+  pinning is a shape the code understands and does not act on.
+- **`platform-domain` had a native test target that never compiled.** A test
+  referenced `node_config`, a function nobody ever wrote, so every unit test in
+  that component — 34 of them — had been silently unrun. The helper exists now
+  and they all run.
 - **Component bytes are staged by CONTENT; the catalogue row is a pointer.**
   `tenant/id` used to hold the bytes, which made an upload destructive — a second
   build overwrote the first, so two workers pushing different builds of one

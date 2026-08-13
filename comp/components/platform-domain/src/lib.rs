@@ -2232,13 +2232,7 @@ fn resolve_parts(
     // `{"id": "gate", "config": {"grace-period-secs": "5"}}` on the graph node.
     // Read once here so both strategies get the same treatment.
     let given_config = |id: &str| -> Map<String, Value> {
-        doc["nodes"]
-            .as_array()
-            .and_then(|a| {
-                a.iter().find(|n| n["id"].as_str() == Some(id)).and_then(|n| n["config"].as_object())
-            })
-            .cloned()
-            .unwrap_or_default()
+        req::node_config(doc["nodes"].as_array().map(|a| a.as_slice()).unwrap_or_default(), id)
     };
 
     // `{"id": "gate", "secrets": [{"key": "stripe", "ref": "vault://acme/stripe"}]}`
@@ -2469,6 +2463,41 @@ fn compose_detail(e: &composer::ComposeError) -> String {
 }
 
 
+
+
+/// A component reference, in the shape everyone already knows from registries.
+///
+///   `shop`                    the moving pointer — whatever was uploaded last
+///   `shop:v2`                 a named pointer, which an author may move
+///   `shop@sha256:<hex>`       exact bytes, which nothing can move
+///
+/// The idiom is worth following rather than inventing, and the field this ends up
+/// in has been called `oci_ref` since long before any of this. A digest reference
+/// is the one that makes a deployment reproducible: it survives somebody else
+/// uploading over the name it came from, which — before content-addressed staging
+/// — was not merely a stale read but a lost artifact.
+pub struct ComponentRef {
+    pub name: String,
+    pub tag: Option<String>,
+    pub digest: Option<String>,
+}
+
+fn parse_component_ref(raw: &str) -> ComponentRef {
+    // `@` binds tighter than `:` — `shop:v2@sha256:x` is a digest reference that
+    // happens to mention where it came from, and the digest wins, because the
+    // whole point of naming one is that nothing else gets a say.
+    if let Some((left, hex)) = raw.split_once("@sha256:") {
+        let (name, tag) = match left.split_once(':') {
+            Some((n, t)) => (n.to_string(), Some(t.to_string())),
+            None => (left.to_string(), None),
+        };
+        return ComponentRef { name, tag, digest: Some(hex.to_string()) };
+    }
+    match raw.split_once(':') {
+        Some((n, t)) => ComponentRef { name: n.to_string(), tag: Some(t.to_string()), digest: None },
+        None => ComponentRef { name: raw.to_string(), tag: None, digest: None },
+    }
+}
 
 /// Where a catalogue row's bytes are staged.
 ///
@@ -3582,4 +3611,51 @@ fn admit_one_more() -> Result<(), Outcome> {
     }
     note_admission();
     Ok(())
+}
+
+#[cfg(test)]
+mod ref_tests {
+    use super::parse_component_ref as parse_ref;
+
+    /// The registry idiom, followed rather than reinvented.
+    #[test]
+    fn a_bare_name_is_the_moving_pointer() {
+        let r = parse_ref("shop");
+        assert_eq!(r.name, "shop");
+        assert!(r.tag.is_none() && r.digest.is_none());
+    }
+
+    #[test]
+    fn a_tag_is_a_pointer_an_author_may_move() {
+        let r = parse_ref("shop:v2");
+        assert_eq!((r.name.as_str(), r.tag.as_deref()), ("shop", Some("v2")));
+        assert!(r.digest.is_none());
+    }
+
+    /// The one that makes a deployment reproducible.
+    #[test]
+    fn a_digest_names_bytes_nothing_can_move() {
+        let r = parse_ref("shop@sha256:abc123");
+        assert_eq!(r.name, "shop");
+        assert_eq!(r.digest.as_deref(), Some("abc123"));
+    }
+
+    /// A digest wins over a tag in the same reference. Naming exact bytes is a
+    /// statement that nothing else gets a say — including the tag beside it,
+    /// which may since have moved somewhere else entirely.
+    #[test]
+    fn a_digest_beats_the_tag_beside_it() {
+        let r = parse_ref("shop:v2@sha256:abc123");
+        assert_eq!(r.name, "shop");
+        assert_eq!(r.tag.as_deref(), Some("v2"), "the tag is kept, for the record");
+        assert_eq!(r.digest.as_deref(), Some("abc123"), "but the digest decides");
+    }
+
+    /// A name with no tag and no digest must not be mangled by a stray colon in
+    /// something that is not a reference at all.
+    #[test]
+    fn a_name_that_looks_like_a_url_is_still_a_name() {
+        let r = parse_ref("shop:8080");
+        assert_eq!((r.name.as_str(), r.tag.as_deref()), ("shop", Some("8080")));
+    }
 }

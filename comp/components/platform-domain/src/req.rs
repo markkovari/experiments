@@ -81,6 +81,21 @@ pub struct Satisfies {
     pub plug: String,
 }
 
+/// The config a deployment's node carries, by component id.
+///
+/// Pulled out of `deployment_save` because its test was written here and the
+/// function never was — so the test referenced a name that did not exist and the
+/// whole native test target of this component failed to compile. Nothing in it
+/// had run since, including anything added later.
+pub fn node_config(nodes: &[serde_json::Value], id: &str) -> serde_json::Map<String, serde_json::Value> {
+    nodes
+        .iter()
+        .find(|n| n["id"].as_str() == Some(id))
+        .and_then(|n| n["config"].as_object())
+        .cloned()
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
