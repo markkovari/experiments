@@ -167,18 +167,29 @@ three of them — and both are now enforced by a helper rather than by rememberi
 
 ## Honestly missing
 
-- **The agent writes; nothing drives it.** `graph:agent/writer` turns a goal and a
-  tree into a candidate and repairs from the gate's failures — end to end and
-  deterministic. Nothing yet runs the loop: no rule for how many attempts, which
-  branch to extend, or when to stop. And it NAMES ITS FILES rather than
-  retrieving them, because no embedding provider is wired.
+- **One branch runs; nothing compares branches.** `graph:run/driver` now joins the
+  writer to the gate: attempt, judge, repair from what the checks actually said,
+  stop. It stops for a stated reason — `accepted`, `plateau` when an attempt
+  reproduces a candidate already on record, `exhausted` when the attempt budget
+  runs out — and keeps the best candidate by score rather than the last, because
+  a repair can be worse than what it repaired. Every attempt is recorded with a
+  content digest, which is the raw material fuel and stopping rules will need and
+  cannot be reconstructed afterwards.
+
+  What is missing is the layer above one branch: no rule picks which of N runs
+  wins, no tie-break, and nothing opens the pull request — deliberately, since a
+  driver that proposed its own result would open N pull requests for N branches.
+  Nothing spends against a budget: `max-attempts` is a count of tries, not a cost.
+  Branches differ only by seed — same prompt, same context — so herding is
+  unmitigated and does not announce itself. And the agent NAMES ITS FILES rather
+  than retrieving them, because no embedding provider is wired.
 - **The gate runs checks; nothing calls it yet.** `comp-checks` materialises a
   candidate over a base tree, runs allow-listed commands in it, and reports the
   CHECK VECTOR — every required check passing is the gate, the weighted fraction
   is the score (ADR-0081). It is native because a component cannot spawn a
-  process, and that is the sandbox working rather than a gap. What is missing is
-  a caller: no evaluator component wraps it, and nothing turns a goal into
-  candidates to feed it.
+  process, and that is the sandbox working rather than a gap. `checks-runner`
+  wraps it as `graph:fitness/evaluator` and `graph:run/driver` now feeds it
+  candidates, so this end is joined.
 - **The check runner needs no checkout.** A caller that can read `vgit:store`
   posts the base tree once, keyed by its commit id; the runner caches it under
   that content address and every later candidate on the same base sends only its

@@ -40,6 +40,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-driver"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+ "wit-bindgen-rt",
+]
+
+[[package]]
 name = "agent-probe"
 version = "0.1.0"
 dependencies = [
@@ -419,6 +427,14 @@ dependencies = [
  "const-oid",
  "crypto-common",
  "subtle",
+]
+
+[[package]]
+name = "driver-probe"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wit-bindgen-rt",
 ]
 
 [[package]]

@@ -11,11 +11,13 @@ The distinction this document keeps is between:
 | ⚠️ **runnable** | the pieces exist and nobody has put them together |
 | ❌ **blocked** | something named below does not exist yet |
 
-**The agent now exists.** `graph:agent/writer` turns a goal and a tree into a
-candidate, and a repair attempt is driven by the checks that actually failed —
-proven deterministically, because the scripted provider only answers correctly
-when it *sees* the failure text. What is still ❌ is everything that decides how
-many attempts, which branch to extend, and when to stop.
+**The loop now runs.** `graph:agent/writer` turns a goal and a tree into a
+candidate; `graph:run/driver` attempts, judges, repairs and stops. The repair is
+driven by what the checks actually found — proven without planting anything,
+since the scripted model matches only on check ids, and a check id reaches it
+only if the driver lifted it off a verdict `comp-checks` produced by running the
+command. What is still ❌ is everything ABOVE one branch: which of N runs wins,
+what a generation costs, and whether the branches were ever different.
 
 ---
 
@@ -46,10 +48,13 @@ the checks run, a pull request opens.
 | a check names `rm -rf` | ✅ refused by the allow-list, as a failed check naming why |
 | the candidate writes `../../etc/passwd` | ✅ refused by both the runner and the forge |
 | the base moved while the branch worked | ❌ **unhandled.** `git:forge/base-commit` pins the start; nothing detects that the base moved before the PR opens. Rebase or refuse is an open question (ADR-0082) |
-| the model is down | ⚠️ `provider-unavailable` surfaces; nothing retries or degrades to another tier |
+| the model is down | ✅ **ends the run rather than spending the budget on it** — distinct from an unusable *answer*, which costs one attempt and is retried with the next seed. Nothing degrades to another tier yet |
+| the model repeats itself | ✅ `driver.rs` — an attempt reproducing a candidate already on record stops the run as a `plateau`, at 2 of a 5-attempt budget |
+| a repair is worse than what it repaired | ✅ the best candidate by score is kept, not the last, and a tie keeps the *earlier* one — otherwise the answer depends on how many times it happened to tie |
 
-**The honest summary of level 1:** every piece is covered except the agent in the
-middle, and the base-drift question.
+**The honest summary of level 1:** one branch now goes from a goal to a scored,
+repaired candidate. What is left is the base-drift question, and that the
+candidate still has to be handed to the forge by whoever compares branches.
 
 ---
 
@@ -80,13 +85,13 @@ is promoted; the rest are closed.
 | every branch fails the gate | ✅ **the score still orders them** — this is the whole reason the runner reports a vector rather than a verdict |
 | two branches produce identical candidates | ⚠️ `artifact:cache` would dedupe the derived work, but nothing dedupes the *candidates*, so both get gated and both get scored |
 | all eight converge on the same idea | ❌ **herding, and it does not announce itself.** ADR-0081 names the mitigations — asymmetric visibility, a diversity budget, one branch that reads nothing — and none is built. The run looks healthy and the parallelism is worthless |
-| scores tie | ❌ nothing breaks the tie; no rule exists |
+| scores tie | ❌ **between branches**, nothing breaks the tie. Within one branch the earlier candidate keeps the slot (`driver.rs`), which is a rule for attempts and not for siblings |
 | the fleet cannot place eight more branches | ✅ refused with a 429 naming the lag and the limit, rather than accepted and never started |
 | a burst outruns the limit | ✅ counted against the last report, so 625 spawns are cut to 435 |
-| the generation costs more than the budget | ❌ **nothing spends against the budget.** It is a field on a project that nothing enforces, which by this repo's own rule is documentation |
+| the generation costs more than the budget | ❌ **nothing spends against the budget.** `max-attempts` bounds tries per branch, which is not a cost — a run of three cheap attempts and a run of three expensive ones are the same number. Every attempt is now recorded with a digest and a score, which is the raw material a real budget needs and did not have |
 
-**The honest summary of level 2:** the mechanics work and the *strategy* does not
-exist. Nothing decides how many branches, which to extend, or when to stop.
+**The honest summary of level 2:** a branch decides when to stop; nothing decides
+how many branches, which to extend, or which one wins.
 
 ---
 
@@ -115,7 +120,7 @@ human in the loop.
 |---|---|
 | a node dies holding half the tree | ✅ inventory expires, the reconciler sees a gap, work is re-placed |
 | desired state is larger than the platform will report | ✅ **fixed, and it was silent**: a fleet asked for 3906 apps sat at exactly 500 forever, every one past the cap accepted and never placed |
-| the search never converges | ❌ no plateau detection, no `loop-until-dry`, no stopping rule at all |
+| the search never converges | ⚠️ **within a branch it does**: a repeated candidate stops the run. Across generations there is still no plateau detection and no `loop-until-dry` |
 | a branch runs out of fuel | ❌ **no fuel exists.** ADR-0081 designs conservation, escrow and refund-on-death; none is built. `quota:meter` is a rate limit and not a budget |
 | a branch waits on a human for two days | ❌ suspension is designed (`awaiting-human`, environment released, fuel in escrow) and unbuilt. Today a branch would simply sit there holding a node |
 | the knowledge pool fills with a wrong lesson | ❌ the graph stores and traverses; nothing promotes, weights by outcome, or decays |
@@ -138,7 +143,8 @@ DECIDES is designed and unbuilt.**
     carrying    environments, vgit, forge, artifact cache, checks, admission
                 → survived 341 apps and two dead machines
 
-    deciding    the agent, fuel, selection, stopping, knowledge promotion
+    deciding    the agent and its loop  → built, and stops for a stated reason
+                fuel, selection, knowledge promotion
                 → ADR-0081, marked proposed, none of it running
 
 That is a deliberate order rather than an accident: a wrong decision on a
@@ -146,9 +152,10 @@ substrate that loses work is impossible to debug, and every mechanism above was
 built by breaking it first. But it means the honest answer to "can the graph
 succeed" today is:
 
-> **A single goal can go from a queue to a pull request, and every step of that
-> path is tested. Nothing yet chooses what to try, how much to spend, or when to
-> stop — so a run does not fail, it simply never starts.**
+> **A single goal can go from a queue to a repaired, scored candidate without a
+> human touching it, and every step of that path is tested. What nothing yet
+> decides is how many branches to run, which one wins, or what any of it cost.**
 
-The smallest thing that would change that is the agent: one component that turns
-a goal and a tree into a candidate. Everything either side of it is built.
+The smallest thing that would change that is selection: a rule that compares the
+results of N runs and hands one to `git:forge`. Every run already reports the two
+things such a rule needs — whether it was accepted, and what it scored.
