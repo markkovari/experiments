@@ -153,11 +153,14 @@ cargo nextest run --release --manifest-path reconciler/Cargo.toml
   process, and that is the sandbox working rather than a gap. What is missing is
   a caller: no evaluator component wraps it, and nothing turns a goal into
   candidates to feed it.
-- **The check runner needs a checkout on disk.** `--base` is a directory, so the
-  runner is pinned to a machine that already has the repository. It should
-  materialise the base from `vgit:store` instead — the objects are already in
-  blob storage and reachable from any node — which would make the runner
-  placeable anywhere rather than only where somebody cloned.
+- **The check runner needs no checkout.** A caller that can read `vgit:store`
+  posts the base tree once, keyed by its commit id; the runner caches it under
+  that content address and every later candidate on the same base sends only its
+  diff. An unknown commit is ASKED for (409) rather than substituted, because a
+  runner that quietly fell back to another tree would score a candidate against
+  the wrong code and report it confidently. `--base` still exists for a runner
+  that does have a checkout. Disk remains a materialisation — it is where
+  compiling happens, not where anything is kept.
 - **The inventory TTL is declared by three processes on one shared bucket.** A
   host asks for `heartbeat_secs * 3`, the reconciler for `inventory_ttl`, the
   ingress for its own — and whoever calls `create_key_value` first wins, silently.

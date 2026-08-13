@@ -49,13 +49,16 @@ struct Args {
     #[arg(long, default_value = "127.0.0.1:8face")]
     addr: String,
 
-    /// The tree a candidate is laid over — a checkout of the base commit.
+    /// A checkout to lay candidates over, when there is one.
     ///
-    /// Copied per run, never mutated: two candidates evaluated at once must not
-    /// see each other's files, and a check that leaves debris must not poison the
-    /// next one.
+    /// OPTIONAL, and mostly not what you want. A directory pins this runner to a
+    /// machine that already has the repository, which is the opposite of what
+    /// putting the repository in blob storage was for (`vgit:store`). Prefer
+    /// sending the tree: a caller that can read `vgit` reads it from the object
+    /// store — which is on NATS and reachable from any node — and posts it once
+    /// per base commit. See `base_commit` on the request.
     #[arg(long)]
-    base: PathBuf,
+    base: Option<PathBuf>,
 
     /// Where throwaway trees are made.
     ///
@@ -112,6 +115,27 @@ struct Request {
     /// What the candidate is, for the report. The runner does not resolve it.
     #[serde(default)]
     candidate: String,
+
+    /// The commit these changes are against, used ONLY as a cache key.
+    ///
+    /// A base tree is identical for every candidate in a generation, so sending
+    /// it with each one would send the same repository twenty times. Named by its
+    /// commit id, it is written to disk once and reused — and because a commit id
+    /// is a content address, "is this the tree I think it is" needs no
+    /// invalidation logic (ADR-0080's ids are real git ids).
+    #[serde(default)]
+    base_commit: String,
+
+    /// The whole base tree. Sent when the runner does not have `base_commit`
+    /// cached, and omitted when it does — which is every candidate after the
+    /// first.
+    ///
+    /// This is how the runner stays free of NATS: whoever calls it can already
+    /// read the object store, so the bytes come from there without this process
+    /// needing credentials, a bucket name, or a git implementation of its own.
+    #[serde(default)]
+    base_tree: Vec<FileChange>,
+
     #[serde(default)]
     changes: Vec<FileChange>,
     checks: Vec<Check>,
@@ -128,6 +152,14 @@ struct Result1 {
     took_ms: u64,
     /// The tail of what it said. Enough to act on, bounded so a screaming test
     /// suite cannot become the response.
+    detail: String,
+}
+
+/// What the runner says when it cannot proceed without the tree.
+#[derive(Debug, Serialize)]
+struct NeedTree {
+    need_base_tree: bool,
+    base_commit: String,
     detail: String,
 }
 
@@ -274,24 +306,103 @@ fn run_check(dir: &Path, check: &Check, allow: &[Vec<String>], timeout: u64) -> 
     }
 }
 
-fn evaluate(args: &Args, allow: &[Vec<String>], req: &Request, run_id: &str) -> Result<Report> {
-    let work = args
-        .work_dir
+/// Where a base tree is cached, by commit.
+fn cache_of(args: &Args, commit: &str) -> PathBuf {
+    work_root(args).join("bases").join(commit)
+}
+
+fn work_root(args: &Args) -> PathBuf {
+    args.work_dir
         .clone()
         .unwrap_or_else(|| std::env::temp_dir().join(format!("comp-checks-{}", std::process::id())))
-        .join(run_id);
-    materialise(&args.base, &work)?;
+}
+
+/// Make sure the base for this request is on disk, and say where.
+///
+/// Three ways, in order of preference:
+///
+///   1. a cached tree for this commit — the usual case after the first candidate;
+///   2. a tree posted with the request, which is written to the cache;
+///   3. the `--base` checkout, for a runner that has one.
+///
+/// Disk is a MATERIALISATION here, exactly as it is everywhere else in this
+/// design: the authority is the object store the caller read from, and this is a
+/// scratch copy that exists because a compiler cannot read a KV bucket.
+fn ensure_base(args: &Args, req: &Request) -> Result<PathBuf, NeedTree> {
+    if !req.base_commit.is_empty() {
+        let cached = cache_of(args, &req.base_commit);
+        if cached.is_dir() {
+            return Ok(cached);
+        }
+        if !req.base_tree.is_empty() {
+            if let Err(e) = write_tree(&cached, &req.base_tree) {
+                return Err(NeedTree {
+                    need_base_tree: true,
+                    base_commit: req.base_commit.clone(),
+                    detail: format!("could not cache the tree: {e}"),
+                });
+            }
+            return Ok(cached);
+        }
+        // Asked for rather than guessed at. A runner that silently fell back to
+        // `--base` here would evaluate a candidate against the WRONG TREE and
+        // report a confident score for it.
+        return Err(NeedTree {
+            need_base_tree: true,
+            base_commit: req.base_commit.clone(),
+            detail: "this runner has not seen that commit; post `base_tree` with it".into(),
+        });
+    }
+    match &args.base {
+        Some(b) => Ok(b.clone()),
+        None => Err(NeedTree {
+            need_base_tree: true,
+            base_commit: String::new(),
+            detail: "no `base_commit` given and this runner was started without --base".into(),
+        }),
+    }
+}
+
+fn write_tree(into: &Path, files: &[FileChange]) -> Result<()> {
+    // A partially written cache is worse than none: the next request would find
+    // the directory, believe it, and evaluate against half a repository. Written
+    // beside and renamed, so it appears complete or not at all.
+    let staging = into.with_extension("partial");
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging)?;
+    apply(&staging, files)?;
+    if let Some(parent) = into.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _ = std::fs::remove_dir_all(into);
+    std::fs::rename(&staging, into)?;
+    Ok(())
+}
+
+fn evaluate(
+    args: &Args,
+    allow: &[Vec<String>],
+    req: &Request,
+    run_id: &str,
+) -> Result<std::result::Result<Report, NeedTree>> {
+    let base = match ensure_base(args, req) {
+        Ok(b) => b,
+        Err(need) => return Ok(Err(need)),
+    };
+
+    let work = work_root(args).join(run_id);
+    materialise(&base, &work)?;
     apply(&work, &req.changes)?;
 
     let results: Vec<Result1> =
         req.checks.iter().map(|c| run_check(&work, c, allow, args.timeout)).collect();
 
-    // Thrown away whatever happened. A check that leaves debris must not poison
-    // the next candidate, and keeping trees around is how a machine runs out of
-    // disk overnight.
+    // The RUN tree is thrown away; the cached BASE is not. A check that leaves
+    // debris must not poison the next candidate, and keeping run trees around is
+    // how a machine runs out of disk overnight.
     let _ = std::fs::remove_dir_all(&work);
 
-    Ok(report_of(&req.candidate, results))
+    Ok(Ok(report_of(&req.candidate, results)))
 }
 
 /// Turn results into a gate and a score.
@@ -340,15 +451,17 @@ fn serve(args: Args) -> Result<()> {
         // being bad.
         bail!("no --allow given; this runner would refuse every check");
     }
-    if !args.base.is_dir() {
-        bail!("--base {} is not a directory", args.base.display());
+    if let Some(b) = &args.base {
+        if !b.is_dir() {
+            bail!("--base {} is not a directory", b.display());
+        }
     }
 
     let listener = TcpListener::bind(&args.addr).with_context(|| format!("binding {}", args.addr))?;
     eprintln!(
         "comp-checks: listening on http://{} | base {} | {} allowed command(s) | {}s timeout",
         args.addr,
-        args.base.display(),
+        args.base.as_ref().map(|b| b.display().to_string()).unwrap_or_else(|| "(sent per request)".into()),
         allow.len(),
         args.timeout
     );
@@ -397,7 +510,17 @@ fn serve(args: Args) -> Result<()> {
 
         let run_id = format!("run-{seq}");
         match evaluate(&args, &allow, &req, &run_id) {
-            Ok(report) => {
+            // 409: the runner cannot answer until it has the tree. A distinct
+            // status because "send me the base" is not a failure of the
+            // candidate, and answering 200 with a made-up score would be.
+            Ok(Err(need)) => {
+                eprintln!(
+                    "comp-checks: need the tree for {}",
+                    if need.base_commit.is_empty() { "(no commit given)" } else { &need.base_commit }
+                );
+                respond(stream, 409, &serde_json::to_string(&need).unwrap_or_default());
+            }
+            Ok(Ok(report)) => {
                 eprintln!(
                     "comp-checks: {} — {}/{} passed, score {}, {}",
                     if report.candidate.is_empty() { "(unnamed)" } else { &report.candidate },

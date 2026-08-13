@@ -65,6 +65,31 @@ impl Runner {
         panic!("comp-checks never listened on {port}");
     }
 
+    /// A runner with NO checkout — the shape that is not pinned to a machine
+    /// holding the repository.
+    fn without_checkout(allow: &[&str]) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let port = free_port();
+        let mut cmd = Command::new(bin_path("comp-checks"));
+        cmd.args(["--addr", &format!("127.0.0.1:{port}")])
+            .arg("--work-dir")
+            .arg(dir.path())
+            .args(["--timeout", "30"]);
+        for a in allow {
+            cmd.args(["--allow", a]);
+        }
+        let child = cmd.stdout(Stdio::null()).stderr(Stdio::piped()).spawn().expect("comp-checks");
+        let me = Self { child, port, _dir: dir };
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                return me;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        panic!("comp-checks never listened on {port}");
+    }
+
     /// POST a candidate and read the report. Hand-rolled because the runner is
     /// deliberately a few hundred lines of std and does not deserve a client.
     fn evaluate(&self, body: Value) -> Value {
@@ -218,4 +243,71 @@ fn a_check_that_hangs_is_killed_rather_than_holding_the_runner() {
         "checks": [check("still-works", true, 1, &["test", "-f", "VERSION"])],
     }));
     assert_eq!(after["accepted"], json!(true), "the runner died with the check it killed");
+}
+
+/// A runner with no checkout at all, fed from the object store by its caller.
+///
+/// This is the shape that matters. `--base` pins a runner to a machine that
+/// already has the repository, which is the opposite of what putting the
+/// repository in blob storage was for. A caller that can read `vgit:store` reads
+/// the tree from NATS and posts it — and because a commit id is a content
+/// address, the runner caches it under that name and every later candidate on the
+/// same base sends only its diff.
+///
+/// Disk is still where compiling happens, because a compiler cannot read a KV
+/// bucket. It is a materialisation, not the authority.
+#[test]
+fn a_runner_with_no_checkout_is_fed_its_tree_and_caches_it() {
+    let runner = Runner::without_checkout(&["test"]);
+
+    let commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    // Without the tree, the runner ASKS for it rather than guessing. A runner
+    // that fell back to something else here would score a candidate against the
+    // wrong tree and report it confidently.
+    let asked = runner.evaluate(json!({
+        "candidate": "first",
+        "base_commit": commit,
+        "checks": [check("base", true, 1, &["test", "-f", "VERSION"])],
+    }));
+    assert_eq!(
+        asked["need_base_tree"],
+        json!(true),
+        "an unknown base must be asked for, not assumed: {asked}"
+    );
+
+    // Sent once.
+    let first = runner.evaluate(json!({
+        "candidate": "first",
+        "base_commit": commit,
+        "base_tree": [{ "path": "VERSION", "content": "from-the-object-store\n" }],
+        "changes": [{ "path": "answer.txt", "content": "42\n" }],
+        "checks": [
+            check("base", true, 1, &["test", "-f", "VERSION"]),
+            check("candidate", true, 1, &["test", "-f", "answer.txt"]),
+        ],
+    }));
+    assert_eq!(first["accepted"], json!(true), "the posted tree should be usable: {first}");
+
+    // And every candidate after it sends only its own diff — the base is cached
+    // under a content address, so there is nothing to invalidate.
+    let second = runner.evaluate(json!({
+        "candidate": "second",
+        "base_commit": commit,
+        "changes": [{ "path": "other.txt", "content": "x\n" }],
+        "checks": [
+            check("base", true, 1, &["test", "-f", "VERSION"]),
+            check("mine", true, 1, &["test", "-f", "other.txt"]),
+            // The FIRST candidate's file must not be here. A cached base that
+            // accumulated candidates would make every later score wrong.
+            check("clean", true, 1, &["test", "!", "-f", "answer.txt"]),
+        ],
+    }));
+    assert_eq!(
+        second["accepted"],
+        json!(true),
+        "a cached base must be reused clean, without the previous candidate in it: {second}"
+    );
+
+    println!("    no checkout: tree posted once, cached by commit, reused clean");
 }
