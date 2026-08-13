@@ -115,6 +115,8 @@ human in the loop.
 | 341 apps across four generations | ✅ `stress_tree.rs` |
 | two of three nodes SIGKILLed mid-run | ✅ recovered in 18s and 24s; nothing told the lattice |
 | closing one first-level branch closes 85 descendants | ✅ measured |
+| generations of generations | ✅ `search.rs` — generation 2 reaches a goal no single generation can, because it is seeded with generation 1's best candidate AND the checks it still failed |
+| a search escaping a bad start | ✅ one branch per generation is shown NOTHING from the previous one, asserted by what it produced rather than by the flag set on it |
 | a human starts, the loop runs, a human lands | ✅ every component on the path exists and is tested end to end — `comp goal start`, the driver's loop, the selector, the pull request. What is untested is the whole path in ONE run, because nothing yet fans a goal out into N branches |
 
 ### Failure modes
@@ -123,8 +125,8 @@ human in the loop.
 |---|---|
 | a node dies holding half the tree | ✅ inventory expires, the reconciler sees a gap, work is re-placed |
 | desired state is larger than the platform will report | ✅ **fixed, and it was silent**: a fleet asked for 3906 apps sat at exactly 500 forever, every one past the cap accepted and never placed |
-| the search never converges | ⚠️ **within a branch it does**: a repeated candidate stops the run. Across generations there is still no plateau detection and no `loop-until-dry` |
-| a branch runs out of fuel | ❌ **no fuel exists.** ADR-0081 designs conservation, escrow and refund-on-death; none is built. `quota:meter` is a rate limit and not a budget |
+| the search never converges | ✅ **at both levels**: a repeated candidate stops a branch, and `patience` generations that fail to beat the best score stop the search (`search.rs` — 2 of a budget of 4) |
+| a branch runs out of fuel | ⚠️ **a token budget exists at both levels** — per branch, and across a whole search, which is not the same bound: four branches each inside their own can put a project far outside its. Both are enforced after the fact, because what an attempt costs is unknowable until it is made. Still unbuilt from ADR-0081: conservation, escrow, refund-on-death — and tokens are not money |
 | a branch waits on a human for two days | ❌ suspension is designed (`awaiting-human`, environment released, fuel in escrow) and unbuilt. Today a branch would simply sit there holding a node |
 | the knowledge pool fills with a wrong lesson | ❌ the graph stores and traverses; nothing promotes, weights by outcome, or decays |
 | two runs race the same repository | ✅ **cannot happen by construction** — one active run per project, which is the entire answer to concurrent pull requests until somebody raises the limit |
@@ -157,22 +159,26 @@ substrate that loses work is impossible to debug, and every mechanism above was
 built by breaking it first. But it means the honest answer to "can the graph
 succeed" today is:
 
-> **One goal goes from a plan to a pull request through four branches running at
-> once, with a real gate, a real fan-out and a real forge — and that whole path is
-> one test. What is missing is everything that would make it a SEARCH rather than
-> a single round: nothing sizes a generation, extends a winner into the next one,
-> spends against a project's budget, or remembers anything.**
+> **A goal now goes from a plan to a pull request through generations of branches
+> running at once — each branch stopping for its own reason, each generation
+> seeded with the last one's best work and the checks it still failed, one branch
+> per generation refusing to read any of it, the whole thing bounded by rounds,
+> patience and a token budget. Every step is tested end to end. What is missing is
+> no longer the loop; it is the things AROUND it.**
 
 The honest gap list, in the order it bites:
 
-1. **One generation, not a search.** A winner is proposed or nothing is. There is
-   no second round seeded from the first, so `patience` and `plateau` bound a
-   branch and nothing bounds the search.
-2. **Branches differ only by seed.** Same prompt, same context, same model. The
-   generation reports when they converged (`distinct`) and does nothing about it.
-3. **No branch gets its own environment.** Every branch in `generation.rs` is a
-   concurrent call carrying its own base tree, which is enough because a run is
-   stateless. The moment a branch needs to keep something, it needs the
-   environments that already exist and are not wired to this.
-4. **The budget is per branch.** A project has a budget field nothing spends
-   against, and `spent-tokens` is not money.
+1. **No branch gets its own environment.** Every branch is a concurrent call
+   carrying its own base tree, which is enough only because a run is stateless.
+   The moment a branch needs to KEEP something — a compiled artifact, a partial
+   index — it needs the environments that already exist, are measured to depth 4,
+   and are not wired to this.
+2. **Tokens are not money.** Both budgets count tokens; a project's budget is a
+   number in a different unit that nothing converts to. And an unusable answer's
+   cost is invisible at both levels, because cost travels with a candidate.
+3. **Nothing drives it from the queue.** `comp goal start` records that a goal
+   started; no process picks a started goal up and runs a search for it. Both ends
+   exist and a person is still the wire between them.
+4. **The knowledge pool is inert.** The graph stores and traverses. Nothing
+   promotes a lesson by outcome or decays a wrong one, and retrieval needs an
+   embedding provider that is not wired.

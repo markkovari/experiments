@@ -196,12 +196,30 @@ three of them — and both are now enforced by a helper rather than by rememberi
   sequence would be a for-loop wearing the word. Measured at 4 branches, **1948 ms
   wall against 5849 ms of branch time**.
 
-  What is missing is everything that would make it a SEARCH rather than one round:
-  no second generation seeded from the first, no rule sizing a generation, and
-  branches that differ only by seed — same prompt, same context — so the
-  `distinct` count reports herding that nothing acts on. Each branch is also a
-  concurrent call rather than its own environment, which holds only because a run
-  is stateless; the environments exist and are not wired to this.
+  `generation::search` runs generations of generations. Each after the first is
+  seeded with the last one's best candidate AND the checks it still failed —
+  seeding the code without the verdict hands branches broken work and does not say
+  why. Proven against a goal NO single generation can reach: `max_attempts` is 1
+  so no branch can repair itself, and the only winning answer is keyed on text
+  that exists solely in a seeded prompt.
+
+  Diversity is authored rather than hoped for. Branches differing only by seed
+  share a prompt, a context and a model; each now gets a LENS, and exactly one
+  branch per generation is shown NOTHING from the previous one. That branch is the
+  only escape from a local optimum once every other branch inherits the last
+  winner, and the test asserts it by what it PRODUCED rather than by the flag set
+  on it. The first branch is always asked exactly what the goal says, so a lens
+  that turns out to hurt stays visible.
+
+  Bounded three ways, none replacing another: rounds when generations are cheap, a
+  token budget ACROSS the search when they are not, and patience for a search that
+  is neither expensive nor going anywhere.
+
+  What is missing is no longer the loop. No branch gets its own environment — each
+  is a concurrent call carrying its own base tree, which holds only while a run is
+  stateless. Tokens are not money. And nothing picks a started goal off the queue:
+  `comp goal start` records that one started, and a person is still the wire
+  between that and a search.
   A branch now spends against a token budget; a PROJECT still does not, and
   nothing converts tokens to money or refunds a branch that died. Branches differ only by seed — same prompt, same context — so herding is
   unmitigated and does not announce itself. And the agent NAMES ITS FILES rather
