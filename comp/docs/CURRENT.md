@@ -191,8 +191,17 @@ three of them — and both are now enforced by a helper rather than by rememberi
   generation produced, because a herded generation looks exactly like a healthy
   one and nothing else can see it.
 
-  What is missing is the thing that runs them together: nothing fans one goal out
-  into N branches and collects the results.
+  `generation::fan_out` joins them, and it is native for the reason the rest is
+  not: a component runs one call at a time, and a generation whose branches ran in
+  sequence would be a for-loop wearing the word. Measured at 4 branches, **1948 ms
+  wall against 5849 ms of branch time**.
+
+  What is missing is everything that would make it a SEARCH rather than one round:
+  no second generation seeded from the first, no rule sizing a generation, and
+  branches that differ only by seed — same prompt, same context — so the
+  `distinct` count reports herding that nothing acts on. Each branch is also a
+  concurrent call rather than its own environment, which holds only because a run
+  is stateless; the environments exist and are not wired to this.
   A branch now spends against a token budget; a PROJECT still does not, and
   nothing converts tokens to money or refunds a branch that died. Branches differ only by seed — same prompt, same context — so herding is
   unmitigated and does not announce itself. And the agent NAMES ITS FILES rather

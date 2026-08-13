@@ -73,6 +73,7 @@ is promoted; the rest are closed.
 | step | how it is known to work |
 |---|---|
 | eight branches spawn concurrently | ✅ `stress_env.rs` — 8/8 accepted, converged in 3.0s |
+| a goal fans out and the branches really run at once | ✅ `generation.rs` — 4 branches, 1948 ms wall against 5849 ms of branch time. Asserted on TIME, because the first version compared attempt counts and a deliberately sequential fan-out passed it |
 | each has its own store, none shares | ✅ asserted by name; the bucket-name collision at depth six is fixed and unit-tested |
 | candidates are ranked when none is acceptable | ✅ `fitness.rs` — 1000 / 500 / 333, with the last two both failing the gate |
 | derived work is computed once for the generation | ✅ `artifacts.rs` — twelve concurrent lookups, exactly one producer |
@@ -90,9 +91,10 @@ is promoted; the rest are closed.
 | a burst outruns the limit | ✅ counted against the last report, so 625 spawns are cut to 435 |
 | the generation costs more than the budget | ❌ **nothing spends against the budget.** `max-attempts` bounds tries per branch, which is not a cost — a run of three cheap attempts and a run of three expensive ones are the same number. Every attempt is now recorded with a digest and a score, which is the raw material a real budget needs and did not have |
 
-**The honest summary of level 2:** a branch decides when to stop and a generation
-decides which branch won. Nothing decides how MANY branches, or extends one into
-the next generation.
+**The honest summary of level 2:** one goal now goes out to N branches at once,
+each stops for its own reason, and the winner opens a pull request — measured end
+to end. Nothing decides how many branches, and nothing extends a winner into a
+second generation.
 
 ---
 
@@ -155,13 +157,22 @@ substrate that loses work is impossible to debug, and every mechanism above was
 built by breaking it first. But it means the honest answer to "can the graph
 succeed" today is:
 
-> **Every component between a goal and a pull request now exists and is tested,
-> including the rule that picks a winner and the guarantee that a branch which
-> failed its checks cannot reach a repository. What is missing is the thing that
-> RUNS them together: nothing fans one goal out into N branches and collects the
-> results.**
+> **One goal goes from a plan to a pull request through four branches running at
+> once, with a real gate, a real fan-out and a real forge — and that whole path is
+> one test. What is missing is everything that would make it a SEARCH rather than
+> a single round: nothing sizes a generation, extends a winner into the next one,
+> spends against a project's budget, or remembers anything.**
 
-The smallest thing that would change that is a generation runner — spawn N
-environments, run the driver in each, hand the results to the selector. Every
-piece it would call is built, and the fan-out itself is measured already:
-`stress_env.rs` puts eight branches up concurrently in three seconds.
+The honest gap list, in the order it bites:
+
+1. **One generation, not a search.** A winner is proposed or nothing is. There is
+   no second round seeded from the first, so `patience` and `plateau` bound a
+   branch and nothing bounds the search.
+2. **Branches differ only by seed.** Same prompt, same context, same model. The
+   generation reports when they converged (`distinct`) and does nothing about it.
+3. **No branch gets its own environment.** Every branch in `generation.rs` is a
+   concurrent call carrying its own base tree, which is enough because a run is
+   stateless. The moment a branch needs to keep something, it needs the
+   environments that already exist and are not wired to this.
+4. **The budget is per branch.** A project has a budget field nothing spends
+   against, and `spent-tokens` is not money.
