@@ -98,8 +98,34 @@ struct GoalSpec {
     /// crate it touches and its path-dependencies, and the subtree fits.
     #[serde(default)]
     base_paths: Vec<String>,
+    /// A workspace manifest in the base tree whose `members` list should be
+    /// trimmed to `keep_members` before the gate sees it. This is how a single
+    /// crate of a shared workspace (one of 130 components) builds standalone: the
+    /// gate gets the workspace root with only the target member, so cargo has one
+    /// package to build and its `.workspace = true` inheritance still resolves.
+    #[serde(default)]
+    workspace_manifest: Option<String>,
+    #[serde(default)]
+    keep_members: Vec<String>,
     #[serde(rename = "check")]
     checks: Vec<CheckSpec>,
+}
+
+/// Rewrite a Cargo manifest's `members = [ … ]` to exactly `keep`.
+///
+/// A flat string edit rather than a toml round-trip, so the rest of the manifest
+/// — `[workspace.package]`, `[workspace.dependencies]`, `[profile]`, every comment
+/// — survives untouched; only the one array the gate needs narrowed is changed.
+fn trim_members(manifest: &str, keep: &[String]) -> String {
+    let Some(start) = manifest.find("members") else { return manifest.to_string() };
+    let Some(open) = manifest[start..].find('[').map(|i| start + i) else {
+        return manifest.to_string();
+    };
+    let Some(close) = manifest[open..].find(']').map(|i| open + i) else {
+        return manifest.to_string();
+    };
+    let list = keep.iter().map(|m| format!("\"{m}\"")).collect::<Vec<_>>().join(", ");
+    format!("{}[{list}]{}", &manifest[..open], &manifest[close + 1..])
 }
 
 #[derive(Deserialize)]
@@ -283,7 +309,17 @@ fn main() -> Result<()> {
     }
 
     // The base tree and the files the agent starts from.
-    let tree = base_tree(&args.checkout, &goal.base_paths)?;
+    let mut tree = base_tree(&args.checkout, &goal.base_paths)?;
+    // Trim a shared workspace manifest to the goal's target member, so one crate
+    // of a big workspace builds standalone in the gate.
+    if let (Some(manifest), false) = (&goal.workspace_manifest, goal.keep_members.is_empty()) {
+        for e in tree.iter_mut() {
+            if e["path"] == serde_json::json!(manifest) {
+                let trimmed = trim_members(e["content"].as_str().unwrap_or_default(), &goal.keep_members);
+                e["content"] = serde_json::json!(trimmed);
+            }
+        }
+    }
     let base_commit = head_commit(&args.checkout)?;
     let context: Vec<Value> = goal
         .writable
