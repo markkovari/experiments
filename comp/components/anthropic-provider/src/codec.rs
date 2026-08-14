@@ -57,10 +57,15 @@ fn json_str(s: &str) -> String {
 /// removed from `messages`; everything else stays a user/assistant turn. An
 /// unknown role is treated as `user`, because the alternative — dropping it —
 /// silently loses a turn the caller meant to send.
-/// The ephemeral cache-breakpoint marker. Everything in the request up to and
-/// including a marked block is cached and, on a later request whose prefix is
-/// byte-identical, read back at a fraction of the price. Requires the
-/// `prompt-caching` beta header, which `lib.rs` sends.
+/// The ephemeral cache-breakpoint marker, appended inside a content block.
+/// Everything in the request up to and including a marked block is cached and,
+/// on a later request whose prefix is byte-identical, read back at ~10% of the
+/// price. We keep ONE explicit breakpoint — on the system block — because the
+/// system + files prefix is identical across every branch AND every repair, so
+/// it must cache independently of the message tail that a repair changes. The
+/// growing message tail is left to automatic caching (the top-level field
+/// below), which the docs call the simplest way and which moves its own
+/// breakpoint to the last cacheable block for us.
 const CACHE: &str = ",\"cache_control\":{\"type\":\"ephemeral\"}";
 
 pub fn messages_body(messages: &[Msg], opts: &Opts) -> String {
@@ -74,20 +79,16 @@ pub fn messages_body(messages: &[Msg], opts: &Opts) -> String {
         }
     }
 
-    // Cache-mark the LAST turn: it closes the stable prefix (system + goal +
-    // files) that every branch of a generation sends identically, so the first
-    // branch writes the cache and the rest read it. A repair's appended failures
-    // change the tail and miss — but the width duplication, which is where the
-    // tokens actually pile up, hits every time.
-    let last = user_turns.len().saturating_sub(1);
+    // The turns are plain text blocks; the message tail's breakpoint is handled
+    // by automatic caching (the top-level `cache_control` below), which places
+    // and advances its own breakpoint on the last cacheable block. Hand-marking
+    // the last turn here would only duplicate what automatic caching does.
     let turns: Vec<String> = user_turns
         .iter()
-        .enumerate()
-        .map(|(i, m)| {
+        .map(|m| {
             let role = if m.role == "assistant" { "assistant" } else { "user" };
-            let cc = if i == last { CACHE } else { "" };
             format!(
-                "{{\"role\":\"{role}\",\"content\":[{{\"type\":\"text\",\"text\":{}{cc}}}]}}",
+                "{{\"role\":\"{role}\",\"content\":[{{\"type\":\"text\",\"text\":{}}}]}}",
                 json_str(m.content)
             )
         })
@@ -98,6 +99,11 @@ pub fn messages_body(messages: &[Msg], opts: &Opts) -> String {
         // Required. Resolved by the caller, never 0 here.
         format!("\"max_tokens\":{}", opts.max_tokens),
         format!("\"messages\":[{}]", turns.join(",")),
+        // Automatic caching: one top-level breakpoint that the system places on
+        // the last cacheable block and moves forward as the conversation grows.
+        // The docs' simplest enable, and it composes with the explicit system
+        // breakpoint (they take separate breakpoint slots).
+        "\"cache_control\":{\"type\":\"ephemeral\"}".to_string(),
     ];
     if !system_parts.is_empty() {
         // The system prompt is identical across every branch and every attempt,
@@ -150,6 +156,14 @@ struct UsageResp {
     input_tokens: u32,
     #[serde(default)]
     output_tokens: u32,
+    // With caching on, `input_tokens` counts ONLY the tokens after the last
+    // breakpoint; the cached prefix is reported here instead. Summing all three
+    // gives the true input the model processed — without them a cached run looks
+    // ~free and the wallet under-counts what it spent.
+    #[serde(default)]
+    cache_creation_input_tokens: u32,
+    #[serde(default)]
+    cache_read_input_tokens: u32,
 }
 #[derive(Deserialize)]
 struct ApiError {
@@ -184,12 +198,25 @@ pub fn parse_completion(body: &[u8]) -> Result<Parsed, ParseError> {
         return Err(ParseError::NoContent);
     }
 
-    let usage = parsed.usage.unwrap_or(UsageResp { input_tokens: 0, output_tokens: 0 });
+    let usage = parsed.usage.unwrap_or(UsageResp {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+    });
+    // True total input = post-breakpoint + freshly-cached + cache-read. Reported
+    // as prompt_tokens so cost/budget see the real work. Cache reads are billed
+    // at ~10% and writes at ~125%, so counting them at par makes the dollar cost
+    // an UPPER bound — safe for a budget ceiling, which should never undershoot.
+    let prompt_tokens = usage
+        .input_tokens
+        .saturating_add(usage.cache_creation_input_tokens)
+        .saturating_add(usage.cache_read_input_tokens);
     Ok(Parsed {
         text,
         finish_reason: parsed.stop_reason.unwrap_or_else(|| "other".to_string()),
         model: parsed.model,
-        prompt_tokens: usage.input_tokens,
+        prompt_tokens,
         completion_tokens: usage.output_tokens,
     })
 }
@@ -242,6 +269,24 @@ mod tests {
         assert_eq!(v["max_tokens"], 4096);
         assert!(v.get("temperature").is_none(), "temperature is deprecated on the 5-gen models, so never sent");
         assert!(v.get("seed").is_none(), "there is no seed on this API");
+    }
+
+    #[test]
+    fn a_top_level_cache_control_turns_on_automatic_caching() {
+        let v = body(&[Msg { role: "user", content: "hi" }], 16);
+        assert_eq!(v["cache_control"]["type"], "ephemeral", "automatic caching is enabled at the request level");
+        // The message tail is a plain text block — automatic caching owns its breakpoint.
+        assert!(v["messages"][0]["content"][0].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn cached_input_tokens_fold_into_the_prompt_total() {
+        // input_tokens is only the post-breakpoint tail; the cached prefix lives
+        // in the two cache fields. The reported prompt total sums all three.
+        let body = br#"{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":1000,"output_tokens":7}}"#;
+        let p = parse_completion(body).ok().unwrap();
+        assert_eq!(p.prompt_tokens, 1050, "50 fresh + 1000 read from cache");
+        assert_eq!(p.completion_tokens, 7);
     }
 
     #[test]
