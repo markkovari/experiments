@@ -113,6 +113,11 @@ fn post_json(path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), InferError> {
     let _ = headers.set(&"connection".to_string(), &[b"close".to_vec()]);
     // The version header is required by the API, not optional like the key.
     let _ = headers.set(&"anthropic-version".to_string(), &[api_version().into_bytes()]);
+    // Turns on prompt caching for the `cache_control` blocks the codec emits.
+    // Without it the markers are ignored and every branch pays full price for the
+    // identical prompt it shares with its siblings.
+    let _ = headers
+        .set(&"anthropic-beta".to_string(), &[b"prompt-caching-2024-07-31".to_vec()]);
     if let Some(key) = api_key() {
         // x-api-key, NOT a bearer token — the one auth difference from OpenAI.
         let _ = headers.set(&"x-api-key".to_string(), &[key.into_bytes()]);
