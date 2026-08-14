@@ -91,6 +91,13 @@ struct GoalSpec {
     writable: Vec<String>,
     #[serde(default)]
     title: Option<String>,
+    /// Ship only tracked files under these path prefixes as the base tree. Empty
+    /// means the whole repo, which is right for a small project and impossible
+    /// for a large one: the base tree travels over wrpc, and NATS caps a message
+    /// near 1 MB, so a 60 MB monorepo cannot ship whole. Scope a goal to the
+    /// crate it touches and its path-dependencies, and the subtree fits.
+    #[serde(default)]
+    base_paths: Vec<String>,
     #[serde(rename = "check")]
     checks: Vec<CheckSpec>,
 }
@@ -111,10 +118,11 @@ fn one() -> u32 {
     1
 }
 
-/// Every tracked file in the checkout, as base-tree entries. This is what the
-/// gate materialises and runs the checks over, so it must carry everything the
-/// checks need — the source, the tests, `pyproject.toml`, `uv.lock`.
-fn base_tree(checkout: &Path) -> Result<Vec<Value>> {
+/// The tracked files the gate materialises and runs its checks over — the
+/// source, the tests, and whatever the build needs (`pyproject.toml`, `uv.lock`,
+/// `Cargo.toml`). Scoped to `base_paths` when given, so a goal against one crate
+/// of a large repo ships that crate and its path-deps, not the whole tree.
+fn base_tree(checkout: &Path, base_paths: &[String]) -> Result<Vec<Value>> {
     let out = Command::new("git")
         .arg("-C")
         .arg(checkout)
@@ -125,14 +133,34 @@ fn base_tree(checkout: &Path) -> Result<Vec<Value>> {
         bail!("git ls-files failed in {}", checkout.display());
     }
     let mut tree = Vec::new();
+    let mut bytes = 0usize;
     for path in String::from_utf8_lossy(&out.stdout).lines() {
+        if !base_paths.is_empty() && !base_paths.iter().any(|p| path.starts_with(p.as_str())) {
+            continue;
+        }
         let full = checkout.join(path);
-        let content = std::fs::read_to_string(&full)
-            .with_context(|| format!("reading {}", full.display()))?;
+        // Skip anything that is not valid UTF-8 (a stray binary) rather than fail
+        // the whole run; a source tree is text and a binary in it is not a gate
+        // input.
+        let Ok(content) = std::fs::read_to_string(&full) else { continue };
+        bytes += content.len();
         tree.push(json!({ "path": path, "content": content }));
     }
     if tree.is_empty() {
-        bail!("no tracked files in {} — is it a git repo with a commit?", checkout.display());
+        bail!(
+            "no tracked files under {:?} in {} — check base_paths",
+            base_paths,
+            checkout.display()
+        );
+    }
+    // The whole tree travels over wrpc as one message. NATS refuses one past ~1
+    // MB, and the failure is opaque, so catch it here with an actionable message.
+    if bytes > 900_000 {
+        bail!(
+            "the base tree is {:.1} MB, over the ~1 MB a run can ship — scope the goal with \
+             base_paths to the crate it touches (a monorepo cannot ship whole)",
+            bytes as f64 / 1_048_576.0
+        );
     }
     Ok(tree)
 }
@@ -255,7 +283,7 @@ fn main() -> Result<()> {
     }
 
     // The base tree and the files the agent starts from.
-    let tree = base_tree(&args.checkout)?;
+    let tree = base_tree(&args.checkout, &goal.base_paths)?;
     let base_commit = head_commit(&args.checkout)?;
     let context: Vec<Value> = goal
         .writable
@@ -294,22 +322,55 @@ fn main() -> Result<()> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     let uv_cache = format!("{home}/.cache/comp-goalrun/uv");
     let uv_python = format!("{home}/.cache/comp-goalrun/uv-python");
-    std::fs::create_dir_all(&uv_cache).ok();
-    std::fs::create_dir_all(&uv_python).ok();
-    let check_env =
-        vec![format!("UV_CACHE_DIR={uv_cache}"), format!("UV_PYTHON_INSTALL_DIR={uv_python}")];
+    // A shared, persistent cargo cache. The registry (CARGO_HOME) is downloaded
+    // once ever; the target dir keeps compiled dependencies so a candidate only
+    // recompiles the crate it changed — seconds, not the cold minutes a fresh
+    // HOME would force. This is what makes a cargo gate viable at all.
+    let cargo_home = format!("{home}/.cache/comp-goalrun/cargo-home");
+    let cargo_target = format!("{home}/.cache/comp-goalrun/cargo-target");
+    for d in [&uv_cache, &uv_python, &cargo_home, &cargo_target] {
+        std::fs::create_dir_all(d).ok();
+    }
+    let mut check_env = vec![
+        format!("UV_CACHE_DIR={uv_cache}"),
+        format!("UV_PYTHON_INSTALL_DIR={uv_python}"),
+        format!("CARGO_HOME={cargo_home}"),
+        format!("CARGO_TARGET_DIR={cargo_target}"),
+        // cargo wants a real registry index and network on a cold cache.
+        "CARGO_NET_OFFLINE=false".into(),
+    ];
+    // `cargo` is usually a rustup shim, and under the gate's cleared environment
+    // it cannot choose a toolchain — no RUSTUP_HOME, no default. Pass both, so the
+    // shim resolves the same toolchain the pre-warm used. Read from the ambient
+    // environment (the operator's), never the agent's.
+    let rustup_home =
+        std::env::var("RUSTUP_HOME").unwrap_or_else(|_| format!("{home}/.rustup"));
+    let toolchain = Command::new("rustup")
+        .args(["show", "active-toolchain"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.split_whitespace().next().map(String::from))
+        .unwrap_or_else(|| "stable".into());
+    check_env.push(format!("RUSTUP_HOME={rustup_home}"));
+    check_env.push(format!("RUSTUP_TOOLCHAIN={toolchain}"));
 
-    // Pre-warm: run each uv check once IN THE CHECKOUT, populating that cache
-    // before any candidate is judged. The result does not matter (the stub fails
-    // its own tests); the download does.
+    // Pre-warm: run each check once IN THE CHECKOUT with the same caches, so the
+    // toolchain download and the dependency compile happen once, outside any
+    // request deadline, before a candidate is ever judged. The result does not
+    // matter here — only the cache it leaves behind.
     for c in &goal.checks {
-        if c.command.first().map(String::as_str) == Some("uv") {
+        let tool = c.command.first().map(String::as_str);
+        if matches!(tool, Some("uv") | Some("cargo")) {
             println!("warming the gate cache ({}) …", c.command.join(" "));
             let _ = Command::new(&c.command[0])
                 .args(&c.command[1..])
                 .current_dir(&args.checkout)
                 .env("UV_CACHE_DIR", &uv_cache)
                 .env("UV_PYTHON_INSTALL_DIR", &uv_python)
+                .env("CARGO_HOME", &cargo_home)
+                .env("CARGO_TARGET_DIR", &cargo_target)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status();
