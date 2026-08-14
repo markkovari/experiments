@@ -281,6 +281,17 @@ fn apply_ops(base: &[File], ops: Vec<Op>) -> Result<Vec<File>, String> {
         .collect())
 }
 
+/// The temperature to request at a given repair depth, in milli-units.
+///
+/// Low first (0.2): a first attempt should be the model's most likely answer,
+/// which a determinable gate rewards. Each repair raises it — a branch that
+/// failed and is re-trying wants to EXPLORE, not re-roll the same near-miss — up
+/// to a 1.0 ceiling. The provider only forwards this to models that accept a
+/// temperature; on the rest it is a no-op, so escalating is always safe to ask.
+fn temperature_for(repair_depth: u32) -> u32 {
+    (200 + 300 * repair_depth).min(1000)
+}
+
 /// May this path be written?
 ///
 /// Exact match against the allow-list. No prefix rule: `src/lib.rs` permitting
@@ -304,9 +315,10 @@ impl Guest for Component {
 
         let opts = llm::Options {
             model: String::new(),
-            // Deliberately low. A candidate is judged by a gate, and creativity
-            // that fails to compile is not creativity.
-            temperature: 200,
+            // Low on the first try, higher on each repair — a stuck branch should
+            // explore, not re-roll. The provider withholds it from models that
+            // rejected it, so asking is always safe.
+            temperature: temperature_for(previous.len() as u32),
             max_tokens: 0,
             stop: Vec::new(),
             // The knob that makes N branches differ while staying replayable.
@@ -333,8 +345,9 @@ impl Guest for Component {
             // answer was not a candidate. A caller retries those differently —
             // one is worth another seed, the other is worth waiting.
             return Err(AgentError::UnusableAnswer(format!(
-                "no edit or file blocks in {} characters of answer",
-                completion.text.len()
+                "no edit or file blocks in {} characters of answer; starts: {:?}",
+                completion.text.len(),
+                completion.text.chars().take(160).collect::<String>()
             )));
         }
 
@@ -522,6 +535,17 @@ mod tests {
         let p = build_prompt(&g, &[]);
         assert!(p.contains("contents here"), "the model needs the current file");
         assert!(p.contains("new.rs"), "including a path that does not exist yet");
+    }
+
+    /// Low first, rising with each repair, capped at 1.0 — a stuck branch
+    /// explores instead of re-rolling the same near-miss.
+    #[test]
+    fn temperature_escalates_with_repair_depth_and_caps() {
+        assert_eq!(temperature_for(0), 200, "first attempt is the likely answer");
+        assert_eq!(temperature_for(1), 500);
+        assert_eq!(temperature_for(2), 800);
+        assert_eq!(temperature_for(3), 1000, "capped at 1.0");
+        assert_eq!(temperature_for(99), 1000);
     }
 
     #[test]

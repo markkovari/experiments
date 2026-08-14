@@ -107,8 +107,26 @@ struct GoalSpec {
     workspace_manifest: Option<String>,
     #[serde(default)]
     keep_members: Vec<String>,
+    /// Name a component crate and the build-scope is DERIVED from the layout —
+    /// `base_paths`, `workspace_manifest` and `keep_members` all follow from
+    /// `components/<name>/`, so a goal need not hand-list the paths the gate
+    /// needs (and get them subtly wrong). An explicitly-set field always wins.
+    #[serde(default)]
+    component: Option<String>,
     #[serde(rename = "check")]
     checks: Vec<CheckSpec>,
+}
+
+/// The build-scope for a single component crate: the whole crate (src + wit +
+/// Cargo.toml) plus the shared workspace root, whose members are trimmed to just
+/// this crate. This is the "add the correct path" answer — name the component,
+/// and the paths the gate needs come from the layout, not a hand-typed list.
+fn component_scope(name: &str) -> (Vec<String>, String, Vec<String>) {
+    (
+        vec![format!("components/{name}/"), "components/Cargo.toml".to_string()],
+        "components/Cargo.toml".to_string(),
+        vec![name.to_string()],
+    )
 }
 
 /// Rewrite a Cargo manifest's `members = [ … ]` to exactly `keep`.
@@ -299,13 +317,28 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     let goal_path = args.checkout.join(".comp/goal.toml");
-    let goal: GoalSpec = toml::from_str(
+    let mut goal: GoalSpec = toml::from_str(
         &std::fs::read_to_string(&goal_path)
             .with_context(|| format!("reading {}", goal_path.display()))?,
     )
     .context("parsing .comp/goal.toml")?;
     if goal.checks.is_empty() {
         bail!("the goal has no checks — an empty gate accepts everything");
+    }
+    // A named component derives the build-scope from the layout. An explicitly
+    // set field always wins, so a goal can name the component and still override
+    // one path if its crate is unusual.
+    if let Some(name) = goal.component.clone() {
+        let (bp, wm, km) = component_scope(&name);
+        if goal.base_paths.is_empty() {
+            goal.base_paths = bp;
+        }
+        if goal.workspace_manifest.is_none() {
+            goal.workspace_manifest = Some(wm);
+        }
+        if goal.keep_members.is_empty() {
+            goal.keep_members = km;
+        }
     }
 
     // The base tree and the files the agent starts from.
@@ -527,12 +560,15 @@ fn main() -> Result<()> {
     // When a branch never ran (a transport note rather than a verdict), the
     // reason is in the host and ingress logs, which the fleet's tempdir throws
     // away on exit. Surface the tail of each so one failed run is diagnosable.
-    if entries.iter().any(|e| !e.note.is_empty()) {
+    // A transport note, OR a branch that produced no candidate at all (0 tokens,
+    // not accepted) — the latter is an agent that trapped or errored before it
+    // ever called the model, and the reason is only in the host log.
+    if entries.iter().any(|e| !e.note.is_empty() || (e.spent_tokens == 0 && !e.accepted)) {
         let tail = |s: &str, n: usize| {
             let lines: Vec<&str> = s.lines().collect();
             lines[lines.len().saturating_sub(n)..].join("\n")
         };
-        eprintln!("\n===== host n1 (last 40 lines) =====\n{}", tail(&fleet.node_log("n1"), 40));
+        eprintln!("\n===== host n1 (last 60 lines) =====\n{}", tail(&fleet.node_log("n1"), 60));
         eprintln!("\n===== ingress (last 25 lines) =====\n{}", tail(&fleet.ingress_log(""), 25));
     }
 
@@ -578,4 +614,25 @@ fn main() -> Result<()> {
         Err(e) => println!("\n  landing failed: {e}"),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{component_scope, trim_members};
+
+    #[test]
+    fn a_component_name_derives_its_build_scope() {
+        let (base_paths, manifest, members) = component_scope("rot13");
+        assert_eq!(base_paths, ["components/rot13/", "components/Cargo.toml"]);
+        assert_eq!(manifest, "components/Cargo.toml");
+        assert_eq!(members, ["rot13"], "the workspace is trimmed to just this crate");
+    }
+
+    #[test]
+    fn trimming_keeps_the_rest_of_the_manifest() {
+        let m = "[workspace]\nmembers = [\"a\", \"b\", \"c\"]\nresolver = \"2\"\n";
+        let out = trim_members(m, &["b".to_string()]);
+        assert!(out.contains("members = [\"b\"]"), "trimmed to the one member");
+        assert!(out.contains("resolver = \"2\""), "the rest survives");
+    }
 }
