@@ -57,17 +57,41 @@ fn json_str(s: &str) -> String {
 /// removed from `messages`; everything else stays a user/assistant turn. An
 /// unknown role is treated as `user`, because the alternative — dropping it —
 /// silently loses a turn the caller meant to send.
+/// The ephemeral cache-breakpoint marker. Everything in the request up to and
+/// including a marked block is cached and, on a later request whose prefix is
+/// byte-identical, read back at a fraction of the price. Requires the
+/// `prompt-caching` beta header, which `lib.rs` sends.
+const CACHE: &str = ",\"cache_control\":{\"type\":\"ephemeral\"}";
+
 pub fn messages_body(messages: &[Msg], opts: &Opts) -> String {
     let mut system_parts: Vec<&str> = Vec::new();
-    let mut turns: Vec<String> = Vec::new();
+    let mut user_turns: Vec<&Msg> = Vec::new();
     for m in messages {
         if m.role == "system" {
             system_parts.push(m.content);
         } else {
-            let role = if m.role == "assistant" { "assistant" } else { "user" };
-            turns.push(format!("{{\"role\":\"{role}\",\"content\":{}}}", json_str(m.content)));
+            user_turns.push(m);
         }
     }
+
+    // Cache-mark the LAST turn: it closes the stable prefix (system + goal +
+    // files) that every branch of a generation sends identically, so the first
+    // branch writes the cache and the rest read it. A repair's appended failures
+    // change the tail and miss — but the width duplication, which is where the
+    // tokens actually pile up, hits every time.
+    let last = user_turns.len().saturating_sub(1);
+    let turns: Vec<String> = user_turns
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let role = if m.role == "assistant" { "assistant" } else { "user" };
+            let cc = if i == last { CACHE } else { "" };
+            format!(
+                "{{\"role\":\"{role}\",\"content\":[{{\"type\":\"text\",\"text\":{}{cc}}}]}}",
+                json_str(m.content)
+            )
+        })
+        .collect();
 
     let mut parts = vec![
         format!("\"model\":{}", json_str(opts.model)),
@@ -76,7 +100,12 @@ pub fn messages_body(messages: &[Msg], opts: &Opts) -> String {
         format!("\"messages\":[{}]", turns.join(",")),
     ];
     if !system_parts.is_empty() {
-        parts.push(format!("\"system\":{}", json_str(&system_parts.join("\n\n"))));
+        // The system prompt is identical across every branch and every attempt,
+        // so it is its own cache breakpoint — written once, read forever after.
+        parts.push(format!(
+            "\"system\":[{{\"type\":\"text\",\"text\":{}{CACHE}}}]",
+            json_str(&system_parts.join("\n\n"))
+        ));
     }
     // `temperature` is deliberately NOT sent. The current-generation models (the
     // "5" family — sonnet-5, opus-5) have DEPRECATED it and answer a request that
@@ -185,10 +214,11 @@ mod tests {
             ],
             256,
         );
-        assert_eq!(v["system"], "You write code.");
+        assert_eq!(v["system"][0]["text"], "You write code.");
+        assert_eq!(v["system"][0]["cache_control"]["type"], "ephemeral");
         assert_eq!(v["messages"].as_array().unwrap().len(), 1, "only the user turn remains");
         assert_eq!(v["messages"][0]["role"], "user");
-        assert_eq!(v["messages"][0]["content"], "make it 42");
+        assert_eq!(v["messages"][0]["content"][0]["text"], "make it 42");
     }
 
     #[test]
@@ -201,7 +231,7 @@ mod tests {
             ],
             16,
         );
-        assert_eq!(v["system"], "A.\n\nB.");
+        assert_eq!(v["system"][0]["text"], "A.\n\nB.");
     }
 
     /// max_tokens is required and always present, because a request without it is
@@ -217,7 +247,7 @@ mod tests {
     #[test]
     fn content_is_escaped_and_round_trips() {
         let v = body(&[Msg { role: "user", content: "quote \" and \n newline" }], 16);
-        assert_eq!(v["messages"][0]["content"], "quote \" and \n newline");
+        assert_eq!(v["messages"][0]["content"][0]["text"], "quote \" and \n newline");
     }
 
     #[test]
