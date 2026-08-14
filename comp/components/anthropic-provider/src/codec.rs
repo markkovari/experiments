@@ -78,9 +78,12 @@ pub fn messages_body(messages: &[Msg], opts: &Opts) -> String {
     if !system_parts.is_empty() {
         parts.push(format!("\"system\":{}", json_str(&system_parts.join("\n\n"))));
     }
-    if opts.temperature > 0 {
-        parts.push(format!("\"temperature\":{}", opts.temperature as f64 / 1000.0));
-    }
+    // `temperature` is deliberately NOT sent. The current-generation models (the
+    // "5" family — sonnet-5, opus-5) have DEPRECATED it and answer a request that
+    // carries it with a 400, while the older tiers are fine with its absence. A
+    // candidate is judged by a gate, not by its creativity, so the model's own
+    // default temperature is the right choice and the one that works everywhere.
+    let _ = opts.temperature;
     if !opts.stop.is_empty() {
         let stops: Vec<String> = opts.stop.iter().map(|s| json_str(s)).collect();
         parts.push(format!("\"stop_sequences\":[{}]", stops.join(",")));
@@ -207,7 +210,7 @@ mod tests {
     fn max_tokens_is_always_present() {
         let v = body(&[Msg { role: "user", content: "hi" }], 4096);
         assert_eq!(v["max_tokens"], 4096);
-        assert_eq!(v["temperature"], 0.2);
+        assert!(v.get("temperature").is_none(), "temperature is deprecated on the 5-gen models, so never sent");
         assert!(v.get("seed").is_none(), "there is no seed on this API");
     }
 
