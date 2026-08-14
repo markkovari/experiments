@@ -51,6 +51,36 @@ fn json_str(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
 }
 
+/// Whether a model accepts a `temperature`, as a tagged union rather than a
+/// bare bool, so a future tier that caps at a different range says so in one
+/// place instead of a `< 0.7` scattered through the caller.
+enum TempSupport {
+    /// Accepts temperature up to `max_milli` milli-units (1000 == 1.0).
+    Ranged { max_milli: u32 },
+    /// Sending it is a 400 — the 5-generation models.
+    Deprecated,
+}
+
+/// Classify a model id. The default is DEPRECATED, deliberately: sending
+/// temperature to a model that rejects it is a hard 400 that kills the run,
+/// while withholding it from one that would accept it only forfeits a knob. So a
+/// model earns temperature by being on the known-accepting list, not by failing
+/// to match a deny-list that a new 5-gen name would slip through.
+fn temp_support(model: &str) -> TempSupport {
+    let m = model.to_ascii_lowercase();
+    let accepts = m.contains("haiku-4-5")
+        || m.contains("sonnet-4-5")
+        || m.contains("sonnet-4-6")
+        || m.contains("opus-4-1")
+        || m.contains("haiku-3")
+        || m.contains("sonnet-3");
+    if accepts {
+        TempSupport::Ranged { max_milli: 1000 }
+    } else {
+        TempSupport::Deprecated
+    }
+}
+
 /// Build the `/v1/messages` request body.
 ///
 /// System messages are concatenated into the top-level `system` field and
@@ -113,12 +143,16 @@ pub fn messages_body(messages: &[Msg], opts: &Opts) -> String {
             json_str(&system_parts.join("\n\n"))
         ));
     }
-    // `temperature` is deliberately NOT sent. The current-generation models (the
-    // "5" family — sonnet-5, opus-5) have DEPRECATED it and answer a request that
-    // carries it with a 400, while the older tiers are fine with its absence. A
-    // candidate is judged by a gate, not by its creativity, so the model's own
-    // default temperature is the right choice and the one that works everywhere.
-    let _ = opts.temperature;
+    // Whether `temperature` is sent depends on the model. The 5-generation models
+    // deprecated it and answer 400 if it carries; earlier tiers accept it. Sent
+    // only where accepted, clamped to the tier's range — so a repair can turn the
+    // knob up (the writer escalates it) without a 400 killing the whole run.
+    if let TempSupport::Ranged { max_milli } = temp_support(opts.model) {
+        let milli = opts.temperature.min(max_milli);
+        // milli-units to a JSON float: 200 -> 0.2, 1000 -> 1. Rust's shortest
+        // round-trip formatting keeps it a clean decimal.
+        parts.push(format!("\"temperature\":{}", milli as f64 / 1000.0));
+    }
     if !opts.stop.is_empty() {
         let stops: Vec<String> = opts.stop.iter().map(|s| json_str(s)).collect();
         parts.push(format!("\"stop_sequences\":[{}]", stops.join(",")));
@@ -269,6 +303,29 @@ mod tests {
         assert_eq!(v["max_tokens"], 4096);
         assert!(v.get("temperature").is_none(), "temperature is deprecated on the 5-gen models, so never sent");
         assert!(v.get("seed").is_none(), "there is no seed on this API");
+    }
+
+    fn body_with(model: &str, temp_milli: u32) -> serde_json::Value {
+        let opts = Opts { model, temperature: temp_milli, max_tokens: 16, stop: vec![] };
+        serde_json::from_str(&messages_body(&[Msg { role: "user", content: "hi" }], &opts)).unwrap()
+    }
+
+    #[test]
+    fn temperature_is_sent_only_to_a_model_that_accepts_it() {
+        // Haiku 4.5 accepts it; a 5-gen model would 400, so it is withheld.
+        let ok = body_with("claude-haiku-4-5-20251001", 500);
+        assert_eq!(ok["temperature"], 0.5, "0.5 as a JSON float, not 500 milli-units");
+        let dep = body_with("claude-opus-5", 500);
+        assert!(dep.get("temperature").is_none(), "deprecated on 5-gen — never sent");
+        // The safe default: an unknown model is treated as deprecated.
+        assert!(body_with("some-vendor/model", 500).get("temperature").is_none());
+    }
+
+    #[test]
+    fn an_escalated_temperature_is_clamped_to_the_range() {
+        // The writer may ask for more than 1.0 as it escalates; it clamps to max.
+        let v = body_with("claude-haiku-4-5-20251001", 4000);
+        assert_eq!(v["temperature"], 1.0, "1000 milli is the ceiling");
     }
 
     #[test]
