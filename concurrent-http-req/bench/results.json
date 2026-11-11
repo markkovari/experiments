@@ -1,0 +1,326 @@
+[
+ {
+  "strategy": "lww",
+  "clients": 1,
+  "ops": 800,
+  "seconds": 0.2656,
+  "ops_per_sec": 3012.4,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "lww",
+  "clients": 4,
+  "ops": 800,
+  "seconds": 0.2354,
+  "ops_per_sec": 3398.6,
+  "retries_per_op": 0.0,
+  "lost_updates": 600
+ },
+ {
+  "strategy": "lww",
+  "clients": 16,
+  "ops": 800,
+  "seconds": 0.183,
+  "ops_per_sec": 4372.4,
+  "retries_per_op": 0.0,
+  "lost_updates": 749
+ },
+ {
+  "strategy": "lww",
+  "clients": 32,
+  "ops": 800,
+  "seconds": 0.1406,
+  "ops_per_sec": 5687.9,
+  "retries_per_op": 0.0,
+  "lost_updates": 774
+ },
+ {
+  "strategy": "ius",
+  "clients": 1,
+  "ops": 800,
+  "seconds": 0.1897,
+  "ops_per_sec": 4217.2,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "ius",
+  "clients": 4,
+  "ops": 800,
+  "seconds": 0.1424,
+  "ops_per_sec": 5618.2,
+  "retries_per_op": 0.003,
+  "lost_updates": 408
+ },
+ {
+  "strategy": "ius",
+  "clients": 16,
+  "ops": 800,
+  "seconds": 0.1166,
+  "ops_per_sec": 6859.9,
+  "retries_per_op": 0.0,
+  "lost_updates": 750
+ },
+ {
+  "strategy": "ius",
+  "clients": 32,
+  "ops": 800,
+  "seconds": 0.1283,
+  "ops_per_sec": 6234.4,
+  "retries_per_op": 0.0,
+  "lost_updates": 772
+ },
+ {
+  "strategy": "occ",
+  "clients": 1,
+  "ops": 800,
+  "seconds": 0.1538,
+  "ops_per_sec": 5201.8,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "occ",
+  "clients": 4,
+  "ops": 800,
+  "seconds": 0.1872,
+  "ops_per_sec": 4273.6,
+  "retries_per_op": 0.546,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "occ",
+  "clients": 16,
+  "ops": 800,
+  "seconds": 0.5445,
+  "ops_per_sec": 1469.1,
+  "retries_per_op": 5.588,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "occ",
+  "clients": 32,
+  "ops": 800,
+  "seconds": 0.8716,
+  "ops_per_sec": 917.8,
+  "retries_per_op": 10.085,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "lock",
+  "clients": 1,
+  "ops": 800,
+  "seconds": 0.2944,
+  "ops_per_sec": 2717.1,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "lock",
+  "clients": 4,
+  "ops": 800,
+  "seconds": 0.3127,
+  "ops_per_sec": 2558.4,
+  "retries_per_op": 0.338,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "lock",
+  "clients": 16,
+  "ops": 800,
+  "seconds": 0.3693,
+  "ops_per_sec": 2166.1,
+  "retries_per_op": 2.075,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "lock",
+  "clients": 32,
+  "ops": 800,
+  "seconds": 0.5746,
+  "ops_per_sec": 1392.2,
+  "retries_per_op": 9.241,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "patch",
+  "clients": 1,
+  "ops": 800,
+  "seconds": 0.0848,
+  "ops_per_sec": 9432.2,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "patch",
+  "clients": 4,
+  "ops": 800,
+  "seconds": 0.0917,
+  "ops_per_sec": 8726.4,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "patch",
+  "clients": 16,
+  "ops": 800,
+  "seconds": 0.138,
+  "ops_per_sec": 5796.1,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "patch",
+  "clients": 32,
+  "ops": 800,
+  "seconds": 0.0823,
+  "ops_per_sec": 9718.4,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "merge",
+  "clients": 1,
+  "ops": 800,
+  "seconds": 0.176,
+  "ops_per_sec": 4546.0,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "merge",
+  "clients": 4,
+  "ops": 800,
+  "seconds": 0.1521,
+  "ops_per_sec": 5259.7,
+  "retries_per_op": 0.119,
+  "lost_updates": 245
+ },
+ {
+  "strategy": "merge",
+  "clients": 16,
+  "ops": 800,
+  "seconds": 0.2186,
+  "ops_per_sec": 3658.9,
+  "retries_per_op": 0.448,
+  "lost_updates": 508
+ },
+ {
+  "strategy": "merge",
+  "clients": 32,
+  "ops": 800,
+  "seconds": 0.2806,
+  "ops_per_sec": 2851.1,
+  "retries_per_op": 1.391,
+  "lost_updates": 628
+ },
+ {
+  "strategy": "es",
+  "clients": 1,
+  "ops": 800,
+  "seconds": 0.5839,
+  "ops_per_sec": 1370.0,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "es",
+  "clients": 4,
+  "ops": 800,
+  "seconds": 1.6139,
+  "ops_per_sec": 495.7,
+  "retries_per_op": 2.092,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "es",
+  "clients": 16,
+  "ops": 800,
+  "seconds": 6.3357,
+  "ops_per_sec": 126.3,
+  "retries_per_op": 7.976,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "es",
+  "clients": 32,
+  "ops": 800,
+  "seconds": 9.7577,
+  "ops_per_sec": 82.0,
+  "retries_per_op": 13.369,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "queue",
+  "clients": 1,
+  "ops": 800,
+  "seconds": 0.633,
+  "ops_per_sec": 1263.9,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "queue",
+  "clients": 4,
+  "ops": 800,
+  "seconds": 0.2702,
+  "ops_per_sec": 2960.5,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "queue",
+  "clients": 16,
+  "ops": 800,
+  "seconds": 0.1868,
+  "ops_per_sec": 4282.4,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "queue",
+  "clients": 32,
+  "ops": 800,
+  "seconds": 0.1498,
+  "ops_per_sec": 5341.8,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "crdt",
+  "clients": 1,
+  "ops": 800,
+  "seconds": 0.1107,
+  "ops_per_sec": 7229.3,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "crdt",
+  "clients": 4,
+  "ops": 800,
+  "seconds": 0.1071,
+  "ops_per_sec": 7471.5,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "crdt",
+  "clients": 16,
+  "ops": 800,
+  "seconds": 0.1251,
+  "ops_per_sec": 6394.3,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ },
+ {
+  "strategy": "crdt",
+  "clients": 32,
+  "ops": 800,
+  "seconds": 0.1361,
+  "ops_per_sec": 5880.0,
+  "retries_per_op": 0.0,
+  "lost_updates": 0
+ }
+]
