@@ -1,0 +1,9 @@
+node_modules
+.next
+*.sqlite*
+next-env.d.ts
+test-results
+playwright-report
+*.tsbuildinfo
+public/sw.js
+*.mp4

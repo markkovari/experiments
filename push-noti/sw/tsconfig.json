@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "lib": ["esnext", "webworker"], "strict": true, "noEmit": true,
+    "module": "esnext", "moduleResolution": "bundler", "skipLibCheck": true, "isolatedModules": true,
+    "paths": { "@/*": ["../*"] }
+  },
+  "include": ["sw.ts", "../lib/shared/push.ts"]
+}
