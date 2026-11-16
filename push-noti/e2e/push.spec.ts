@@ -146,3 +146,17 @@ test("wrong password is rejected", async ({ page }) => {
   await page.getByRole("button", { name: "Log in / sign up" }).click();
   await expect(page.getByRole("status")).toHaveText("wrong password");
 });
+
+test("a deep link opens the message in a modal; closing it clears the link", async ({ browser }) => {
+  const { page } = await device(browser, u("dora"), u("dora"));
+  await send(page, u("dora"), "deep linked");
+  const { messages } = await (await page.request.get("/api/me")).json();
+  await page.goto(`/#m${messages[0].id}`);
+  await page.reload(); // cold open; a hash-only goto keeps the stale inbox (the SW's "refresh" covers that in real use)
+  const dialog = page.getByRole("dialog", { name: `Message from ${u("dora")}` });
+  await expect(dialog).toContainText("deep linked");
+  await expect(page.locator(`#m${messages[0].id}`)).toHaveAttribute("aria-current", "true");
+  await dialog.getByRole("button", { name: "Close" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page).toHaveURL((url) => url.hash === ""); // the dialog's close event fires async
+});

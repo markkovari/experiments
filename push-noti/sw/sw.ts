@@ -1,5 +1,5 @@
 // Service worker, bundled by esbuild into public/sw.js (npm run sw).
-import { applyUnreadState, notificationTag, type PushPayload, type UnreadState } from "@/lib/shared/push";
+import { applyUnreadState, messageUrl, notificationTag, type PushPayload, type UnreadState } from "@/lib/shared/push";
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -27,8 +27,11 @@ self.addEventListener("notificationclick", (e) => {
     const endpoint = (await self.registration.pushManager.getSubscription())?.endpoint;
     const res = await fetch("/api/read", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: [e.notification.data.id], endpoint }) });
     if (res.ok) await reconcile(await res.json());
+    const url = messageUrl(e.notification.data.id);
     const [win] = await self.clients.matchAll({ type: "window" });
-    await (win ? win.focus() : self.clients.openWindow("/"));
+    if (!win) return void (await self.clients.openWindow(url));
+    await win.focus(); // first: focus needs the click's user activation, which the awaits above may already be eating into
+    await win.navigate(url); // same page, new hash: a fragment navigation, no reload
   })());
 });
 

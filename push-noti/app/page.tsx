@@ -7,15 +7,18 @@ import { Card, CardContent } from "@/components/ui/card";
 import { api, isError } from "@/lib/client/api";
 import { currentEndpoint, enablePush, reconcile } from "@/lib/client/push";
 import type { MeResponse } from "@/lib/shared/api";
+import { idOfTag, notificationTag } from "@/lib/shared/push";
 import { cn } from "@/lib/utils";
 import { Inbox } from "./components/Inbox";
 import { LoginForm } from "./components/LoginForm";
+import { MessageDialog } from "./components/MessageDialog";
 import { Logo } from "./components/Logo";
 import { SendForm } from "./components/SendForm";
 
 export default function Home() {
   const [me, setMe] = useState<MeResponse>();
   const [status, setStatus] = useState("");
+  const [focused, setFocused] = useState<number>(); // message a notification deep-linked to (/#m<id>)
 
   const load = useCallback(async () => {
     const m = await api.me();
@@ -31,6 +34,18 @@ export default function Home() {
   }, [load]);
 
   useEffect(() => {
+    const onHash = () => setFocused(idOfTag(location.hash.slice(1)) || undefined);
+    onHash();
+    addEventListener("hashchange", onHash);
+    return () => removeEventListener("hashchange", onHash);
+  }, []);
+
+  const loggedIn = !!me?.user;
+  useEffect(() => {
+    if (focused && loggedIn) document.getElementById(notificationTag(focused))?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [focused, loggedIn]); // not on every inbox refresh: that would yank the user's scroll back
+
+  useEffect(() => {
     if (!status) return;
     const t = setTimeout(() => setStatus(""), 4000);
     return () => clearTimeout(t);
@@ -38,6 +53,9 @@ export default function Home() {
 
   if (!me) return <div className="grid min-h-dvh place-items-center"><Logo className="animate-float size-16" /></div>;
   if (!me.user) return <LoginForm onLogin={load} />;
+
+  const deepLinked = focused ? me.messages.find((m) => m.id === focused) : undefined;
+  const closeDeepLink = () => { history.replaceState(null, "", location.pathname); setFocused(undefined); }; // replaceState fires no hashchange
 
   async function read(ids?: number[]) {
     const res = await api.read(ids, await currentEndpoint());
@@ -75,8 +93,9 @@ export default function Home() {
         </CardContent>
       </Card>
 
-      <Inbox messages={me.messages} unread={me.badge} onRead={read} />
+      <Inbox messages={me.messages} unread={me.badge} onRead={read} focused={focused} />
       <SendForm users={me.users} onSend={send} />
+      {deepLinked && <MessageDialog message={deepLinked} onClose={closeDeepLink} />}
 
       <p role="status"
         className={cn("fixed inset-x-0 bottom-[max(1.25rem,env(safe-area-inset-bottom))] mx-auto w-fit max-w-[90vw] rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm shadow-xl backdrop-blur-xl transition-all duration-300",

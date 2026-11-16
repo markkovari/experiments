@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { staleNotifications } from "@/lib/shared/push";
+import { staleNotifications, idOfTag, messageUrl } from "@/lib/shared/push";
 
 const tags = (...t: string[]) => t.map((tag) => ({ tag }));
 
@@ -11,4 +11,10 @@ test("closes read messages, keeps unread and newer-than-known ones", () => {
 
 test("everything read closes everything up to latest", () => {
   expect(staleNotifications(tags("m1", "m2"), { badge: 0, unread: [], latest: 2 })).toHaveLength(2);
+});
+
+test("a notification's deep link parses back to its message id", () => {
+  expect(messageUrl(42)).toBe("/#m42");
+  expect(idOfTag(new URL(messageUrl(42), "http://x").hash.slice(1))).toBe(42);
+  expect(idOfTag("")).toBe(0); // no hash: nothing focused
 });

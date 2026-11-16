@@ -17,7 +17,9 @@ export async function enablePush(vapidPublicKey: string): Promise<string> {
   if (!("PushManager" in window)) return "No Push API here. On iOS: Share → Add to Home Screen, then open the app from the home screen.";
   if ((await Notification.requestPermission()) !== "granted") return "Notification permission denied.";
   const reg = await navigator.serviceWorker.ready;
-  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToBytes(vapidPublicKey) });
+  // Rejects when the browser has no push service, e.g. Brave with "Google services for push messaging" off.
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToBytes(vapidPublicKey) }).catch((e: Error) => e);
+  if (sub instanceof Error) return `Push subscription failed: ${sub.message}`;
   const res = await api.subscribe(sub.toJSON());
   return isError(res) ? res.error : "Notifications enabled on this device.";
 }
