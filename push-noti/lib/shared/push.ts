@@ -6,7 +6,9 @@ export type SyncPush = UnreadState & { type: "sync" };
 export type PushPayload = MessagePush | SyncPush;
 
 export const notificationTag = (id: number) => `m${id}`;
-const idOfTag = (tag: string) => Number(tag.slice(1)) || 0; // untagged/legacy notifications count as id 0
+export const idOfTag = (tag: string) => Number(tag.slice(1)) || 0; // untagged/legacy notifications count as id 0
+/** Deep link a notification opens: the app, scrolled to that message. The hash is the tag, so idOfTag parses it back. */
+export const messageUrl = (id: number) => `/#${notificationTag(id)}`;
 
 /** Notifications whose message is read. Ones newer than `latest` are kept: pushes can arrive out of order. */
 export function staleNotifications<N extends { tag: string }>(shown: N[], state: UnreadState): N[] {

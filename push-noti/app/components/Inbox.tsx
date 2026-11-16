@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import type { Message } from "@/lib/shared/api";
+import { notificationTag } from "@/lib/shared/push";
 import { cn } from "@/lib/utils";
 import { Logo } from "./Logo";
 
@@ -15,7 +16,7 @@ function ago(unixSeconds: number) {
   return "now";
 }
 
-export function Inbox({ messages, unread, onRead }: { messages: Message[]; unread: number; onRead: (ids?: number[]) => void }) {
+export function Inbox({ messages, unread, onRead, focused }: { messages: Message[]; unread: number; onRead: (ids?: number[]) => void; focused?: number }) {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
@@ -40,7 +41,8 @@ export function Inbox({ messages, unread, onRead }: { messages: Message[]; unrea
         ) : (
           <ul className="-mx-2 flex flex-col gap-1">
             {messages.map((m) => (
-              <li key={m.id} className={cn("flex items-start gap-3 rounded-xl p-2 transition-colors", !m.read && "bg-white/[0.05]")}>
+              <li key={m.id} id={notificationTag(m.id)} aria-current={m.id === focused || undefined}
+                className={cn("flex items-start gap-3 rounded-xl p-2 transition-colors", !m.read && "bg-white/[0.05]", m.id === focused && "ring-2 ring-fuchsia-400/70")}>
                 <Avatar className="size-9 ring-1 ring-white/15">
                   <AvatarFallback className="bg-gradient-to-br from-fuchsia-500 to-indigo-500 text-xs font-semibold text-white">
                     {m.sender.slice(0, 2).toUpperCase()}
